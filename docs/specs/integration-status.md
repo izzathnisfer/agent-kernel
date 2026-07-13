@@ -2,7 +2,7 @@
 
 A public, auto-updating status page on the documentation site (kernel.yaala.ai) that shows red/green health for every integration Agent Kernel supports — agent frameworks, cloud deployment variants (serverless / containerized on AWS, Azure, GCP), memory backends, messaging integrations, guardrails, multimodal storage, and core library tests — derived from the latest GitHub Actions runs on the source branch.
 
-> **Source branch**: currently `feature/health_dashboard` while the pipelines are validated; switch to `develop` on merge. Three places carry the branch name: the `publish_status` input expression in `test.yaml`, the `if:` conditions of the "Publish tile status" steps in the two integration workflows, and the `SOURCE_BRANCH` constant in `docs/src/pages/status.tsx`.
+> **Source branch**: `develop`. Three places carry the branch name: the `publish_status` input expression in `test.yaml`, the `if:` conditions of the "Publish tile status" steps in the two integration workflows, and the `SOURCE_BRANCH` constant in `docs/src/pages/status.tsx`.
 
 ## Goals
 
@@ -66,7 +66,7 @@ Publishing is per test job, not a central end-of-run job: each matrix job (and t
 - A tile updates the moment its test finishes — no waiting for the whole run.
 - Re-running one failed test republishes exactly that tile with the corrected outcome (the step passes `job.status`, which reflects the re-run attempt).
 - The weekly `deploy-openai` job composes its outcome in the workflow expression — `(job.status == 'failure' || steps.openai-test.outcome == 'failure') && 'failure' || 'success'` — because its test step runs with `continue-on-error`.
-- Every publishing job needs `contents: write` (plus `actions: read` for the job-URL lookup) on GITHUB_TOKEN. Job-level `permissions` blocks replace the workflow-level ones entirely, so jobs using cloud OIDC also re-declare `id-token: write`. In `test-reusable.yaml` the steps are gated by a `publish_status` input so PR runs never publish; on fork PRs GitHub additionally forces the token read-only.
+- **Write access is caller-controlled and develop-only.** `test-reusable.yaml` deliberately declares no `permissions` — a called workflow inherits exactly the calling job's token grant. `test.yaml` therefore has two mutually exclusive caller jobs: `run-tests` handles `pull_request` events with `contents: read` and `publish_status: false` (PR code never holds a write token, and the job name keeps required PR checks stable), while `run-tests-publish` handles push/dispatch events with `contents: write` and `publish_status: ${{ github.ref == 'refs/heads/develop' }}`. The safe-to-test flow (`test-trusted-pr.yaml`, which runs labeled fork code in the privileged `pull_request_target` context) explicitly grants `contents: read`, so reviewed fork code still cannot push anywhere. In the dispatch-only integration workflows, the test jobs declare `contents: write` at job level (re-declaring `id-token: write` for cloud OIDC, since a job-level block replaces the workflow-level one); their publish steps are gated on `github.ref == 'refs/heads/develop'`, so dispatches from other branches run tests but never publish.
 
 **Concurrency** is handled with an atomic compare-and-swap instead of locking: the publisher fetches the `status-data` branch tip, patches the JSON in memory, builds a single **orphan** commit containing the previous tree plus the patched files (git plumbing: `read-tree` → `hash-object` → `update-index` → `write-tree` → `commit-tree`, no working-tree checkout), and pushes with `--force-with-lease=refs/heads/status-data:<fetched-tip>`. If another job pushed in between, the lease fails, and the publisher refetches and retries (up to 10 attempts with randomized backoff). Because every commit is an orphan built on the latest fetched tree, the branch always holds exactly one commit — no history growth — while concurrent updates are never lost.
 
@@ -149,7 +149,7 @@ python3 .github/scripts/publish_integration_status.py \
 {
   "workflow": "integration-test-weekly",
   "workflow_name": "Weekly Integration Tests",
-  "branch": "feature/health_dashboard",
+  "branch": "develop",
   "commit": "d728a3e9",
   "updated_at": "2026-07-13T03:41:22Z",
   "expected_cadence_hours": 192,
@@ -201,7 +201,7 @@ Behavior:
 
 ## Edge cases and failure modes
 
-- **Fork PRs / feature branches** — publish steps are branch-gated (and `publish_status: false` on PRs); fork-PR tokens are read-only regardless.
+- **Fork PRs / feature branches** — PR caller jobs grant read-only tokens and `publish_status: false`; the safe-to-test fork flow grants read-only explicitly; integration-workflow publish steps are gated to `develop`. Only develop-branch runs can write to `status-data`.
 - **Concurrent publishes** — CAS push with retry; concurrent updates are never lost (covered by a unit test that races two publishers).
 - **Test removed from config** — its tile keeps rendering while its published data remains in `status/<workflow>.json`; it stops being part of the catalog. Old history keys are ignored.
 - **Test renamed/moved** — same as removed + added; history restarts under the new identity key.

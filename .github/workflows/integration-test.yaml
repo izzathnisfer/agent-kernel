@@ -144,9 +144,9 @@ jobs:
           retention-days: 30
 
       # Publish this job's tile to the Integration Status page
-      # (https://kernel.yaala.ai/status). TODO: change to refs/heads/develop on merge.
+      # (https://kernel.yaala.ai/status).
       - name: Publish tile status
-        if: ${{ always() && github.ref == 'refs/heads/feature/health_dashboard' }}
+        if: ${{ always() && github.ref == 'refs/heads/develop' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -322,9 +322,9 @@ jobs:
               --action test
           fi
       # Publish this job's tile to the Integration Status page
-      # (https://kernel.yaala.ai/status). TODO: change to refs/heads/develop on merge.
+      # (https://kernel.yaala.ai/status).
       - name: Publish tile status
-        if: ${{ always() && github.ref == 'refs/heads/feature/health_dashboard' }}
+        if: ${{ always() && github.ref == 'refs/heads/develop' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

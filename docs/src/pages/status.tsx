@@ -30,8 +30,7 @@ import styles from "./status.module.css";
 
 const REPO = "yaalalabs/agent-kernel";
 
-// TODO: change to "develop" when the feature branch is merged.
-const SOURCE_BRANCH = "feature/health_dashboard";
+const SOURCE_BRANCH = "develop";
 
 const DATA_BASE = `https://raw.githubusercontent.com/${REPO}/status-data`;
 const CONFIG_BASE = `https://raw.githubusercontent.com/${REPO}/${SOURCE_BRANCH}/.github`;

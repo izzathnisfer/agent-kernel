@@ -148,9 +148,8 @@ jobs:
 
       # Publish this job's tile to the Integration Status page. The test step runs
       # with continue-on-error, so its outcome is composed with the job status.
-      # TODO: change to refs/heads/develop on merge.
       - name: Publish tile status
-        if: ${{ always() && github.ref == 'refs/heads/feature/health_dashboard' }}
+        if: ${{ always() && github.ref == 'refs/heads/develop' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -411,9 +410,9 @@ jobs:
           fi
 
       # Publish this job's tile to the Integration Status page
-      # (https://kernel.yaala.ai/status). TODO: change to refs/heads/develop on merge.
+      # (https://kernel.yaala.ai/status).
       - name: Publish tile status
-        if: ${{ always() && github.ref == 'refs/heads/feature/health_dashboard' }}
+        if: ${{ always() && github.ref == 'refs/heads/develop' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

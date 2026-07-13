@@ -18,7 +18,7 @@ RUN_META_1 = {
     'run_id': 100,
     'run_url': 'https://github.com/x/y/actions/runs/100',
     'job_url': 'https://github.com/x/y/actions/runs/100/job/1',
-    'branch': 'feature/health_dashboard',
+    'branch': 'develop',
     'commit': 'abc12345',
     'completed_at': '2026-07-10T00:00:00Z',
 }
@@ -143,7 +143,7 @@ class TestApplyUpdate(unittest.TestCase):
         entry = doc['results'][0]
         self.assertEqual(entry['status'], 'pass')
         self.assertEqual(entry['run_id'], 100)
-        self.assertEqual(doc['branch'], 'feature/health_dashboard')
+        self.assertEqual(doc['branch'], 'develop')
         self.assertEqual(history, [])
 
     def test_same_run_republish_replaces_without_history(self):
@@ -220,7 +220,7 @@ class TestPublishEndToEnd(unittest.TestCase):
             'GITHUB_RUN_ID': str(run_id),
             'GITHUB_TOKEN': 'test-token',
             'GITHUB_SHA': 'abcdef1234567890',
-            'GITHUB_REF_NAME': 'feature/health_dashboard',
+            'GITHUB_REF_NAME': 'develop',
             'GITHUB_JOB': 'run-tests',
             'RUNNER_TEMP': self.tmp.name,
         }

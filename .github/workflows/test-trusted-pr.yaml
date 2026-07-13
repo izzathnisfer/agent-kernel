@@ -24,6 +24,11 @@ jobs:
 
   run-tests:
     needs: [check-label]
+    # ⚠️  SECURITY: read-only token. This job runs fork code in the privileged
+    # pull_request_target context; the reusable workflow inherits exactly these
+    # permissions, so the fork code can never push (e.g. to status-data).
+    permissions:
+      contents: read
     uses: ./.github/workflows/test-reusable.yaml
     with:
       # Test the fork PR head SHA (this is safe because the workflow only runs after manual label approval)

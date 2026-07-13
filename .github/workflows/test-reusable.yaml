@@ -2,9 +2,13 @@ name: Reusable Test Workflow
 
 # This is a reusable workflow that contains all the test jobs
 # It can be called by other workflows with different triggers and contexts
-
-permissions:
-  contents: read
+#
+# ⚠️  SECURITY: this workflow declares NO permissions on purpose. Called
+# workflows inherit the CALLER job's GITHUB_TOKEN permissions, so each caller
+# decides what the test jobs can do. PR callers (test.yaml pull_request path,
+# test-trusted-pr.yaml safe-to-test fork path) must grant contents: read only;
+# solely the develop push path in test.yaml grants contents: write so the
+# "Publish tile status" steps can push to the status-data branch.
 
 on:
   workflow_call:
@@ -99,9 +103,6 @@ jobs:
 
   script-tests:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # publish tile status to the status-data branch
-      actions: read
     defaults:
       run:
         shell: bash -e {0}
@@ -146,9 +147,6 @@ jobs:
   unit-tests:
     needs: [build-ak-py]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # publish tile status to the status-data branch
-      actions: read
     defaults:
       run:
         shell: bash -e {0}
@@ -194,9 +192,6 @@ jobs:
     needs: [setup, build-ak-py]
     if: ${{ inputs.run_e2e_tests && fromJson(needs.setup.outputs.matrix).include[0] != null }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write   # publish tile status to the status-data branch
-      actions: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
