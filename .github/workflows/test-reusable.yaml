@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: true
+      publish_status:
+        description: 'Whether each test job publishes its tile to the status-data branch (Integration Status page)'
+        required: false
+        type: boolean
+        default: false
     secrets:
       APP_ID:
         required: false
@@ -94,6 +99,9 @@ jobs:
 
   script-tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # publish tile status to the status-data branch
+      actions: read
     defaults:
       run:
         shell: bash -e {0}
@@ -124,9 +132,23 @@ jobs:
         working-directory: .github/scripts
         run: pip install pyyaml && python test_publish_integration_status.py
 
+      - name: Publish tile status
+        if: ${{ always() && inputs.publish_status }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pip install pyyaml
+          python3 .github/scripts/publish_integration_status.py \
+            --workflow test \
+            --synthetic script-tests \
+            --outcome ${{ job.status }}
+
   unit-tests:
     needs: [build-ak-py]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # publish tile status to the status-data branch
+      actions: read
     defaults:
       run:
         shell: bash -e {0}
@@ -157,10 +179,24 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: ./build.sh && uv run pytest -s
 
+      - name: Publish tile status
+        if: ${{ always() && inputs.publish_status }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pip install pyyaml
+          python3 .github/scripts/publish_integration_status.py \
+            --workflow test \
+            --synthetic unit-tests \
+            --outcome ${{ job.status }}
+
   e2e-tests:
     needs: [setup, build-ak-py]
     if: ${{ inputs.run_e2e_tests && fromJson(needs.setup.outputs.matrix).include[0] != null }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # publish tile status to the status-data branch
+      actions: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
@@ -199,4 +235,15 @@ jobs:
             --type ${{ matrix.type }} \
             --path ${{ matrix.path }} \
             --action test
+
+      - name: Publish tile status
+        if: ${{ always() && inputs.publish_status }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pip install pyyaml
+          python3 .github/scripts/publish_integration_status.py \
+            --workflow test \
+            --path ${{ matrix.path }} \
+            --outcome ${{ job.status }}
 

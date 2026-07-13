@@ -122,12 +122,16 @@ Edit the cron expressions in:
 
 ## Integration Status publishing
 
-Each test workflow ends with a `publish-status` job (develop branch only) that
-joins the run's job conclusions with the config metadata and pushes
-`status/<workflow>.json` plus `history/<workflow>.jsonl` to the orphan
-`status-data` branch. The documentation site's `/status` page reads those files
-client-side. The publisher lives at
-[`.github/scripts/publish_integration_status.py`](scripts/publish_integration_status.py).
+Publishing is distributed: every test job ends with a branch-gated
+"Publish tile status" step (`if: always()`) that runs
+[`.github/scripts/publish_integration_status.py`](scripts/publish_integration_status.py)
+to publish that job's own tiles the moment its test finishes. The script
+updates `status/<workflow>.json` and `history/<workflow>.jsonl` on the orphan
+`status-data` branch with an atomic compare-and-swap push, so concurrent matrix
+jobs never clobber each other. The documentation site's `/status` page reads
+those files client-side and also reads the config YAMLs to show
+configured-but-never-run tests as "no data". Re-running a failed test
+republishes just that tile with the corrected outcome.
 
 ## Validation
 

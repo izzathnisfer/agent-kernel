@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,15 +12,28 @@ from unittest import mock
 import publish_integration_status as pub
 from dashboard_config import resolve_dashboard_entries, validate_dashboard_block
 
+REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
-def job(name, conclusion='success', steps=None, status='completed'):
-    return {
-        'name': name,
-        'status': status,
-        'conclusion': conclusion,
-        'html_url': f'https://github.com/x/y/actions/runs/1/job/{abs(hash(name)) % 10000}',
-        'steps': steps or [],
-    }
+RUN_META_1 = {
+    'run_id': 100,
+    'run_url': 'https://github.com/x/y/actions/runs/100',
+    'job_url': 'https://github.com/x/y/actions/runs/100/job/1',
+    'branch': 'feature/health_dashboard',
+    'commit': 'abc12345',
+    'completed_at': '2026-07-10T00:00:00Z',
+}
+
+RUN_META_2 = {**RUN_META_1, 'run_id': 101,
+              'run_url': 'https://github.com/x/y/actions/runs/101',
+              'completed_at': '2026-07-11T00:00:00Z'}
+
+TILE = {
+    'path': 'examples/api/slack',
+    'type': 'api',
+    'category': 'Messaging Integrations',
+    'label': 'Slack (nightly)',
+    'description': None,
+}
 
 
 class TestDashboardConfig(unittest.TestCase):
@@ -33,15 +47,6 @@ class TestDashboardConfig(unittest.TestCase):
 
     def test_hidden(self):
         self.assertEqual(resolve_dashboard_entries({'path': 'x', 'dashboard': 'hidden'}), [])
-
-    def test_single_mapping(self):
-        entries = resolve_dashboard_entries({
-            'type': 'api', 'path': 'examples/api/slack',
-            'dashboard': {'category': 'Messaging Integrations', 'label': 'Slack'},
-        })
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]['category'], 'Messaging Integrations')
-        self.assertEqual(entries[0]['label'], 'Slack')
 
     def test_multi_mapping_fans_out(self):
         entries = resolve_dashboard_entries({
@@ -72,182 +77,218 @@ class TestDashboardConfig(unittest.TestCase):
         }), [])
 
 
-class TestJobMatching(unittest.TestCase):
-    def test_matches_matrix_job(self):
-        jobs = [job('run-tests (0, api, examples/api/slack, deploy)')]
-        self.assertIsNotNone(pub.find_matrix_job('examples/api/slack', jobs))
+class TestResolveTiles(unittest.TestCase):
+    def test_matrix_test_from_config(self):
+        tiles = pub.resolve_tiles('integration-test', 'examples/api/slack', None, REPO_ROOT)
+        self.assertEqual(len(tiles), 1)
+        self.assertEqual(tiles[0]['category'], 'Messaging Integrations')
+        self.assertEqual(tiles[0]['label'], 'Slack (nightly)')
 
-    def test_matches_reusable_workflow_prefix(self):
-        jobs = [job('run-tests / e2e-tests (3, cli, examples/cli/openai, deploy)')]
-        self.assertIsNotNone(pub.find_matrix_job('examples/cli/openai', jobs))
+    def test_multi_tile_test(self):
+        tiles = pub.resolve_tiles('integration-test-weekly', 'examples/memory/cosmos', None, REPO_ROOT)
+        self.assertEqual(len(tiles), 2)
+
+    def test_deployment_base_resolves(self):
+        tiles = pub.resolve_tiles('integration-test-weekly', 'examples/aws-serverless/openai', None, REPO_ROOT)
+        self.assertEqual(tiles[0]['label'], 'OpenAI agent (base deployment)')
+
+    def test_synthetic(self):
+        tiles = pub.resolve_tiles('test', None, 'unit-tests', REPO_ROOT)
+        self.assertEqual(tiles[0]['label'], 'ak-py unit tests')
+
+    def test_unknown_path_exits(self):
+        with self.assertRaises(SystemExit):
+            pub.resolve_tiles('test', 'examples/does/not/exist', None, REPO_ROOT)
+
+
+class TestFindOwnJob(unittest.TestCase):
+    def job(self, name):
+        return {'name': name, 'html_url': f'https://x/{name}'}
+
+    def test_matrix_job_by_path(self):
+        jobs = [self.job('run-tests (0, api, examples/api/slack, deploy)')]
+        self.assertIsNotNone(pub.find_own_job(jobs, 'examples/api/slack', None, 'run-tests'))
 
     def test_no_prefix_false_positive(self):
-        jobs = [job('run-tests (0, api, examples/api/slack-extended, deploy)')]
-        self.assertIsNone(pub.find_matrix_job('examples/api/slack', jobs))
+        jobs = [self.job('run-tests (0, api, examples/api/slack-extended, deploy)')]
+        self.assertIsNone(pub.find_own_job(jobs, 'examples/api/slack', None, 'other'))
 
-    def test_status_mapping(self):
-        self.assertEqual(pub.job_status(job('j', 'success')), 'pass')
-        self.assertEqual(pub.job_status(job('j', 'failure')), 'fail')
-        self.assertEqual(pub.job_status(job('j', 'cancelled')), 'skipped')
-        self.assertEqual(pub.job_status(job('j', None, status='in_progress')), 'unknown')
-        self.assertEqual(pub.job_status(None), 'unknown')
+    def test_synthetic_by_suffix(self):
+        jobs = [self.job('run-tests / unit-tests')]
+        self.assertIsNotNone(pub.find_own_job(jobs, None, 'unit-tests', 'unit-tests'))
 
-
-class TestBaseDeploymentStatus(unittest.TestCase):
-    def test_weekly_pass_when_report_step_skipped(self):
-        jobs = [job('deploy-openai', 'success', steps=[
-            {'name': 'Test examples/aws-serverless/openai', 'conclusion': 'success'},
-            {'name': 'Report openai test outcome', 'conclusion': 'skipped'},
-        ])]
-        status, _ = pub.base_deployment_status('integration-test-weekly', jobs)
-        self.assertEqual(status, 'pass')
-
-    def test_weekly_fail_when_report_step_ran(self):
-        # continue-on-error hides the test failure at job level; the report step
-        # running is the failure signal
-        jobs = [job('deploy-openai', 'success', steps=[
-            {'name': 'Test examples/aws-serverless/openai', 'conclusion': 'failure'},
-            {'name': 'Report openai test outcome', 'conclusion': 'success'},
-        ])]
-        status, _ = pub.base_deployment_status('integration-test-weekly', jobs)
-        self.assertEqual(status, 'fail')
-
-    def test_deploy_failure(self):
-        jobs = [job('deploy-openai', 'failure')]
-        status, _ = pub.base_deployment_status('integration-test-weekly', jobs)
-        self.assertEqual(status, 'fail')
-
-    def test_nightly_uses_job_conclusion(self):
-        jobs = [job('deploy-openai', 'success')]
-        status, _ = pub.base_deployment_status('integration-test', jobs)
-        self.assertEqual(status, 'pass')
-
-    def test_missing_job(self):
-        status, matched = pub.base_deployment_status('integration-test-weekly', [])
-        self.assertEqual(status, 'unknown')
-        self.assertIsNone(matched)
+    def test_fallback_to_github_job(self):
+        jobs = [self.job('deploy-openai')]
+        found = pub.find_own_job(jobs, 'examples/aws-serverless/openai', None, 'deploy-openai')
+        self.assertEqual(found['name'], 'deploy-openai')
 
 
-class TestBuildResults(unittest.TestCase):
-    def test_fan_out_shares_status_and_job(self):
-        tests = [{
-            'type': 'azure-serverless', 'path': 'examples/memory/cosmos',
-            'dashboard': [
-                {'category': 'Agent Memory / Knowledge', 'label': 'Cosmos DB memory'},
-                {'category': 'Azure Serverless', 'label': 'OpenAI + Cosmos memory'},
-            ],
-        }]
-        jobs = [job('run-tests (0, azure-serverless, examples/memory/cosmos, deploy)', 'failure')]
-        results = pub.build_results('integration-test-weekly', tests, [], jobs)
-        self.assertEqual(len(results), 2)
-        self.assertEqual({r['status'] for r in results}, {'fail'})
-        self.assertEqual(len({r['job_url'] for r in results}), 1)
+class TestApplyUpdate(unittest.TestCase):
+    def test_insert_into_empty_doc(self):
+        doc, history = pub.apply_update(None, [], [TILE], 'pass', RUN_META_1, 'integration-test')
+        self.assertEqual(len(doc['results']), 1)
+        entry = doc['results'][0]
+        self.assertEqual(entry['status'], 'pass')
+        self.assertEqual(entry['run_id'], 100)
+        self.assertEqual(doc['branch'], 'feature/health_dashboard')
+        self.assertEqual(history, [])
 
-    def test_unmatched_test_is_unknown(self):
-        tests = [{'type': 'api', 'path': 'examples/api/new-thing'}]
-        results = pub.build_results('integration-test', tests, [], [])
-        self.assertEqual(results[0]['status'], 'unknown')
-        self.assertIsNone(results[0]['job_url'])
+    def test_same_run_republish_replaces_without_history(self):
+        doc, _ = pub.apply_update(None, [], [TILE], 'fail', RUN_META_1, 'integration-test')
+        doc, history = pub.apply_update(doc, [], [TILE], 'pass', RUN_META_1, 'integration-test')
+        self.assertEqual(doc['results'][0]['status'], 'pass')
+        self.assertEqual(history, [])
 
-    def test_hidden_test_emits_nothing(self):
-        tests = [{'type': 'api', 'path': 'examples/api/x', 'dashboard': 'hidden'}]
-        self.assertEqual(pub.build_results('integration-test', tests, [], []), [])
+    def test_new_run_rolls_previous_into_history(self):
+        doc, history = pub.apply_update(None, [], [TILE], 'fail', RUN_META_1, 'integration-test')
+        doc, history = pub.apply_update(doc, history, [TILE], 'pass', RUN_META_2, 'integration-test')
+        self.assertEqual(doc['results'][0]['status'], 'pass')
+        self.assertEqual(len(history), 1)
+        event = json.loads(history[0])
+        self.assertEqual(event['run_id'], 100)
+        self.assertEqual(event['status'], 'fail')
+        self.assertEqual(event['key'], 'Messaging Integrations|Slack (nightly)')
 
-    def test_synthetic_jobs_for_test_workflow(self):
-        jobs = [
-            job('run-tests / unit-tests', 'success'),
-            job('run-tests / script-tests', 'failure'),
-        ]
-        results = pub.build_results('test', [], [], jobs)
-        by_label = {r['label']: r['status'] for r in results}
-        self.assertEqual(by_label['ak-py unit tests'], 'pass')
-        self.assertEqual(by_label['Utility script tests'], 'fail')
+    def test_history_roll_is_idempotent(self):
+        doc, history = pub.apply_update(None, [], [TILE], 'fail', RUN_META_1, 'integration-test')
+        doc2, history2 = pub.apply_update(doc, history, [TILE], 'pass', RUN_META_2, 'integration-test')
+        # Re-publishing run 101 again must not duplicate run 100's event
+        _, history3 = pub.apply_update(doc2, history2, [TILE], 'pass', RUN_META_2, 'integration-test')
+        self.assertEqual(history2, history3)
 
+    def test_other_tiles_untouched(self):
+        other = {**TILE, 'label': 'Telegram (nightly)', 'path': 'examples/api/telegram'}
+        doc, _ = pub.apply_update(None, [], [other], 'pass', RUN_META_1, 'integration-test')
+        doc, _ = pub.apply_update(doc, [], [TILE], 'fail', RUN_META_1, 'integration-test')
+        labels = {r['label']: r['status'] for r in doc['results']}
+        self.assertEqual(labels['Telegram (nightly)'], 'pass')
+        self.assertEqual(labels['Slack (nightly)'], 'fail')
 
-class TestHistory(unittest.TestCase):
-    def doc(self, run_id):
-        return {
-            'run_id': run_id,
-            'run_url': f'https://github.com/x/y/actions/runs/{run_id}',
-            'commit': 'abc12345',
-            'completed_at': '2026-07-01T00:00:00Z',
-            'results': [
-                {'category': 'A', 'label': 'x', 'status': 'pass'},
-            ],
-        }
+    def test_history_trimmed_per_tile(self):
+        doc, history = None, []
+        for run in range(pub.HISTORY_RETENTION_PER_TILE + 5):
+            meta = {**RUN_META_1, 'run_id': run,
+                    'completed_at': f'2026-07-{(run % 28) + 1:02d}T00:00:00Z'}
+            doc, history = pub.apply_update(doc, history, [TILE], 'pass', meta, 'integration-test')
+        self.assertEqual(len(history), pub.HISTORY_RETENTION_PER_TILE)
 
-    def test_appends_superseded_snapshot(self):
-        lines = pub.roll_history(self.doc(1), [], current_run_id=2)
-        self.assertEqual(len(lines), 1)
-        entry = json.loads(lines[0])
-        self.assertEqual(entry['run_id'], 1)
-        self.assertEqual(entry['results'], {'A|x': 'pass'})
-
-    def test_no_previous_snapshot(self):
-        self.assertEqual(pub.roll_history(None, [], current_run_id=2), [])
-
-    def test_idempotent_on_run_id(self):
-        first = pub.roll_history(self.doc(1), [], current_run_id=2)
-        second = pub.roll_history(self.doc(1), first, current_run_id=2)
-        self.assertEqual(first, second)
-
-    def test_same_run_republish_not_recorded(self):
-        self.assertEqual(pub.roll_history(self.doc(2), [], current_run_id=2), [])
-
-    def test_trims_to_retention(self):
-        lines = [
-            json.dumps({'run_id': i, 'results': {}})
-            for i in range(pub.HISTORY_RETENTION_RUNS + 10)
-        ]
-        rolled = pub.roll_history(self.doc(999), lines, current_run_id=1000)
-        self.assertEqual(len(rolled), pub.HISTORY_RETENTION_RUNS)
-        self.assertEqual(json.loads(rolled[-1])['run_id'], 999)
+    def test_multi_tile_updates_share_status(self):
+        tiles = pub.resolve_tiles('integration-test-weekly', 'examples/memory/cosmos', None, REPO_ROOT)
+        doc, _ = pub.apply_update(None, [], tiles, 'fail', RUN_META_1, 'integration-test-weekly')
+        self.assertEqual([r['status'] for r in doc['results']], ['fail', 'fail'])
 
 
 class TestPublishEndToEnd(unittest.TestCase):
-    def run_publish(self, data_dir, run_id, jobs):
+    """Full publish flow against a local bare 'origin', including the CAS push."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.origin = base / 'origin.git'
+        self.clone = base / 'clone'
+        subprocess.run(['git', 'init', '--bare', '-q', str(self.origin)], check=True)
+        subprocess.run(['git', 'init', '-q', str(self.clone)], check=True)
+        subprocess.run(['git', '-C', str(self.clone), 'remote', 'add', 'origin', str(self.origin)], check=True)
+        # The script resolves config files relative to the checkout; copy them in
+        github_dir = self.clone / '.github'
+        github_dir.mkdir()
+        for name in ('integration-test-config.yaml', 'test-config.yaml'):
+            (github_dir / name).write_text((Path(REPO_ROOT) / '.github' / name).read_text())
+        self.cwd = os.getcwd()
+        os.chdir(self.clone)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def run_publish(self, run_id, path, outcome):
         env = {
             'GITHUB_REPOSITORY': 'yaalalabs/agent-kernel',
             'GITHUB_RUN_ID': str(run_id),
             'GITHUB_TOKEN': 'test-token',
             'GITHUB_SHA': 'abcdef1234567890',
-            'GITHUB_WORKFLOW': 'Nightly Integration Tests',
+            'GITHUB_REF_NAME': 'feature/health_dashboard',
+            'GITHUB_JOB': 'run-tests',
+            'RUNNER_TEMP': self.tmp.name,
         }
-        repo_root = Path(__file__).resolve().parents[2]
+        jobs = [{'name': f'run-tests (0, api, {path}, deploy)',
+                 'html_url': f'https://github.com/x/y/actions/runs/{run_id}/job/7'}]
         with mock.patch.dict(os.environ, env), \
                 mock.patch.object(pub, 'fetch_run_jobs', return_value=jobs):
-            return pub.publish('integration-test', Path(data_dir), repo_root)
+            pub.publish('integration-test', path, None, outcome)
 
-    def test_publish_writes_status_and_rolls_history(self):
-        jobs = [
-            job('deploy-openai', 'success'),
-            job('run-tests (0, api, examples/api/slack, deploy)', 'success'),
-            job('run-tests (1, api, examples/api/telegram, deploy)', 'failure'),
-        ]
-        with tempfile.TemporaryDirectory() as tmp:
-            doc1 = self.run_publish(tmp, 100, jobs)
-            status_file = Path(tmp) / 'status' / 'integration-test.json'
-            history_file = Path(tmp) / 'history' / 'integration-test.jsonl'
+    def branch_file(self, path):
+        result = subprocess.run(
+            ['git', '-C', str(self.origin), 'show', f'{pub.STATUS_BRANCH}:{path}'],
+            capture_output=True, text=True,
+        )
+        return result.stdout if result.returncode == 0 else None
 
-            self.assertTrue(status_file.exists())
-            self.assertTrue((Path(tmp) / 'README.md').exists())
-            self.assertEqual(history_file.read_text(), '')
+    def test_bootstrap_publish_and_update(self):
+        # First publish bootstraps the branch
+        self.run_publish(100, 'examples/api/slack', 'failure')
+        doc = json.loads(self.branch_file('status/integration-test.json'))
+        self.assertEqual(doc['results'][0]['status'], 'fail')
+        self.assertIsNotNone(self.branch_file('README.md'))
 
-            written = json.loads(status_file.read_text())
-            self.assertEqual(written['run_id'], 100)
-            statuses = {r['label']: r['status'] for r in written['results']}
-            self.assertEqual(statuses['Slack (nightly)'], 'pass')
-            self.assertEqual(statuses['Telegram (nightly)'], 'fail')
-            self.assertEqual(statuses['OpenAI agent (base deployment)'], 'pass')
-            # every configured nightly test appears, even without a matching job
-            self.assertGreaterEqual(len(written['results']), 9)
+        # A different tile publishes without clobbering the first
+        self.run_publish(100, 'examples/api/telegram', 'success')
+        doc = json.loads(self.branch_file('status/integration-test.json'))
+        statuses = {r['label']: r['status'] for r in doc['results']}
+        self.assertEqual(statuses['Slack (nightly)'], 'fail')
+        self.assertEqual(statuses['Telegram (nightly)'], 'pass')
 
-            # second publish for a new run rolls run 100 into history
-            self.run_publish(tmp, 101, jobs)
-            history = [json.loads(l) for l in history_file.read_text().splitlines()]
-            self.assertEqual([h['run_id'] for h in history], [100])
-            self.assertEqual(history[0]['results']['Messaging Integrations|Slack (nightly)'], 'pass')
-            self.assertEqual(json.loads(status_file.read_text())['run_id'], 101)
+        # Re-run of the failed test in the SAME run corrects in place, no history
+        self.run_publish(100, 'examples/api/slack', 'success')
+        doc = json.loads(self.branch_file('status/integration-test.json'))
+        self.assertEqual({r['label']: r['status'] for r in doc['results']}['Slack (nightly)'], 'pass')
+        self.assertEqual(self.branch_file('history/integration-test.jsonl'), '')
+
+        # A NEW run rolls the superseded status into history
+        self.run_publish(101, 'examples/api/slack', 'success')
+        history = [json.loads(l) for l in self.branch_file('history/integration-test.jsonl').splitlines()]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]['run_id'], 100)
+
+        # Branch keeps a single-commit history despite four publishes
+        count = subprocess.run(
+            ['git', '-C', str(self.origin), 'rev-list', '--count', pub.STATUS_BRANCH],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(count, '1')
+
+    def test_cas_retry_on_concurrent_push(self):
+        self.run_publish(100, 'examples/api/slack', 'success')
+
+        # Simulate a concurrent publisher landing between fetch and push:
+        # the first push attempt is rejected, the retry must succeed and
+        # preserve the concurrent update.
+        original_fetch = pub.fetch_branch_tip
+        calls = {'n': 0}
+
+        def racy_fetch():
+            tip = original_fetch()
+            if calls['n'] == 0:
+                calls['n'] += 1
+                run_concurrent = pub.publish
+                env = dict(os.environ)
+                jobs = [{'name': 'run-tests (1, api, examples/api/gmail, deploy)',
+                         'html_url': 'https://x/j'}]
+                with mock.patch.object(pub, 'fetch_run_jobs', return_value=jobs), \
+                        mock.patch.object(pub, 'fetch_branch_tip', original_fetch):
+                    run_concurrent('integration-test', 'examples/api/gmail', None, 'success')
+                os.environ.update(env)
+            return tip
+
+        with mock.patch.object(pub, 'fetch_branch_tip', side_effect=racy_fetch), \
+                mock.patch.object(pub.time, 'sleep'):
+            self.run_publish(100, 'examples/api/telegram', 'failure')
+
+        doc = json.loads(self.branch_file('status/integration-test.json'))
+        labels = {r['label']: r['status'] for r in doc['results']}
+        self.assertEqual(labels['Gmail (nightly)'], 'pass')       # concurrent update kept
+        self.assertEqual(labels['Telegram (nightly)'], 'fail')    # retried update landed
+        self.assertEqual(labels['Slack (nightly)'], 'pass')
 
 
 if __name__ == '__main__':

@@ -1,27 +1,61 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Layout from "@theme/Layout";
+import { load as parseYaml } from "js-yaml";
 import styles from "./status.module.css";
 
 /**
  * Integration Status — public dashboard showing red/green health for every
  * integration Agent Kernel supports, derived from the latest GitHub Actions
- * runs on the develop branch.
+ * runs on the source branch.
  *
- * Data is published by the `publish-status` job of each test workflow to the
- * orphan `status-data` branch (see docs/specs/integration-status.md):
- *   status/<workflow>.json   - latest tile statuses
- *   history/<workflow>.jsonl - one compact line per superseded run
+ * Every test job publishes its own tile to the orphan `status-data` branch as
+ * soon as it finishes (see .github/scripts/publish_integration_status.py):
+ *   status/<workflow>.json   - one entry per tile, with per-tile run metadata
+ *   history/<workflow>.jsonl - one line per superseded tile status
+ *
+ * The full tile catalog is read from the test config YAMLs on the source
+ * branch, so every configured integration is shown even before it has run
+ * (status "no data"). See docs/specs/integration-status.md.
  */
 
-const DATA_BASE =
-  "https://raw.githubusercontent.com/yaalalabs/agent-kernel/status-data";
+const REPO = "yaalalabs/agent-kernel";
+
+// TODO: change to "develop" when the feature branch is merged.
+const SOURCE_BRANCH = "feature/health_dashboard";
+
+const DATA_BASE = `https://raw.githubusercontent.com/${REPO}/status-data`;
+const CONFIG_BASE = `https://raw.githubusercontent.com/${REPO}/${SOURCE_BRANCH}/.github`;
 
 const WORKFLOW_KEYS = ["test", "integration-test", "integration-test-weekly"];
 
-const SOURCE_TITLES: Record<string, string> = {
-  test: "Core tests (per commit)",
-  "integration-test": "Messaging integrations (nightly)",
-  "integration-test-weekly": "Cloud deployments (weekly)",
+const WORKFLOW_META: Record<
+  string,
+  { title: string; file: string; config: string; tiers: string[]; includeBase: boolean; cadenceHours: number | null }
+> = {
+  test: {
+    title: "Core tests (per commit)",
+    file: "test.yaml",
+    config: "test-config.yaml",
+    tiers: ["e2e"],
+    includeBase: false,
+    cadenceHours: null,
+  },
+  "integration-test": {
+    title: "Messaging integrations (nightly)",
+    file: "integration-test.yaml",
+    config: "integration-test-config.yaml",
+    tiers: ["nightly"],
+    includeBase: true,
+    cadenceHours: 48,
+  },
+  "integration-test-weekly": {
+    title: "Cloud deployments (weekly)",
+    file: "integration-test-weekly.yaml",
+    config: "integration-test-config.yaml",
+    tiers: ["weekly"],
+    includeBase: true,
+    cadenceHours: 192,
+  },
 };
 
 const CATEGORY_ORDER = [
@@ -42,7 +76,7 @@ const CATEGORY_ORDER = [
 
 const HISTORY_STRIP_LENGTH = 10;
 
-type TileStatus = "pass" | "fail" | "skipped" | "unknown";
+type TileStatus = "pass" | "fail" | "skipped" | "unknown" | "nodata";
 
 interface StatusResult {
   path: string;
@@ -51,35 +85,49 @@ interface StatusResult {
   label: string;
   description: string | null;
   status: TileStatus;
+  run_id: number;
+  run_url: string;
   job_url: string | null;
+  completed_at: string;
 }
 
 interface StatusDoc {
   workflow: string;
   workflow_name: string;
-  run_id: number;
-  run_url: string;
   branch: string;
   commit: string;
-  completed_at: string;
+  updated_at: string;
   expected_cadence_hours: number | null;
   results: StatusResult[];
 }
 
-interface HistoryLine {
+interface HistoryEvent {
+  key: string;
+  status: TileStatus;
   run_id: number;
   run_url: string;
-  commit: string;
   completed_at: string;
-  results: Record<string, string>;
 }
 
-interface Tile extends StatusResult {
-  workflow: string;
-  runUrl: string;
-  completedAt: string;
+interface CatalogTile {
+  path: string;
+  type: string;
+  category: string;
+  label: string;
+  description: string | null;
+}
+
+interface Tile {
+  path: string;
+  type: string;
+  category: string;
+  label: string;
+  description: string | null;
+  status: TileStatus;
+  href: string;
+  completedAt: string | null;
   stale: boolean;
-  history: { status: TileStatus; runUrl: string; completedAt: string }[];
+  history: { status: TileStatus; completedAt: string }[];
   failingSince: string | null;
 }
 
@@ -98,50 +146,156 @@ function relativeTime(iso: string): string {
   return `${days} d ago`;
 }
 
-function isStale(doc: StatusDoc): boolean {
-  if (doc.expected_cadence_hours == null) return false;
-  const ageHours =
-    (Date.now() - new Date(doc.completed_at).getTime()) / 3_600_000;
-  return ageHours > doc.expected_cadence_hours;
+function isStaleTimestamp(iso: string | null, cadenceHours: number | null): boolean {
+  if (!iso || cadenceHours == null) return false;
+  return (Date.now() - new Date(iso).getTime()) / 3_600_000 > cadenceHours;
 }
 
-function parseHistory(text: string): HistoryLine[] {
-  return text
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => {
-      try {
-        return JSON.parse(line) as HistoryLine;
-      } catch {
-        return null;
+/* ─── Catalog from the config YAMLs (mirrors .github/scripts/dashboard_config.py) ── */
+
+const DEFAULT_CATEGORY_BY_TYPE: Record<string, string> = {
+  cli: "Core & Examples",
+  api: "Core & Examples",
+  memory: "Core & Examples",
+  containerized: "Core & Examples",
+  "aws-serverless": "AWS Serverless",
+  "aws-containerized": "AWS Containerized",
+  "azure-serverless": "Azure Serverless",
+  "azure-containerized": "Azure Containerized",
+  "gcp-serverless": "GCP Serverless",
+  "gcp-containerized": "GCP Containerized",
+};
+
+// Non-matrix tiles published by the Test workflow's unit/script test jobs
+// (mirrors SYNTHETIC_TILES in publish_integration_status.py)
+const SYNTHETIC_TILES: CatalogTile[] = [
+  {
+    path: "ak-py",
+    type: "unit",
+    category: "Core & Frameworks",
+    label: "ak-py unit tests",
+    description: "ak-py library unit test suite",
+  },
+  {
+    path: "scripts",
+    type: "scripts",
+    category: "Core & Frameworks",
+    label: "Utility script tests",
+    description: "Repository maintenance script tests",
+  },
+];
+
+function defaultLabel(path: string): string {
+  const segments = path.split("/").filter((s) => s && s !== "examples");
+  return segments.slice(-2).join(" / ") || path;
+}
+
+function resolveCatalogTiles(test: any): CatalogTile[] {
+  if (!test?.path || test.dashboard === "hidden") return [];
+  const base = {
+    path: test.path,
+    type: test.type ?? "",
+  };
+  const fallback = {
+    category: DEFAULT_CATEGORY_BY_TYPE[test.type] ?? "Other",
+    label: defaultLabel(test.path),
+  };
+  const entries = test.dashboard
+    ? Array.isArray(test.dashboard)
+      ? test.dashboard
+      : [test.dashboard]
+    : [{}];
+  return entries.map((entry: any) => ({
+    ...base,
+    category: entry?.category ?? fallback.category,
+    label: entry?.label ?? fallback.label,
+    description: entry?.description ?? null,
+  }));
+}
+
+function buildCatalog(
+  workflowKey: string,
+  configs: Record<string, any>
+): CatalogTile[] {
+  const meta = WORKFLOW_META[workflowKey];
+  const config = configs[meta.config];
+  const tiles: CatalogTile[] = [];
+  if (config) {
+    if (meta.includeBase) {
+      for (const test of config.deployment_base ?? []) {
+        tiles.push(...resolveCatalogTiles(test));
       }
-    })
-    .filter((line): line is HistoryLine => line !== null);
+    }
+    for (const tier of meta.tiers) {
+      for (const test of config[tier]?.tests ?? []) {
+        tiles.push(...resolveCatalogTiles(test));
+      }
+    }
+  }
+  if (workflowKey === "test") {
+    tiles.push(...SYNTHETIC_TILES);
+  }
+  return tiles;
 }
 
-function buildTiles(doc: StatusDoc, history: HistoryLine[]): Tile[] {
-  const stale = isStale(doc);
-  // Oldest first, so strips read left (old) to right (new)
-  const orderedHistory = [...history].sort((a, b) => a.run_id - b.run_id);
+/* ─── Merge catalog + published data into tiles ───────────────────────────── */
 
-  return doc.results.map((result) => {
-    const key = tileKey(result.category, result.label);
-    const past = orderedHistory
-      .filter((line) => key in line.results)
-      .map((line) => ({
-        status: line.results[key] as TileStatus,
-        runUrl: line.run_url,
-        completedAt: line.completed_at,
-      }));
+function buildTiles(
+  workflowKey: string,
+  catalog: CatalogTile[],
+  doc: StatusDoc | null,
+  events: HistoryEvent[]
+): Tile[] {
+  const meta = WORKFLOW_META[workflowKey];
+  const workflowUrl = `https://github.com/${REPO}/actions/workflows/${meta.file}`;
+  const published = new Map<string, StatusResult>();
+  for (const result of doc?.results ?? []) {
+    published.set(tileKey(result.category, result.label), result);
+  }
+
+  const merged = new Map<string, CatalogTile>();
+  for (const tile of catalog) {
+    merged.set(tileKey(tile.category, tile.label), tile);
+  }
+  // Published tiles no longer in the catalog still render (they have data)
+  for (const [key, result] of published) {
+    if (!merged.has(key)) {
+      merged.set(key, {
+        path: result.path,
+        type: result.type,
+        category: result.category,
+        label: result.label,
+        description: result.description,
+      });
+    }
+  }
+
+  return [...merged.entries()].map(([key, catalogTile]) => {
+    const result = published.get(key);
+    const past = events
+      .filter((event) => event.key === key)
+      .map((event) => ({ status: event.status, completedAt: event.completed_at }));
+
+    if (!result) {
+      return {
+        ...catalogTile,
+        status: "nodata" as TileStatus,
+        href: workflowUrl,
+        completedAt: null,
+        stale: false,
+        history: past.slice(-HISTORY_STRIP_LENGTH),
+        failingSince: null,
+      };
+    }
 
     const strip = [
       ...past,
-      { status: result.status, runUrl: doc.run_url, completedAt: doc.completed_at },
+      { status: result.status, completedAt: result.completed_at },
     ].slice(-HISTORY_STRIP_LENGTH);
 
     let failingSince: string | null = null;
     if (result.status === "fail") {
-      failingSince = doc.completed_at;
+      failingSince = result.completed_at;
       for (let i = past.length - 1; i >= 0; i--) {
         if (past[i].status !== "fail") break;
         failingSince = past[i].completedAt;
@@ -149,84 +303,87 @@ function buildTiles(doc: StatusDoc, history: HistoryLine[]): Tile[] {
     }
 
     return {
-      ...result,
-      workflow: doc.workflow,
-      runUrl: doc.run_url,
-      completedAt: doc.completed_at,
-      stale,
+      ...catalogTile,
+      description: result.description ?? catalogTile.description,
+      status: result.status,
+      href: result.job_url ?? result.run_url ?? workflowUrl,
+      completedAt: result.completed_at,
+      stale: isStaleTimestamp(result.completed_at, meta.cadenceHours),
       history: strip,
       failingSince,
     };
   });
 }
 
-/** Sample data for local development (`npm start`) before the status-data
- * branch exists, and for styling work via ?mock=1. */
-function mockDocs(): StatusDoc[] {
+/* ─── Mock data for styling work (?mock=1 only) ───────────────────────────── */
+
+function mockState() {
   const now = new Date().toISOString();
-  const weekAgo = new Date(Date.now() - 12 * 86_400_000).toISOString();
-  const result = (
-    category: string,
-    label: string,
-    status: TileStatus
-  ): StatusResult => ({
-    path: "examples/mock",
-    type: "api",
-    category,
-    label,
-    description: "Mock data shown because the status-data branch is not reachable",
-    status,
-    job_url: null,
-  });
-  return [
-    {
+  const docs: Record<string, StatusDoc> = {
+    test: {
       workflow: "test",
       workflow_name: "Test",
-      run_id: 1,
-      run_url: "https://github.com/yaalalabs/agent-kernel/actions",
-      branch: "develop",
+      branch: SOURCE_BRANCH,
       commit: "mock0000",
-      completed_at: now,
+      updated_at: now,
       expected_cadence_hours: null,
       results: [
-        result("Core & Frameworks", "OpenAI (CLI)", "pass"),
-        result("Core & Frameworks", "CrewAI (CLI)", "fail"),
-        result("API Features", "Hooks", "pass"),
-        result("Messaging Integrations", "Slack", "pass"),
-        result("Agent Memory / Knowledge", "Key-value cache memory", "skipped"),
+        {
+          path: "examples/cli/openai",
+          type: "cli",
+          category: "Core & Frameworks",
+          label: "OpenAI (CLI)",
+          description: "Mock data",
+          status: "pass",
+          run_id: 1,
+          run_url: `https://github.com/${REPO}/actions`,
+          job_url: null,
+          completed_at: now,
+        },
+        {
+          path: "examples/cli/crewai",
+          type: "cli",
+          category: "Core & Frameworks",
+          label: "CrewAI (CLI)",
+          description: "Mock data",
+          status: "fail",
+          run_id: 1,
+          run_url: `https://github.com/${REPO}/actions`,
+          job_url: null,
+          completed_at: now,
+        },
       ],
     },
-    {
-      workflow: "integration-test-weekly",
-      workflow_name: "Weekly Integration Tests",
-      run_id: 2,
-      run_url: "https://github.com/yaalalabs/agent-kernel/actions",
-      branch: "develop",
-      commit: "mock0000",
-      completed_at: weekAgo,
-      expected_cadence_hours: 192,
-      results: [
-        result("AWS Serverless", "LangGraph on Lambda", "pass"),
-        result("Agent Memory / Knowledge", "Cosmos DB memory", "pass"),
-        result("Azure Serverless", "OpenAI + Cosmos memory", "pass"),
-      ],
+  };
+  const configs: Record<string, any> = {
+    "test-config.yaml": {
+      e2e: {
+        tests: [
+          { type: "cli", path: "examples/cli/openai", dashboard: { category: "Core & Frameworks", label: "OpenAI (CLI)" } },
+          { type: "cli", path: "examples/cli/crewai", dashboard: { category: "Core & Frameworks", label: "CrewAI (CLI)" } },
+          { type: "api", path: "examples/api/hooks", dashboard: { category: "API Features", label: "Hooks" } },
+          { type: "api", path: "examples/api/slack", dashboard: { category: "Messaging Integrations", label: "Slack" } },
+        ],
+      },
     },
-  ];
+    "integration-test-config.yaml": { nightly: { tests: [] }, weekly: { tests: [] } },
+  };
+  return { docs, configs, histories: {} as Record<string, HistoryEvent[]> };
 }
 
 function shouldMock(): boolean {
   if (typeof window === "undefined") return false;
-  return (
-    window.location.search.includes("mock=1") ||
-    window.location.hostname === "localhost"
-  );
+  return window.location.search.includes("mock=1");
 }
+
+/* ─── Rendering ───────────────────────────────────────────────────────────── */
 
 const STATUS_DOT: Record<TileStatus, string> = {
   pass: styles.dotPass,
   fail: styles.dotFail,
   skipped: styles.dotSkipped,
   unknown: styles.dotUnknown,
+  nodata: styles.dotNodata,
 };
 
 const STATUS_CELL: Record<TileStatus, string> = {
@@ -234,14 +391,19 @@ const STATUS_CELL: Record<TileStatus, string> = {
   fail: styles.historyFail,
   skipped: styles.historySkipped,
   unknown: styles.historyUnknown,
+  nodata: styles.historyUnknown,
 };
 
 function TileCard({ tile }: { tile: Tile }) {
   const tooltip = [
     tile.description,
     `Example: ${tile.path}`,
-    `Status: ${tile.status}${tile.stale ? " (stale)" : ""}`,
-    `Last run: ${new Date(tile.completedAt).toLocaleString()}`,
+    tile.status === "nodata"
+      ? "No published runs yet"
+      : `Status: ${tile.status}${tile.stale ? " (stale)" : ""}`,
+    tile.completedAt
+      ? `Last run: ${new Date(tile.completedAt).toLocaleString()}`
+      : null,
     "Click to open the GitHub Actions run",
   ]
     .filter(Boolean)
@@ -250,7 +412,7 @@ function TileCard({ tile }: { tile: Tile }) {
   return (
     <a
       className={styles.tile}
-      href={tile.job_url ?? tile.runUrl}
+      href={tile.href}
       target="_blank"
       rel="noopener noreferrer"
       title={tooltip}
@@ -264,12 +426,14 @@ function TileCard({ tile }: { tile: Tile }) {
         </span>
       </div>
       <div className={styles.tileMeta}>
-        {tile.status === "fail" && tile.failingSince ? (
+        {tile.status === "nodata" ? (
+          <span>no runs yet</span>
+        ) : tile.status === "fail" && tile.failingSince ? (
           <span className={styles.failingSince}>
             failing since {new Date(tile.failingSince).toLocaleDateString()}
           </span>
         ) : (
-          <span>updated {relativeTime(tile.completedAt)}</span>
+          <span>updated {tile.completedAt ? relativeTime(tile.completedAt) : "n/a"}</span>
         )}
       </div>
       <div className={styles.historyStrip}>
@@ -296,54 +460,80 @@ function TileCard({ tile }: { tile: Tile }) {
 }
 
 export default function StatusPage() {
-  const [docs, setDocs] = useState<StatusDoc[] | null>(null);
-  const [histories, setHistories] = useState<Record<string, HistoryLine[]>>({});
-  const [failed, setFailed] = useState(false);
+  const [docs, setDocs] = useState<Record<string, StatusDoc>>({});
+  const [histories, setHistories] = useState<Record<string, HistoryEvent[]>>({});
+  const [configs, setConfigs] = useState<Record<string, any>>({});
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
+    async function fetchText(url: string): Promise<string> {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`${url}: ${response.status}`);
+      return response.text();
+    }
+
     async function load() {
-      const statusResults = await Promise.allSettled(
-        WORKFLOW_KEYS.map(async (key) => {
-          const response = await fetch(`${DATA_BASE}/status/${key}.json`);
-          if (!response.ok) throw new Error(`${key}: ${response.status}`);
-          return (await response.json()) as StatusDoc;
-        })
-      );
-      const historyResults = await Promise.allSettled(
-        WORKFLOW_KEYS.map(async (key) => {
-          const response = await fetch(`${DATA_BASE}/history/${key}.jsonl`);
-          if (!response.ok) throw new Error(`${key}: ${response.status}`);
-          return { key, lines: parseHistory(await response.text()) };
-        })
-      );
+      if (shouldMock()) {
+        const mock = mockState();
+        setDocs(mock.docs);
+        setConfigs(mock.configs);
+        setHistories(mock.histories);
+        setLoaded(true);
+        return;
+      }
+
+      const configNames = ["test-config.yaml", "integration-test-config.yaml"];
+      const [statusResults, historyResults, configResults] = await Promise.all([
+        Promise.allSettled(
+          WORKFLOW_KEYS.map(async (key) => ({
+            key,
+            doc: JSON.parse(await fetchText(`${DATA_BASE}/status/${key}.json`)) as StatusDoc,
+          }))
+        ),
+        Promise.allSettled(
+          WORKFLOW_KEYS.map(async (key) => ({
+            key,
+            events: (await fetchText(`${DATA_BASE}/history/${key}.jsonl`))
+              .split("\n")
+              .filter((line) => line.trim())
+              .map((line) => {
+                try {
+                  return JSON.parse(line) as HistoryEvent;
+                } catch {
+                  return null;
+                }
+              })
+              .filter((event): event is HistoryEvent => event !== null),
+          }))
+        ),
+        Promise.allSettled(
+          configNames.map(async (name) => ({
+            name,
+            config: parseYaml(await fetchText(`${CONFIG_BASE}/${name}`)),
+          }))
+        ),
+      ]);
       if (cancelled) return;
 
-      const loadedDocs = statusResults
-        .filter(
-          (result): result is PromiseFulfilledResult<StatusDoc> =>
-            result.status === "fulfilled"
-        )
-        .map((result) => result.value);
-
-      const loadedHistories: Record<string, HistoryLine[]> = {};
+      const loadedDocs: Record<string, StatusDoc> = {};
+      for (const result of statusResults) {
+        if (result.status === "fulfilled") loadedDocs[result.value.key] = result.value.doc;
+      }
+      const loadedHistories: Record<string, HistoryEvent[]> = {};
       for (const result of historyResults) {
-        if (result.status === "fulfilled") {
-          loadedHistories[result.value.key] = result.value.lines;
-        }
+        if (result.status === "fulfilled") loadedHistories[result.value.key] = result.value.events;
+      }
+      const loadedConfigs: Record<string, any> = {};
+      for (const result of configResults) {
+        if (result.status === "fulfilled") loadedConfigs[result.value.name] = result.value.config;
       }
 
-      if (loadedDocs.length === 0) {
-        if (shouldMock()) {
-          setDocs(mockDocs());
-        } else {
-          setFailed(true);
-        }
-      } else {
-        setDocs(loadedDocs);
-        setHistories(loadedHistories);
-      }
+      setDocs(loadedDocs);
+      setHistories(loadedHistories);
+      setConfigs(loadedConfigs);
+      setLoaded(true);
     }
 
     load();
@@ -353,9 +543,11 @@ export default function StatusPage() {
   }, []);
 
   const tiles = useMemo(() => {
-    if (!docs) return [];
-    return docs.flatMap((doc) => buildTiles(doc, histories[doc.workflow] ?? []));
-  }, [docs, histories]);
+    if (!loaded) return [];
+    return WORKFLOW_KEYS.flatMap((key) =>
+      buildTiles(key, buildCatalog(key, configs), docs[key] ?? null, histories[key] ?? [])
+    );
+  }, [loaded, docs, histories, configs]);
 
   const categories = useMemo(() => {
     const grouped = new Map<string, Tile[]>();
@@ -384,15 +576,19 @@ export default function StatusPage() {
   const summary = useMemo(() => {
     const passing = tiles.filter((tile) => tile.status === "pass").length;
     const failing = tiles.filter((tile) => tile.status === "fail").length;
+    const nodata = tiles.filter((tile) => tile.status === "nodata").length;
     const stale = tiles.filter((tile) => tile.stale).length;
-    const other = tiles.length - passing - failing;
-    return { passing, failing, stale, other };
+    const other = tiles.length - passing - failing - nodata;
+    return { passing, failing, nodata, stale, other };
   }, [tiles]);
+
+  const nothingAvailable =
+    loaded && tiles.length === 0;
 
   return (
     <Layout
       title="Integration Status"
-      description="Live health of Agent Kernel's framework, cloud, memory, and messaging integrations, based on the latest test runs on the develop branch."
+      description="Live health of Agent Kernel's framework, cloud, memory, and messaging integrations, based on the latest test runs."
     >
       <main className={styles.statusPage}>
         <header className={styles.hero}>
@@ -406,11 +602,11 @@ export default function StatusPage() {
             Live health of every integration Agent Kernel supports: agent
             frameworks, cloud deployment variants, memory and knowledge
             backends, and messaging platforms. Statuses come from the latest
-            test pipeline runs on the <code>develop</code> branch, and every
-            tile links to the GitHub Actions run that produced it.
+            test pipeline runs on the <code>{SOURCE_BRANCH}</code> branch, and
+            every tile links to the GitHub Actions run that produced it.
           </p>
 
-          {docs && (
+          {loaded && tiles.length > 0 && (
             <>
               <div className={styles.summaryRow}>
                 <span className={styles.summaryChip}>
@@ -421,10 +617,16 @@ export default function StatusPage() {
                   <span className={`${styles.dot} ${styles.dotFail}`} />
                   {summary.failing} failing
                 </span>
+                {summary.nodata > 0 && (
+                  <span className={styles.summaryChip}>
+                    <span className={`${styles.dot} ${styles.dotNodata}`} />
+                    {summary.nodata} no data
+                  </span>
+                )}
                 {summary.other > 0 && (
                   <span className={styles.summaryChip}>
                     <span className={`${styles.dot} ${styles.dotSkipped}`} />
-                    {summary.other} skipped / unknown
+                    {summary.other} skipped
                   </span>
                 )}
                 {summary.stale > 0 && (
@@ -435,42 +637,54 @@ export default function StatusPage() {
                 )}
               </div>
               <div className={styles.sourcesRow}>
-                {docs.map((doc) => (
-                  <a
-                    key={doc.workflow}
-                    className={styles.sourceCard}
-                    href={doc.run_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="Open the GitHub Actions run"
-                  >
-                    <span className={styles.sourceTitle}>
-                      {SOURCE_TITLES[doc.workflow] ?? doc.workflow_name}
-                      <span className={styles.sourceArrow} aria-hidden="true">
-                        →
+                {WORKFLOW_KEYS.map((key) => {
+                  const meta = WORKFLOW_META[key];
+                  const doc = docs[key];
+                  const href = `https://github.com/${REPO}/actions/workflows/${meta.file}`;
+                  return (
+                    <a
+                      key={key}
+                      className={styles.sourceCard}
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open the workflow's GitHub Actions runs"
+                    >
+                      <span className={styles.sourceTitle}>
+                        {meta.title}
+                        <span className={styles.sourceArrow} aria-hidden="true">
+                          →
+                        </span>
                       </span>
-                    </span>
-                    <span className={styles.sourceMeta}>
-                      last run {relativeTime(doc.completed_at)} · commit{" "}
-                      <code>{doc.commit}</code>
-                      {isStale(doc) && (
-                        <span className={styles.staleSource}> · stale</span>
-                      )}
-                    </span>
-                  </a>
-                ))}
+                      <span className={styles.sourceMeta}>
+                        {doc ? (
+                          <>
+                            last update {relativeTime(doc.updated_at)} · commit{" "}
+                            <code>{doc.commit}</code>
+                            {isStaleTimestamp(doc.updated_at, meta.cadenceHours) && (
+                              <span className={styles.staleSource}> · stale</span>
+                            )}
+                          </>
+                        ) : (
+                          "no runs published yet"
+                        )}
+                      </span>
+                    </a>
+                  );
+                })}
               </div>
             </>
           )}
         </header>
 
         <div className={styles.content}>
-          {failed && (
+          {nothingAvailable && (
             <div className={styles.notice}>
               Status data is not available right now. It is published by the
-              test workflows on the develop branch. You can check the{" "}
+              test workflows on the <code>{SOURCE_BRANCH}</code> branch. You can
+              check the{" "}
               <a
-                href="https://github.com/yaalalabs/agent-kernel/actions"
+                href={`https://github.com/${REPO}/actions`}
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -480,7 +694,7 @@ export default function StatusPage() {
             </div>
           )}
 
-          {!docs && !failed && (
+          {!loaded && (
             <div className={styles.grid} style={{ marginTop: "3rem" }}>
               {Array.from({ length: 12 }).map((_, index) => (
                 <div key={index} className={styles.skeleton} />
@@ -512,7 +726,7 @@ export default function StatusPage() {
             </section>
           ))}
 
-          {docs && (
+          {loaded && tiles.length > 0 && (
             <>
               <div className={styles.legend}>
                 <div className={styles.sectionGlow} />
@@ -524,7 +738,11 @@ export default function StatusPage() {
                 </span>
                 <span className={styles.legendItem}>
                   <span className={`${styles.dot} ${styles.dotSkipped}`} />{" "}
-                  skipped / no data
+                  skipped
+                </span>
+                <span className={styles.legendItem}>
+                  <span className={`${styles.dot} ${styles.dotNodata}`} /> no
+                  runs yet
                 </span>
                 <span className={styles.legendItem}>
                   <span className={styles.staleBadge}>stale</span> last run is
@@ -533,11 +751,10 @@ export default function StatusPage() {
               </div>
               <p className={styles.footerNote}>
                 Each tile's strip shows its most recent runs, oldest to newest.
-                Statuses come from the Test, Nightly Integration Tests, and
-                Weekly Integration Tests workflows. Tests are categorized via
-                the config files in{" "}
+                Every test job publishes its own status the moment it finishes.
+                Tests are categorized via the config files in{" "}
                 <a
-                  href="https://github.com/yaalalabs/agent-kernel/tree/develop/.github"
+                  href={`https://github.com/${REPO}/tree/${SOURCE_BRANCH}/.github`}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

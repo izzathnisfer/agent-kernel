@@ -403,6 +403,12 @@
   background: var(--status-skipped);
 }
 
+/* Configured but never run: hollow ring instead of a filled dot */
+.dotNodata {
+  background: transparent;
+  border: 2px solid var(--status-skipped);
+}
+
 .tileLabel {
   font-weight: 700;
   font-size: 0.92rem;
