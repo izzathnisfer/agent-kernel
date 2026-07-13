@@ -1,0 +1,220 @@
+.page {
+  --status-pass: #1a7f37;
+  --status-fail: #cf222e;
+  --status-skipped: #6e7781;
+  --status-stale: #9a6700;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 4rem;
+}
+
+[data-theme='dark'] .page {
+  --status-pass: #3fb950;
+  --status-fail: #f85149;
+  --status-skipped: #8b949e;
+  --status-stale: #d29922;
+}
+
+.header {
+  margin-bottom: 2rem;
+}
+
+.header h1 {
+  margin-bottom: 0.5rem;
+}
+
+.subtitle {
+  color: var(--ifm-color-emphasis-700);
+  max-width: 60rem;
+}
+
+.summaryRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1.25rem 0 0.75rem;
+}
+
+.summaryChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  background: var(--ifm-background-surface-color);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.sources {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.85rem;
+}
+
+.sources li {
+  margin: 0.15rem 0;
+}
+
+.sources a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--ifm-color-emphasis-400);
+}
+
+.staleSource {
+  color: var(--status-stale);
+  font-weight: 600;
+}
+
+.section {
+  margin-top: 2.25rem;
+}
+
+.section h2 {
+  font-size: 1.15rem;
+  border-bottom: 1px solid var(--ifm-color-emphasis-300);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.9rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.tile {
+  display: block;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  background: var(--ifm-background-surface-color);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.tile:hover {
+  border-color: var(--ifm-color-primary);
+  color: inherit;
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.tileHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--status-skipped);
+}
+
+.dotPass { background: var(--status-pass); }
+.dotFail { background: var(--status-fail); }
+.dotSkipped, .dotUnknown { background: var(--status-skipped); }
+
+.tileLabel {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staleBadge {
+  flex: none;
+  margin-left: auto;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--status-stale);
+  border: 1px solid var(--status-stale);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
+.tileMeta {
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--ifm-color-emphasis-600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failingSince {
+  color: var(--status-fail);
+  font-weight: 600;
+}
+
+.historyStrip {
+  display: flex;
+  gap: 3px;
+  margin-top: 0.5rem;
+}
+
+.historyCell {
+  width: 14px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--ifm-color-emphasis-200);
+}
+
+.historyPass { background: var(--status-pass); }
+.historyFail { background: var(--status-fail); }
+.historySkipped, .historyUnknown { background: var(--status-skipped); opacity: 0.45; }
+
+.notice {
+  margin-top: 2rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-color-emphasis-700);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--ifm-color-emphasis-300);
+  font-size: 0.85rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.footerNote {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.skeleton {
+  height: 72px;
+  border-radius: 8px;
+  background: var(--ifm-color-emphasis-200);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

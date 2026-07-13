@@ -1,6 +1,10 @@
 # Test Configuration
 # This file defines which e2e tests to run in parallel
 # Follows the same format as integration-test-config.yaml for consistency
+#
+# The `dashboard` block controls how a test appears on the public Integration
+# Status page (https://kernel.yaala.ai/status) — see integration-test-config.yaml
+# and docs/specs/integration-status.md for the format.
 
 # E2E tests - require secrets to run
 e2e:
@@ -8,66 +12,153 @@ e2e:
     # CLI examples
     - type: cli
       path: examples/cli/openai
+      dashboard:
+        category: Core & Frameworks
+        label: OpenAI (CLI)
     - type: cli
       path: examples/cli/openai-dynamic
+      dashboard:
+        category: Core & Frameworks
+        label: OpenAI (dynamic config)
     - type: cli
       path: examples/cli/openai_structured
+      dashboard:
+        category: API Features
+        label: Structured output (CLI)
     - type: cli
       path: examples/cli/adk
+      dashboard:
+        category: Core & Frameworks
+        label: Google ADK (CLI)
     - type: cli
       path: examples/cli/crewai
+      dashboard:
+        category: Core & Frameworks
+        label: CrewAI (CLI)
     - type: cli
       path: examples/cli/langgraph
+      dashboard:
+        category: Core & Frameworks
+        label: LangGraph (CLI)
     - type: cli
       path: examples/cli/multi
+      dashboard:
+        category: Core & Frameworks
+        label: Multi-agent (CLI)
     - type: cli
       path: examples/cli/knowledgebase/openai/chromadb
+      dashboard:
+        category: Agent Memory / Knowledge
+        label: ChromaDB knowledge base
     - type: cli
       path: examples/cli/guardrail/openai
+      dashboard:
+        category: Guardrails
+        label: OpenAI Guardrails
     - type: cli
       path: examples/cli/guardrail/bedrock
+      dashboard:
+        category: Guardrails
+        label: AWS Bedrock Guardrails
     # - type: cli
     #   path: examples/cli/guardrail/walledai
-    
+    #   dashboard:
+    #     category: Guardrails
+    #     label: Walled AI
+
     # API examples
     - type: api
       path: examples/api/openai
+      dashboard:
+        category: Core & Frameworks
+        label: OpenAI (API)
     - type: api
       path: examples/api/openai_structured
+      dashboard:
+        category: API Features
+        label: Structured output (API)
     - type: api
       path: examples/api/adk
+      dashboard:
+        category: Core & Frameworks
+        label: Google ADK (API)
     - type: api
       path: examples/api/multimodal/openai
+      dashboard:
+        category: Multimodal
+        label: OpenAI
     - type: api
       path: examples/api/multimodal/adk
+      dashboard:
+        category: Multimodal
+        label: Google ADK
     - type: api
       path: examples/api/multimodal/crewai
+      dashboard:
+        category: Multimodal
+        label: CrewAI
     - type: api
       path: examples/api/multimodal/langgraph
+      dashboard:
+        category: Multimodal
+        label: LangGraph
     - type: api
       path: examples/api/hooks
+      dashboard:
+        category: API Features
+        label: Hooks
     - type: api
       path: examples/api/slack
       requires_slack: true
+      dashboard:
+        category: Messaging Integrations
+        label: Slack
     - type: api
       path: examples/api/telegram
+      dashboard:
+        category: Messaging Integrations
+        label: Telegram
     - type: api
       path: examples/api/messenger
+      dashboard:
+        category: Messaging Integrations
+        label: Messenger
     - type: api
       path: examples/api/whatsapp
+      dashboard:
+        category: Messaging Integrations
+        label: WhatsApp
     - type: api
       path: examples/api/instagram
+      dashboard:
+        category: Messaging Integrations
+        label: Instagram
     - type: api
       path: examples/api/gmail
+      dashboard:
+        category: Messaging Integrations
+        label: Gmail
     - type: api
       path: examples/api/a2a/multi
+      dashboard:
+        category: API Features
+        label: A2A multi-agent
     - type: api
       path: examples/api/mcp/multi
-    
+      dashboard:
+        category: API Features
+        label: MCP multi-agent
+
     # Memory examples
     - type: memory
       path: examples/memory/key-value-cache
-    
+      dashboard:
+        category: Agent Memory / Knowledge
+        label: Key-value cache memory
+
     # Containerized examples
     - type: containerized
       path: examples/containerized/openai
+      dashboard:
+        category: Core & Frameworks
+        label: OpenAI (containerized)

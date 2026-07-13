@@ -1,110 +1,220 @@
 # Integration Test Configuration
 # This file defines which tests run on nightly vs weekly schedules and their execution order
+#
+# Each test may carry a `dashboard` block that controls how it appears on the public
+# Integration Status page (https://kernel.yaala.ai/status):
+#   dashboard:
+#     category: <section the tile renders under>
+#     label: <tile display name, unique within its category>
+#     description: <optional tooltip text>
+# A list of blocks surfaces one test as multiple tiles (e.g. a memory backend AND the
+# cloud variant it runs on). `dashboard: hidden` excludes a test from the page.
+# When omitted, a tile is derived from the test's type and path.
+# See docs/specs/integration-status.md for details.
 
 # Deployment base infrastructure - always deployed but not part of test matrix
 deployment_base:
   - type: aws-serverless
     path: examples/aws-serverless/openai
     deploy_dir: deploy
+    dashboard:
+      category: AWS Serverless
+      label: OpenAI agent (base deployment)
+      description: Shared base deployment used by the other cloud tests
 
 nightly:
   # Tests that run daily
   # For AWS projects, only deploy.sh and pytest are executed (no terraform destroy)
   tests:
     # Social integrations
+    # Labeled "(nightly)" because the per-commit e2e tests in test-config.yaml
+    # own the plain messaging labels.
     - type: api
       path: examples/api/slack
+      dashboard:
+        category: Messaging Integrations
+        label: Slack (nightly)
     - type: api
       path: examples/api/telegram
+      dashboard:
+        category: Messaging Integrations
+        label: Telegram (nightly)
     - type: api
       path: examples/api/messenger
+      dashboard:
+        category: Messaging Integrations
+        label: Messenger (nightly)
     - type: api
       path: examples/api/whatsapp
+      dashboard:
+        category: Messaging Integrations
+        label: WhatsApp (nightly)
     - type: api
       path: examples/api/instagram
+      dashboard:
+        category: Messaging Integrations
+        label: Instagram (nightly)
     - type: api
       path: examples/api/gmail
+      dashboard:
+        category: Messaging Integrations
+        label: Gmail (nightly)
     - type: api
       path: examples/api/multimodal/dynamodb
       requires_aws: true
+      dashboard:
+        category: Multimodal
+        label: DynamoDB attachment store
     - type: api
       path: examples/api/multimodal/redis
       requires_redis: true
+      dashboard:
+        category: Multimodal
+        label: Redis attachment store
 
 weekly:
   # Tests that run once a week
-  # For AWS projects, terraform destroy is called first, 
+  # For AWS projects, terraform destroy is called first,
   # then each project is deployed and tested
   tests:
     # AWS Containerized
     - type: aws-containerized
       path: examples/aws-containerized/adk
       deploy_dir: deploy
+      dashboard:
+        category: AWS Containerized
+        label: Google ADK on ECS
     - type: aws-containerized
       path: examples/aws-containerized/openai-dynamodb
       deploy_dir: deploy
+      dashboard:
+        category: AWS Containerized
+        label: OpenAI + DynamoDB memory
     - type: aws-containerized
       path: examples/aws-containerized/crewai
       deploy_dir: deploy
+      dashboard:
+        category: AWS Containerized
+        label: CrewAI on ECS
     - type: aws-containerized
       path: examples/aws-containerized/mcp/multi
       deploy_dir: deploy
+      dashboard:
+        category: AWS Containerized
+        label: MCP multi-agent
     - type: aws-containerized
       path: examples/aws-containerized/openai-dynamodb-scalable
       deploy_dir: deploy
-    
+      dashboard:
+        category: AWS Containerized
+        label: Scalable OpenAI + DynamoDB
+
     # AWS Serverless
     - type: aws-serverless
       path: examples/aws-serverless/adk
       deploy_dir: deploy
+      dashboard:
+        category: AWS Serverless
+        label: Google ADK on Lambda
     - type: aws-serverless
       path: examples/aws-serverless/crewai
       deploy_dir: deploy
+      dashboard:
+        category: AWS Serverless
+        label: CrewAI on Lambda
     - type: aws-serverless
       path: examples/aws-serverless/langgraph
       deploy_dir: deploy
+      dashboard:
+        category: AWS Serverless
+        label: LangGraph on Lambda
     - type: aws-serverless
       path: examples/aws-serverless/scalable-openai
       deploy_dir: deploy
+      dashboard:
+        category: AWS Serverless
+        label: Scalable OpenAI
     - type: aws-serverless
       path: examples/aws-serverless/openai-auth
       deploy_dir: deploy
-    
-     # Memory options 
+      dashboard:
+        category: AWS Serverless
+        label: OpenAI + API auth
+
+     # Memory options
+     # Each memory test carries two tiles: the memory backend itself and the
+     # cloud variant it runs on.
     - type: aws-serverless
       path: examples/memory/redis
+      dashboard:
+        - category: Agent Memory / Knowledge
+          label: Redis memory
+        - category: AWS Serverless
+          label: OpenAI + Redis memory
     - type: aws-serverless
       path: examples/memory/dynamodb
+      dashboard:
+        - category: Agent Memory / Knowledge
+          label: DynamoDB memory
+        - category: AWS Serverless
+          label: OpenAI + DynamoDB memory
     - type: azure-serverless
       path: examples/memory/cosmos
       deploy_dir: deploy
+      dashboard:
+        - category: Agent Memory / Knowledge
+          label: Cosmos DB memory
+        - category: Azure Serverless
+          label: OpenAI + Cosmos memory
 
     # Azure Serverless
     - type: azure-serverless
       path: examples/azure-serverless/openai
       deploy_dir: deploy
-    
+      dashboard:
+        category: Azure Serverless
+        label: OpenAI agent
+
     # Azure Containerized
     - type: azure-containerized
       path: examples/azure-containerized/openai-cosmos
       deploy_dir: deploy
+      dashboard:
+        category: Azure Containerized
+        label: OpenAI + Cosmos memory
 
     # GCP Serverless
     - type: gcp-serverless
       path: examples/gcp-serverless/openai-firestore
       deploy_dir: deploy
+      dashboard:
+        - category: Agent Memory / Knowledge
+          label: Firestore memory
+        - category: GCP Serverless
+          label: OpenAI + Firestore memory
     - type: gcp-serverless
       path: examples/gcp-serverless/openai
       deploy_dir: deploy
+      dashboard:
+        category: GCP Serverless
+        label: OpenAI agent
     - type: gcp-serverless
       path: examples/gcp-serverless/openai-auth
       deploy_dir: deploy
-    
+      dashboard:
+        category: GCP Serverless
+        label: OpenAI + auth
+
     # GCP Containerized
     - type: gcp-containerized
       path: examples/gcp-containerized/openai
       deploy_dir: deploy
+      dashboard:
+        category: GCP Containerized
+        label: OpenAI agent
     - type: gcp-containerized
       path: examples/gcp-containerized/openai-auth
       deploy_dir: deploy
-    
+      dashboard:
+        category: GCP Containerized
+        label: OpenAI + auth

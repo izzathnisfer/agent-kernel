@@ -98,7 +98,19 @@ nightly:
     # ... existing tests ...
     - type: api
       path: examples/api/my-new-example
+      dashboard:
+        category: Messaging Integrations
+        label: My New Example
 ```
+
+The `dashboard` block controls how the test appears on the public
+[Integration Status page](https://kernel.yaala.ai/status) — the tile shows up
+there automatically on the next published run, no website change needed. Use a
+list of blocks to surface one test as multiple tiles (e.g. a memory backend and
+the cloud variant it runs on), or `dashboard: hidden` to opt out. When omitted,
+a tile is derived from the test's `type` and `path`. See
+[`docs/specs/integration-status.md`](../docs/specs/integration-status.md) for
+the full format.
 
 ### Changing Test Order
 Simply reorder entries in the config file.
@@ -108,9 +120,20 @@ Edit the cron expressions in:
 - [`.github/workflows/integration-test.yaml`](.github/workflows/integration-test.yaml) (nightly)
 - [`.github/workflows/integration-test-weekly.yaml`](.github/workflows/integration-test-weekly.yaml) (weekly)
 
+## Integration Status publishing
+
+Each test workflow ends with a `publish-status` job (develop branch only) that
+joins the run's job conclusions with the config metadata and pushes
+`status/<workflow>.json` plus `history/<workflow>.jsonl` to the orphan
+`status-data` branch. The documentation site's `/status` page reads those files
+client-side. The publisher lives at
+[`.github/scripts/publish_integration_status.py`](scripts/publish_integration_status.py).
+
 ## Validation
 
-Run the validator before committing config changes:
+Run the validator before committing config changes (checks both
+`integration-test-config.yaml` and `test-config.yaml`, including `dashboard`
+blocks and tile uniqueness):
 ```bash
 python3 .github/scripts/validate_integration_config.py
 ```

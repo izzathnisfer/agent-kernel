@@ -441,6 +441,7 @@ const config = {
             label: 'Docs',
           },
           { to: '/blog', label: 'Blog', position: 'left' },
+          { to: '/status', label: 'Status', position: 'left' },
           {
             href: 'https://github.com/yaalalabs/agent-kernel',
             position: 'right',
@@ -469,6 +470,7 @@ const config = {
               { label: 'Use Cases', to: '/use-cases' },
               { label: 'Architecture', to: '/docs/architecture/overview' },
               { label: 'API Reference', to: '/docs/api/rest-api' },
+              { label: 'Integration Status', to: '/status' },
             ],
           },
           {

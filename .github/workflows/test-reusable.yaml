@@ -56,7 +56,10 @@ jobs:
       
       - name: Install dependencies
         run: pip install pyyaml
-      
+
+      - name: Validate test configuration
+        run: python3 .github/scripts/validate_integration_config.py
+
       - name: Generate test matrix
         id: set-matrix
         run: |
@@ -116,6 +119,10 @@ jobs:
       - name: Test update_skills_version script
         working-directory: scripts
         run: python test_update_skills_version.py
+
+      - name: Test publish_integration_status script
+        working-directory: .github/scripts
+        run: pip install pyyaml && python test_publish_integration_status.py
 
   unit-tests:
     needs: [build-ak-py]

@@ -77,3 +77,48 @@ jobs:
       WALLED_API_KEY: ${{ secrets.WALLED_API_KEY }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+
+  # Publish results to the status-data branch for the public Integration Status
+  # page (https://kernel.yaala.ai/status). See docs/specs/integration-status.md.
+  publish-status:
+    needs: [run-tests]
+    if: ${{ always() && github.ref == 'refs/heads/develop' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push to the status-data branch
+      actions: read     # read this run's job conclusions
+    concurrency:
+      group: status-data-publish
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Publish status data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATA_DIR="${RUNNER_TEMP}/status-data"
+          mkdir -p "$DATA_DIR"
+          if git fetch origin status-data 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C "$DATA_DIR"
+          fi
+
+          python3 .github/scripts/publish_integration_status.py \
+            --workflow test \
+            --data-dir "$DATA_DIR"
+
+          cd "$DATA_DIR"
+          git init -b status-data
+          git add -A
+          git -c user.name="agent-kernel-ci[bot]" \
+              -c user.email="agent-kernel-ci[bot]@users.noreply.github.com" \
+              commit -m "status: ${GITHUB_WORKFLOW} run ${GITHUB_RUN_ID}"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" status-data:status-data

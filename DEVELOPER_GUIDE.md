@@ -150,6 +150,30 @@ Follow conventional commit format:
 - Update documentation if needed
 - Request review from maintainers
 
+### Adding Tests to CI and the Integration Status Page
+
+E2E and integration tests are driven by two config files:
+
+- [`.github/test-config.yaml`](.github/test-config.yaml) — e2e tests run on every PR and push to `develop`
+- [`.github/integration-test-config.yaml`](.github/integration-test-config.yaml) — nightly and weekly integration tests
+
+When adding a test entry, include a `dashboard` block so the integration shows
+up correctly on the public [Integration Status page](https://kernel.yaala.ai/status):
+
+```yaml
+- type: api
+  path: examples/api/my-new-example
+  dashboard:
+    category: Messaging Integrations   # dashboard section
+    label: My New Example              # tile name, unique within the category
+```
+
+A list of `dashboard` blocks surfaces one test as multiple tiles;
+`dashboard: hidden` opts out. Validate with
+`python3 .github/scripts/validate_integration_config.py`. See
+[`.github/INTEGRATION_TESTS.md`](.github/INTEGRATION_TESTS.md) and
+[`docs/specs/integration-status.md`](docs/specs/integration-status.md).
+
 ## Additional Resources
 
 - [Main README](README.md) - Project overview and usage
