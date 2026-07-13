@@ -30,7 +30,7 @@ import styles from "./status.module.css";
 
 const REPO = "yaalalabs/agent-kernel";
 
-const SOURCE_BRANCH = "develop";
+const SOURCE_BRANCH = "feature/health_dashboard"; // branch to read the config YAMLs from; must match the workflow's `on.push.branches` in .github/workflows/test.yaml
 
 const DATA_BASE = `https://raw.githubusercontent.com/${REPO}/status-data`;
 const CONFIG_BASE = `https://raw.githubusercontent.com/${REPO}/${SOURCE_BRANCH}/.github`;
@@ -42,7 +42,7 @@ const WORKFLOW_META: Record<
   { title: string; file: string; config: string; tiers: string[]; includeBase: boolean; cadenceHours: number | null }
 > = {
   test: {
-    title: "Core tests (per commit)",
+    title: "Core Tests",
     file: "test.yaml",
     config: "test-config.yaml",
     tiers: ["e2e"],
@@ -50,7 +50,7 @@ const WORKFLOW_META: Record<
     cadenceHours: null,
   },
   "integration-test": {
-    title: "Messaging integrations (nightly)",
+    title: "Messaging Integrations",
     file: "integration-test.yaml",
     config: "integration-test-config.yaml",
     tiers: ["nightly"],
@@ -58,7 +58,7 @@ const WORKFLOW_META: Record<
     cadenceHours: 48,
   },
   "integration-test-weekly": {
-    title: "Cloud deployments (weekly)",
+    title: "Cloud Deployments",
     file: "integration-test-weekly.yaml",
     config: "integration-test-config.yaml",
     tiers: ["weekly"],
@@ -165,19 +165,6 @@ function isStaleTimestamp(iso: string | null, cadenceHours: number | null): bool
 
 /* ─── Catalog from the config YAMLs (mirrors .github/scripts/dashboard_config.py) ── */
 
-const DEFAULT_CATEGORY_BY_TYPE: Record<string, string> = {
-  cli: "Core & Examples",
-  api: "Core & Examples",
-  memory: "Core & Examples",
-  containerized: "Core & Examples",
-  "aws-serverless": "AWS Serverless",
-  "aws-containerized": "AWS Containerized",
-  "azure-serverless": "Azure Serverless",
-  "azure-containerized": "Azure Containerized",
-  "gcp-serverless": "GCP Serverless",
-  "gcp-containerized": "GCP Containerized",
-};
-
 // Non-matrix tiles published by the Test workflow's unit/script test jobs
 // (mirrors SYNTHETIC_TILES in publish_integration_status.py)
 const SYNTHETIC_TILES: CatalogTile[] = [
@@ -185,18 +172,10 @@ const SYNTHETIC_TILES: CatalogTile[] = [
     path: "ak-py",
     type: "unit",
     category: "Core & Frameworks",
-    label: "ak-py unit tests",
+    label: "Python Unit Tests",
     description: "ak-py library unit test suite",
     logo: null,
-  },
-  {
-    path: "scripts",
-    type: "scripts",
-    category: "Core & Frameworks",
-    label: "Utility script tests",
-    description: "Repository maintenance script tests",
-    logo: null,
-  },
+  }
 ];
 
 function defaultLabel(path: string): string {
@@ -205,27 +184,23 @@ function defaultLabel(path: string): string {
 }
 
 function resolveCatalogTiles(test: any): CatalogTile[] {
-  if (!test?.path || test.dashboard === "hidden") return [];
+  if (!test?.path || test.dashboard === "hidden" || !test.dashboard) return [];
   const base = {
     path: test.path,
     type: test.type ?? "",
   };
-  const fallback = {
-    category: DEFAULT_CATEGORY_BY_TYPE[test.type] ?? "Other",
-    label: defaultLabel(test.path),
-  };
-  const entries = test.dashboard
-    ? Array.isArray(test.dashboard)
-      ? test.dashboard
-      : [test.dashboard]
-    : [{}];
-  return entries.map((entry: any) => ({
-    ...base,
-    category: entry?.category ?? fallback.category,
-    label: entry?.label ?? fallback.label,
-    description: entry?.description ?? null,
-    logo: entry?.logo ?? null,
-  }));
+  const entries = Array.isArray(test.dashboard)
+    ? test.dashboard
+    : [test.dashboard];
+  return entries
+    .filter((entry: any) => typeof entry?.category === "string" && entry.category.trim())
+    .map((entry: any) => ({
+      ...base,
+      category: entry.category.trim(),
+      label: entry?.label ?? defaultLabel(test.path),
+      description: entry?.description ?? null,
+      logo: entry?.logo ?? null,
+    }));
 }
 
 function buildCatalog(
@@ -271,19 +246,6 @@ function buildTiles(
   const merged = new Map<string, CatalogTile>();
   for (const tile of catalog) {
     merged.set(tileKey(tile.category, tile.label), tile);
-  }
-  // Published tiles no longer in the catalog still render (they have data)
-  for (const [key, result] of published) {
-    if (!merged.has(key)) {
-      merged.set(key, {
-        path: result.path,
-        type: result.type,
-        category: result.category,
-        label: result.label,
-        description: result.description,
-        logo: result.logo ?? null,
-      });
-    }
   }
 
   return [...merged.entries()].map(([key, catalogTile]) => {
@@ -687,11 +649,9 @@ export default function StatusPage() {
           </div>
           <h1 className={styles.heroTitle}>Integration Status</h1>
           <p className={styles.heroSubtitle}>
-            Live health of every integration Agent Kernel supports: agent
-            frameworks, cloud deployment variants, memory and knowledge
-            backends, and messaging platforms. Statuses come from the latest
-            test pipeline runs on the <code>{SOURCE_BRANCH}</code> branch, and
-            every tile links to the GitHub Actions run that produced it.
+            Live health of every integration Agent Kernel supports: Agent
+            Frameworks, Cloud deployment variants, Memory and Knowledge
+            backends, and Messaging platforms.
           </p>
 
           {loaded && tiles.length > 0 && (

@@ -39,12 +39,14 @@ TILE = {
 class TestDashboardConfig(unittest.TestCase):
     def test_defaults_when_omitted(self):
         entries = resolve_dashboard_entries({'type': 'api', 'path': 'examples/api/multimodal/redis'})
-        self.assertEqual(entries, [{
-            'category': 'Core & Examples',
-            'label': 'multimodal / redis',
-            'description': None,
-            'logo': None,
-        }])
+        self.assertEqual(entries, [])
+
+    def test_entry_without_category_is_omitted(self):
+        entries = resolve_dashboard_entries({
+            'type': 'api', 'path': 'examples/api/slack',
+            'dashboard': {'label': 'Slack'},
+        })
+        self.assertEqual(entries, [])
 
     def test_hidden(self):
         self.assertEqual(resolve_dashboard_entries({'path': 'x', 'dashboard': 'hidden'}), [])

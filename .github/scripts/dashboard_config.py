@@ -5,27 +5,13 @@ Shared helpers for the Integration Status dashboard configuration.
 Test entries in .github/test-config.yaml and .github/integration-test-config.yaml
 may carry a `dashboard` block (a mapping, a list of mappings, or the literal
 'hidden') that controls how the test appears on https://kernel.yaala.ai/status.
-This module resolves that block — including the defaults applied when it is
-omitted — so the validator and the status publisher agree on the result.
+This module resolves that block so the validator and the status publisher
+agree on the result.
 
 See docs/specs/integration-status.md.
 """
 
 from typing import Optional
-
-# Section used when a test has no explicit dashboard category
-DEFAULT_CATEGORY_BY_TYPE = {
-    'cli': 'Core & Examples',
-    'api': 'Core & Examples',
-    'memory': 'Core & Examples',
-    'containerized': 'Core & Examples',
-    'aws-serverless': 'AWS Serverless',
-    'aws-containerized': 'AWS Containerized',
-    'azure-serverless': 'Azure Serverless',
-    'azure-containerized': 'Azure Containerized',
-    'gcp-serverless': 'GCP Serverless',
-    'gcp-containerized': 'GCP Containerized',
-}
 
 ALLOWED_DASHBOARD_KEYS = {'category', 'label', 'description', 'logo'}
 
@@ -34,10 +20,6 @@ def default_label(path: str) -> str:
     """Derive a tile label from a test path: last two segments, minus 'examples/'."""
     segments = [s for s in path.split('/') if s and s != 'examples']
     return ' / '.join(segments[-2:]) if segments else path
-
-
-def default_category(test_type: str) -> str:
-    return DEFAULT_CATEGORY_BY_TYPE.get(test_type, 'Other')
 
 
 def resolve_dashboard_entries(test: dict) -> list[dict]:
@@ -54,12 +36,7 @@ def resolve_dashboard_entries(test: dict) -> list[dict]:
         return []
 
     if dashboard is None:
-        return [{
-            'category': default_category(test.get('type', '')),
-            'label': default_label(test.get('path', '')),
-            'description': None,
-            'logo': None,
-        }]
+        return []
 
     if isinstance(dashboard, dict):
         dashboard = [dashboard]
@@ -71,8 +48,14 @@ def resolve_dashboard_entries(test: dict) -> list[dict]:
     for item in dashboard:
         if not isinstance(item, dict):
             raise ValueError(f"Invalid dashboard entry for {test.get('path')}: {item!r}")
+
+        category = item.get('category')
+        # No category means opt-out: exclude this test/tile from the dashboard.
+        if not isinstance(category, str) or not category.strip():
+            continue
+
         entries.append({
-            'category': item.get('category') or default_category(test.get('type', '')),
+            'category': category.strip(),
             'label': item.get('label') or default_label(test.get('path', '')),
             'description': item.get('description'),
             # File under docs/static/img/integrations/, or a site-absolute
@@ -134,9 +117,11 @@ def validate_dashboard_block(test: dict) -> list[str]:
             errors.append(f"{where}: 'logo' must be a non-empty string")
 
         if isinstance(item, dict):
-            category = item.get('category') or default_category(test.get('type', ''))
-            if category in seen_categories:
-                errors.append(f"{where}: duplicate category '{category}' within the same test")
-            seen_categories.add(category)
+            category = item.get('category')
+            if isinstance(category, str) and category.strip():
+                category = category.strip()
+                if category in seen_categories:
+                    errors.append(f"{where}: duplicate category '{category}' within the same test")
+                seen_categories.add(category)
 
     return errors
