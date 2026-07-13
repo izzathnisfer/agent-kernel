@@ -14,42 +14,39 @@ e2e:
       path: examples/cli/openai
       dashboard:
         category: Core & Frameworks
-        label: OpenAI (CLI)
+        label: OpenAI
     - type: cli
       path: examples/cli/openai-dynamic
-      dashboard:
-        category: Core & Frameworks
-        label: OpenAI (dynamic config)
     - type: cli
       path: examples/cli/openai_structured
       dashboard:
         category: API Features
-        label: Structured output (CLI)
+        label: Structured outputs
     - type: cli
       path: examples/cli/adk
       dashboard:
         category: Core & Frameworks
-        label: Google ADK (CLI)
+        label: Google ADK
     - type: cli
       path: examples/cli/crewai
       dashboard:
         category: Core & Frameworks
-        label: CrewAI (CLI)
+        label: CrewAI
     - type: cli
       path: examples/cli/langgraph
       dashboard:
         category: Core & Frameworks
-        label: LangGraph (CLI)
+        label: LangGraph
     - type: cli
       path: examples/cli/multi
       dashboard:
         category: Core & Frameworks
-        label: Multi-agent (CLI)
+        label: Multi-Framework Agents
     - type: cli
       path: examples/cli/knowledgebase/openai/chromadb
       dashboard:
         category: Agent Memory / Knowledge
-        label: ChromaDB knowledge base
+        label: ChromaDB
     - type: cli
       path: examples/cli/guardrail/openai
       dashboard:
@@ -69,19 +66,10 @@ e2e:
     # API examples
     - type: api
       path: examples/api/openai
-      dashboard:
-        category: Core & Frameworks
-        label: OpenAI (API)
     - type: api
       path: examples/api/openai_structured
-      dashboard:
-        category: API Features
-        label: Structured output (API)
     - type: api
       path: examples/api/adk
-      dashboard:
-        category: Core & Frameworks
-        label: Google ADK (API)
     - type: api
       path: examples/api/multimodal/openai
       dashboard:
@@ -106,59 +94,41 @@ e2e:
       path: examples/api/hooks
       dashboard:
         category: API Features
-        label: Hooks
+        label: Pre- and Post-Processing Hooks
     - type: api
       path: examples/api/slack
       requires_slack: true
-      dashboard:
-        category: Messaging Integrations
-        label: Slack
     - type: api
       path: examples/api/telegram
-      dashboard:
-        category: Messaging Integrations
-        label: Telegram
     - type: api
       path: examples/api/messenger
-      dashboard:
-        category: Messaging Integrations
-        label: Messenger
     - type: api
       path: examples/api/whatsapp
-      dashboard:
-        category: Messaging Integrations
-        label: WhatsApp
     - type: api
       path: examples/api/instagram
-      dashboard:
-        category: Messaging Integrations
-        label: Instagram
     - type: api
       path: examples/api/gmail
-      dashboard:
-        category: Messaging Integrations
-        label: Gmail
     - type: api
       path: examples/api/a2a/multi
       dashboard:
         category: API Features
-        label: A2A multi-agent
+        label: A2A
     - type: api
       path: examples/api/mcp/multi
       dashboard:
         category: API Features
-        label: MCP multi-agent
+        label: MCP
 
     # Memory examples
     - type: memory
       path: examples/memory/key-value-cache
       dashboard:
         category: Agent Memory / Knowledge
-        label: Key-value cache memory
+        label: Key-value Cache
 
     # Containerized examples
     - type: containerized
       path: examples/containerized/openai
       dashboard:
         category: Core & Frameworks
-        label: OpenAI (containerized)
+        label: Containerized Agents
