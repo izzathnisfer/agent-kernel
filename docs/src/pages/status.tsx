@@ -1,6 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Layout from "@theme/Layout";
 import { load as parseYaml } from "js-yaml";
+import type { IconType } from "react-icons";
+import {
+  MdDataObject,
+  MdExtension,
+  MdHub,
+  MdMemory,
+  MdScience,
+  MdTerminal,
+  MdWebhook,
+} from "react-icons/md";
 import styles from "./status.module.css";
 
 /**
@@ -376,6 +386,65 @@ function shouldMock(): boolean {
   return window.location.search.includes("mock=1");
 }
 
+/* ─── Tile logos ──────────────────────────────────────────────────────────── */
+
+/** Brand logos live in docs/static/img/integrations; generic capabilities use
+ * the site's Material icon set. Rules are matched against "path label" in
+ * order, so storage/platform brands win over the framework driving the test. */
+const LOGO_RULES: { match: RegExp; img?: string; icon?: IconType }[] = [
+  { match: /slack/, img: "slack-logo.png" },
+  { match: /telegram/, img: "telegram-logo.png" },
+  { match: /messenger/, img: "messenger-logo.png" },
+  { match: /whatsapp/, img: "whatsapp-logo.png" },
+  { match: /instagram/, img: "instagram-logo.png" },
+  { match: /gmail/, img: "gmail-logo.png" },
+  { match: /bedrock/, img: "bedrock.png" },
+  { match: /chromadb/, img: "chromadb.png" },
+  { match: /redis/, img: "redis.svg" },
+  { match: /dynamodb/, img: "dynamodb.svg" },
+  { match: /cosmos/, img: "cosmosdb.svg" },
+  { match: /firestore/, img: "firestore.svg" },
+  { match: /mcp/, img: "mcp.svg" },
+  { match: /a2a/, img: "a2a.png" },
+  { match: /crewai/, img: "crewai.png" },
+  { match: /langgraph/, img: "langgraph.png" },
+  { match: /adk/, img: "googleADK.png" },
+  { match: /openai/, img: "chatgpt.png" },
+  { match: /key-value/, icon: MdMemory },
+  { match: /hooks/, icon: MdWebhook },
+  { match: /structured/, icon: MdDataObject },
+  { match: /unit tests/, icon: MdScience },
+  { match: /script/, icon: MdTerminal },
+  { match: /multi/, icon: MdHub },
+];
+
+const TYPE_LOGO_FALLBACK: Record<string, string> = {
+  "aws-serverless": "aws.svg",
+  "aws-containerized": "aws.svg",
+  "azure-serverless": "azure.svg",
+  "azure-containerized": "azure.svg",
+  "gcp-serverless": "gcp.svg",
+  "gcp-containerized": "gcp.svg",
+};
+
+function TileLogo({ tile }: { tile: Tile }) {
+  const haystack = `${tile.path} ${tile.label}`.toLowerCase();
+  const rule = LOGO_RULES.find((candidate) => candidate.match.test(haystack));
+  const img = rule?.img ?? TYPE_LOGO_FALLBACK[tile.type];
+  if (img) {
+    return (
+      <img
+        className={styles.tileLogo}
+        src={`/img/integrations/${img}`}
+        alt=""
+        loading="lazy"
+      />
+    );
+  }
+  const Icon = rule?.icon ?? MdExtension;
+  return <Icon className={styles.tileIconLogo} aria-hidden="true" />;
+}
+
 /* ─── Rendering ───────────────────────────────────────────────────────────── */
 
 const STATUS_DOT: Record<TileStatus, string> = {
@@ -419,6 +488,7 @@ function TileCard({ tile }: { tile: Tile }) {
     >
       <div className={styles.tileHeader}>
         <span className={`${styles.dot} ${STATUS_DOT[tile.status]}`} />
+        <TileLogo tile={tile} />
         <span className={styles.tileLabel}>{tile.label}</span>
         {tile.stale && <span className={styles.staleBadge}>stale</span>}
         <span className={styles.externalHint} aria-hidden="true">

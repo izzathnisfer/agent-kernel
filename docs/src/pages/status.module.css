@@ -409,6 +409,25 @@
   border: 2px solid var(--status-skipped);
 }
 
+.tileLogo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.tileIconLogo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: rgba(147, 210, 255, 0.85);
+}
+
+[data-theme='light'] .tileIconLogo {
+  color: #0369a1;
+}
+
 .tileLabel {
   font-weight: 700;
   font-size: 0.92rem;
