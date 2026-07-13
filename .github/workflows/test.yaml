@@ -61,18 +61,45 @@ jobs:
             git push
           fi
 
+  # PR runs: the test jobs execute PR code, so the token is read-only and
+  # status publishing is disabled. Keeps the 'run-tests' name so required PR
+  # checks are unaffected.
   run-tests:
     needs: [update-lock-files]
-    if: ${{ always() && (needs.update-lock-files.result == 'success' || needs.update-lock-files.result == 'skipped') }}
+    if: ${{ always() && github.event_name == 'pull_request' && (needs.update-lock-files.result == 'success' || needs.update-lock-files.result == 'skipped') }}
+    permissions:
+      contents: read
     uses: ./.github/workflows/test-reusable.yaml
     with:
-      # For PRs, test the head SHA; for pushes, test the commit SHA
-      checkout_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Test the PR head SHA
+      checkout_ref: ${{ github.event.pull_request.head.sha }}
       # Skip e2e tests for fork PRs (they don't have access to secrets)
-      run_e2e_tests: ${{ github.event.pull_request.head.repo.fork != true || github.event_name != 'pull_request' }}
+      run_e2e_tests: ${{ github.event.pull_request.head.repo.fork != true }}
+      publish_status: false
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      WALLED_API_KEY: ${{ secrets.WALLED_API_KEY }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+
+  # Push/dispatch runs: trusted repository code. contents: write lets the
+  # "Publish tile status" steps push to the status-data branch; publishing
+  # itself only happens for the develop branch.
+  run-tests-publish:
+    needs: [update-lock-files]
+    if: ${{ always() && github.event_name != 'pull_request' && (needs.update-lock-files.result == 'success' || needs.update-lock-files.result == 'skipped') }}
+    permissions:
+      contents: write   # publish tile status to the status-data branch
+      actions: read
+    uses: ./.github/workflows/test-reusable.yaml
+    with:
+      checkout_ref: ${{ github.sha }}
+      run_e2e_tests: true
       # Each test job publishes its tile to the Integration Status page
-      # (https://kernel.yaala.ai/status). TODO: change to refs/heads/develop on merge.
-      publish_status: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/feature/health_dashboard' }}
+      # (https://kernel.yaala.ai/status), from the develop branch only
+      publish_status: ${{ github.ref == 'refs/heads/develop' }}
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
