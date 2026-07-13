@@ -253,6 +253,7 @@
 
 .content {
   position: relative;
+  isolation: isolate;
   max-width: 1120px;
   margin: 0 auto;
   padding: 0 1.5rem 5rem;
@@ -261,9 +262,14 @@
 /* Section breaker, matching the homepage topGlow divider */
 .section {
   position: relative;
+  z-index: 0;
   margin-top: 3.5rem;
   padding-top: 3rem;
   text-align: center;
+}
+
+.section:hover {
+  z-index: 20;
 }
 
 .sectionGlow {
@@ -272,6 +278,8 @@
   left: 0;
   right: 0;
   height: 1px;
+  z-index: 1;
+  pointer-events: none;
   background: linear-gradient(90deg,
       transparent 0%,
       rgba(255, 255, 255, 0.15) 20%,
@@ -368,7 +376,7 @@
   transform: translateY(-2px);
   color: inherit;
   text-decoration: none;
-  z-index: 5;
+  z-index: 30;
 }
 
 [data-theme='light'] .tile:hover {
@@ -507,7 +515,7 @@
   position: absolute;
   left: 0.4rem;
   right: 0.4rem;
-  bottom: calc(100% + 0.5rem);
+  top: calc(100% + 0.5rem);
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -519,10 +527,10 @@
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
   opacity: 0;
   visibility: hidden;
-  transform: translateY(4px);
+  transform: translateY(-4px);
   transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
   pointer-events: none;
-  z-index: 10;
+  z-index: 40;
 }
 
 .tile:hover .tileTooltip {
