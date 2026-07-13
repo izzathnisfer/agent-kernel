@@ -166,6 +166,8 @@ up correctly on the public [Integration Status page](https://kernel.yaala.ai/sta
   dashboard:
     category: Messaging Integrations   # dashboard section
     label: My New Example              # tile name, unique within the category
+    description: Optional hover text   # shown in the tile's tooltip
+    logo: my-example.png               # optional, under docs/static/img/integrations/
 ```
 
 A list of `dashboard` blocks surfaces one test as multiple tiles;

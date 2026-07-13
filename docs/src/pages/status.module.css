@@ -342,17 +342,18 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
   text-align: left;
 }
 
 /* ─── Tiles, matching the homepage frameworks-strip cards ─────────────────── */
 
 .tile {
+  position: relative;
   display: flex;
   flex-direction: column;
-  padding: 1.1rem 1.2rem 1rem;
+  padding: 1.15rem 1.25rem 1.05rem;
   background: var(--status-tile-bg);
   border: 1px solid var(--status-tile-border);
   border-radius: 14px;
@@ -367,6 +368,7 @@
   transform: translateY(-2px);
   color: inherit;
   text-decoration: none;
+  z-index: 5;
 }
 
 [data-theme='light'] .tile:hover {
@@ -374,10 +376,43 @@
   background: rgba(0, 180, 220, 0.03);
 }
 
-.tileHeader {
+.tileTop {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.85rem;
+  /* keep clear of the corner status dot */
+  padding-right: 1.25rem;
+}
+
+.logoBox {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='light'] .logoBox {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.tileText {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.tileLabelRow {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
 }
 
 .dot {
@@ -410,17 +445,14 @@
 }
 
 .tileLogo {
-  flex: none;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   object-fit: contain;
-  border-radius: 4px;
 }
 
 .tileIconLogo {
-  flex: none;
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 26px;
   color: rgba(147, 210, 255, 0.85);
 }
 
@@ -428,27 +460,20 @@
   color: #0369a1;
 }
 
+.tileStatusDot {
+  position: absolute;
+  top: 0.9rem;
+  right: 0.9rem;
+}
+
 .tileLabel {
   font-weight: 700;
-  font-size: 0.92rem;
+  font-size: 0.98rem;
   color: var(--status-text);
   letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.externalHint {
-  flex: none;
-  margin-left: auto;
-  color: rgba(147, 210, 255, 0.9);
-  font-size: 0.85rem;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.tile:hover .externalHint {
-  opacity: 1;
 }
 
 .staleBadge {
@@ -463,17 +488,8 @@
   padding: 0.1rem 0.5rem;
 }
 
-.tileHeader .staleBadge {
-  margin-left: auto;
-}
-
-.tileHeader .staleBadge + .externalHint {
-  margin-left: 0.4rem;
-}
-
 .tileMeta {
-  margin-top: 0.5rem;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: var(--status-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -485,12 +501,70 @@
   font-weight: 700;
 }
 
+/* ─── Hover tooltip with the config description ───────────────────────────── */
+
+.tileTooltip {
+  position: absolute;
+  left: 0.4rem;
+  right: 0.4rem;
+  bottom: calc(100% + 0.5rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.75rem 0.95rem;
+  background: rgba(14, 8, 28, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 11px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.tile:hover .tileTooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+[data-theme='light'] .tileTooltip {
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.18);
+}
+
+.tooltipDescription {
+  font-size: 0.82rem;
+  color: var(--status-text);
+  line-height: 1.55;
+}
+
+.tooltipPath {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.72rem;
+  color: var(--status-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.tooltipHint {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #00DDFF;
+}
+
+[data-theme='light'] .tooltipHint {
+  color: #0099BB;
+}
+
 /* ─── History strip ───────────────────────────────────────────────────────── */
 
 .historyStrip {
   display: flex;
   gap: 4px;
-  margin-top: 0.7rem;
+  margin-top: 0.85rem;
 }
 
 .historyCell {
@@ -586,7 +660,7 @@
 /* ─── Loading skeleton ────────────────────────────────────────────────────── */
 
 .skeleton {
-  height: 92px;
+  height: 118px;
   border-radius: 14px;
   background: var(--status-tile-bg);
   border: 1px solid var(--status-tile-border);

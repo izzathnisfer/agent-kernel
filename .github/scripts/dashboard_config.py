@@ -27,7 +27,7 @@ DEFAULT_CATEGORY_BY_TYPE = {
     'gcp-containerized': 'GCP Containerized',
 }
 
-ALLOWED_DASHBOARD_KEYS = {'category', 'label', 'description'}
+ALLOWED_DASHBOARD_KEYS = {'category', 'label', 'description', 'logo'}
 
 
 def default_label(path: str) -> str:
@@ -58,6 +58,7 @@ def resolve_dashboard_entries(test: dict) -> list[dict]:
             'category': default_category(test.get('type', '')),
             'label': default_label(test.get('path', '')),
             'description': None,
+            'logo': None,
         }]
 
     if isinstance(dashboard, dict):
@@ -74,6 +75,10 @@ def resolve_dashboard_entries(test: dict) -> list[dict]:
             'category': item.get('category') or default_category(test.get('type', '')),
             'label': item.get('label') or default_label(test.get('path', '')),
             'description': item.get('description'),
+            # File under docs/static/img/integrations/, or a site-absolute
+            # path starting with '/'. When omitted, the status page's
+            # keyword/type fallback picks a logo.
+            'logo': item.get('logo'),
         })
     return entries
 
@@ -123,6 +128,10 @@ def validate_dashboard_block(test: dict) -> list[str]:
         description = item.get('description')
         if description is not None and not isinstance(description, str):
             errors.append(f"{where}: 'description' must be a string")
+
+        logo = item.get('logo')
+        if logo is not None and (not isinstance(logo, str) or not logo.strip()):
+            errors.append(f"{where}: 'logo' must be a non-empty string")
 
         if isinstance(item, dict):
             category = item.get('category') or default_category(test.get('type', ''))

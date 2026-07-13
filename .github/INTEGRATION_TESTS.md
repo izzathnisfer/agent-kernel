@@ -101,6 +101,8 @@ nightly:
       dashboard:
         category: Messaging Integrations
         label: My New Example
+        description: Shown in the tile's hover tooltip     # optional
+        logo: my-example.png                               # optional, under docs/static/img/integrations/
 ```
 
 The `dashboard` block controls how the test appears on the public

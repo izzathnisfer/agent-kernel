@@ -94,6 +94,7 @@ interface StatusResult {
   category: string;
   label: string;
   description: string | null;
+  logo?: string | null;
   status: TileStatus;
   run_id: number;
   run_url: string;
@@ -125,6 +126,7 @@ interface CatalogTile {
   category: string;
   label: string;
   description: string | null;
+  logo: string | null;
 }
 
 interface Tile {
@@ -133,6 +135,7 @@ interface Tile {
   category: string;
   label: string;
   description: string | null;
+  logo: string | null;
   status: TileStatus;
   href: string;
   completedAt: string | null;
@@ -185,6 +188,7 @@ const SYNTHETIC_TILES: CatalogTile[] = [
     category: "Core & Frameworks",
     label: "ak-py unit tests",
     description: "ak-py library unit test suite",
+    logo: null,
   },
   {
     path: "scripts",
@@ -192,6 +196,7 @@ const SYNTHETIC_TILES: CatalogTile[] = [
     category: "Core & Frameworks",
     label: "Utility script tests",
     description: "Repository maintenance script tests",
+    logo: null,
   },
 ];
 
@@ -220,6 +225,7 @@ function resolveCatalogTiles(test: any): CatalogTile[] {
     category: entry?.category ?? fallback.category,
     label: entry?.label ?? fallback.label,
     description: entry?.description ?? null,
+    logo: entry?.logo ?? null,
   }));
 }
 
@@ -276,6 +282,7 @@ function buildTiles(
         category: result.category,
         label: result.label,
         description: result.description,
+        logo: result.logo ?? null,
       });
     }
   }
@@ -315,6 +322,7 @@ function buildTiles(
     return {
       ...catalogTile,
       description: result.description ?? catalogTile.description,
+      logo: catalogTile.logo ?? result.logo ?? null,
       status: result.status,
       href: result.job_url ?? result.run_url ?? workflowUrl,
       completedAt: result.completed_at,
@@ -428,6 +436,13 @@ const TYPE_LOGO_FALLBACK: Record<string, string> = {
 };
 
 function TileLogo({ tile }: { tile: Tile }) {
+  // An explicit `logo` in the config wins; the keyword/type rules are the fallback
+  if (tile.logo) {
+    const src = tile.logo.startsWith("/")
+      ? tile.logo
+      : `/img/integrations/${tile.logo}`;
+    return <img className={styles.tileLogo} src={src} alt="" loading="lazy" />;
+  }
   const haystack = `${tile.path} ${tile.label}`.toLowerCase();
   const rule = LOGO_RULES.find((candidate) => candidate.match.test(haystack));
   const img = rule?.img ?? TYPE_LOGO_FALLBACK[tile.type];
@@ -464,47 +479,51 @@ const STATUS_CELL: Record<TileStatus, string> = {
 };
 
 function TileCard({ tile }: { tile: Tile }) {
-  const tooltip = [
-    tile.description,
-    `Example: ${tile.path}`,
-    tile.status === "nodata"
-      ? "No published runs yet"
-      : `Status: ${tile.status}${tile.stale ? " (stale)" : ""}`,
-    tile.completedAt
-      ? `Last run: ${new Date(tile.completedAt).toLocaleString()}`
-      : null,
-    "Click to open the GitHub Actions run",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
   return (
     <a
       className={styles.tile}
       href={tile.href}
       target="_blank"
       rel="noopener noreferrer"
-      title={tooltip}
+      aria-label={`${tile.label}: ${tile.status === "nodata" ? "no runs yet" : tile.status}`}
     >
-      <div className={styles.tileHeader}>
-        <span className={`${styles.dot} ${STATUS_DOT[tile.status]}`} />
-        <TileLogo tile={tile} />
-        <span className={styles.tileLabel}>{tile.label}</span>
-        {tile.stale && <span className={styles.staleBadge}>stale</span>}
-        <span className={styles.externalHint} aria-hidden="true">
-          ↗
-        </span>
+      <span
+        className={`${styles.dot} ${styles.tileStatusDot} ${STATUS_DOT[tile.status]}`}
+      />
+      <div className={styles.tileTop}>
+        <div className={styles.logoBox}>
+          <TileLogo tile={tile} />
+        </div>
+        <div className={styles.tileText}>
+          <div className={styles.tileLabelRow}>
+            <span className={styles.tileLabel}>{tile.label}</span>
+            {tile.stale && <span className={styles.staleBadge}>stale</span>}
+          </div>
+          <div className={styles.tileMeta}>
+            {tile.status === "nodata" ? (
+              <span>no runs yet</span>
+            ) : tile.status === "fail" && tile.failingSince ? (
+              <span className={styles.failingSince}>
+                failing since {new Date(tile.failingSince).toLocaleDateString()}
+              </span>
+            ) : (
+              <span>
+                updated {tile.completedAt ? relativeTime(tile.completedAt) : "n/a"}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
-      <div className={styles.tileMeta}>
-        {tile.status === "nodata" ? (
-          <span>no runs yet</span>
-        ) : tile.status === "fail" && tile.failingSince ? (
-          <span className={styles.failingSince}>
-            failing since {new Date(tile.failingSince).toLocaleDateString()}
-          </span>
-        ) : (
-          <span>updated {tile.completedAt ? relativeTime(tile.completedAt) : "n/a"}</span>
+      <div className={styles.tileTooltip}>
+        {tile.description && (
+          <span className={styles.tooltipDescription}>{tile.description}</span>
         )}
+        <span className={styles.tooltipPath}>{tile.path}</span>
+        <span className={styles.tooltipHint}>
+          {tile.status === "nodata"
+            ? "No published runs yet · open the workflow ↗"
+            : "Open the GitHub Actions run ↗"}
+        </span>
       </div>
       <div className={styles.historyStrip}>
         {Array.from({ length: HISTORY_STRIP_LENGTH }).map((_, index) => {

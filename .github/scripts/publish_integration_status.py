@@ -75,6 +75,7 @@ SYNTHETIC_TILES = {
         'category': 'Core & Frameworks',
         'label': 'ak-py unit tests',
         'description': 'ak-py library unit test suite',
+        'logo': None,
     },
     'script-tests': {
         'path': 'scripts',
@@ -82,6 +83,7 @@ SYNTHETIC_TILES = {
         'category': 'Core & Frameworks',
         'label': 'Utility script tests',
         'description': 'Repository maintenance script tests',
+        'logo': None,
     },
 }
 
@@ -129,6 +131,7 @@ def resolve_tiles(workflow_key: str, path: str | None, synthetic: str | None,
             'category': entry['category'],
             'label': entry['label'],
             'description': entry['description'],
+            'logo': entry['logo'],
         }
         for entry in resolve_dashboard_entries(test)
     ]

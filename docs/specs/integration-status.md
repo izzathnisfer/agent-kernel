@@ -115,6 +115,8 @@ Rules:
 - **`dashboard`** — a single mapping, a list of mappings, or the literal `hidden`. Each mapping produces one tile; all tiles from the same test share the same underlying status and link to the same job.
 - **`category`** (string) — the section the tile renders under. Free-form; new categories appear on the page automatically.
 - **`label`** (string) — tile display name. Must be unique within its category (validator-enforced). The pair `(category, label)` is the tile's **identity key** — history events are matched on it, so renaming either starts a fresh history for that tile.
+- **`logo`** (string, optional) — tile logo: a file name under `docs/static/img/integrations/` (e.g. `redis.svg`) or a site-absolute path starting with `/`. When omitted, the status page falls back to keyword matching on the test's path/label and then to a cloud mark by test type; the validator warns when a referenced logo file doesn't exist.
+- **`description`** (string, optional) — shown in the tile's hover tooltip along with the example path.
 - **Defaults when `dashboard` is omitted** — the entry still appears as a single tile: `label` derived from the path (last two segments), `category` derived from `type` via a small default map. The same defaults are implemented in `dashboard_config.py` (used by the validator and publisher) and mirrored in `status.tsx` (used for the catalog).
 - **`dashboard: hidden`** — opt-out for entries that shouldn't be public-facing.
 - The `deployment_base` entry (`examples/aws-serverless/openai`) also gets a `dashboard` block so the base AWS serverless deployment shows up.

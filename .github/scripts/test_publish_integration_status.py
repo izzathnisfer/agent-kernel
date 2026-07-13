@@ -43,6 +43,7 @@ class TestDashboardConfig(unittest.TestCase):
             'category': 'Core & Examples',
             'label': 'multimodal / redis',
             'description': None,
+            'logo': None,
         }])
 
     def test_hidden(self):
@@ -73,8 +74,20 @@ class TestDashboardConfig(unittest.TestCase):
         self.assertEqual(validate_dashboard_block({'path': 'p', 'dashboard': 'hidden'}), [])
         self.assertEqual(validate_dashboard_block({
             'path': 'p',
-            'dashboard': {'category': 'A', 'label': 'x', 'description': 'd'},
+            'dashboard': {'category': 'A', 'label': 'x', 'description': 'd', 'logo': 'x.svg'},
         }), [])
+
+    def test_validate_rejects_bad_logo(self):
+        self.assertTrue(validate_dashboard_block({
+            'path': 'p', 'dashboard': {'category': 'A', 'label': 'x', 'logo': ''},
+        }))
+
+    def test_logo_passes_through(self):
+        entries = resolve_dashboard_entries({
+            'type': 'api', 'path': 'p',
+            'dashboard': {'category': 'A', 'label': 'x', 'logo': 'custom.svg'},
+        })
+        self.assertEqual(entries[0]['logo'], 'custom.svg')
 
 
 class TestResolveTiles(unittest.TestCase):

@@ -99,6 +99,12 @@ def validate_tests(tests: list, tier: str, seen_tiles: dict) -> bool:
 
         if not dashboard_errors:
             for entry in resolve_dashboard_entries(test):
+                logo = entry.get('logo')
+                if logo and not logo.startswith('/'):
+                    logo_path = Path('docs/static/img/integrations') / logo
+                    if not logo_path.exists():
+                        print(f"  ⚠️  Test {idx} logo not found: {logo_path}")
+
                 tile_key = (entry['category'], entry['label'])
                 if tile_key in seen_tiles:
                     print(
