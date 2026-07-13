@@ -245,6 +245,33 @@ Notes:
 - The `status-data` branch is bootstrapped once as an orphan branch containing a README, `status/`, and `history/` directories. The publish step carries existing files forward, overwrites the status file, appends to the history file, and force-pushes with `--force-with-lease` inside the concurrency group, so the branch stays at a handful of commits while file contents persist.
 - If a workflow is cancelled before `publish-status` runs, the previous JSON simply remains — the dashboard shows the older timestamp, which is correct behavior.
 
+## Failures and re-runs
+
+Publishing is deliberately a separate final job rather than a step inside each
+matrix job, and it still reflects individual test failures and re-runs
+correctly:
+
+- **Tests failing does not stop publishing.** `publish-status` runs with
+  `if: always()`, so it executes and publishes the red tiles even when every
+  test job failed (that is the whole point of the dashboard).
+- **Re-running a failed test republishes the corrected status.** GitHub re-runs
+  a job's dependent jobs along with it, for both "Re-run failed jobs" and
+  single-job re-runs. `publish-status` depends on the test jobs, so it re-runs
+  after the re-run tests finish, and the publisher queries the jobs API with
+  `filter=latest`, which returns each job's most recent attempt. A test that
+  failed and was re-run green therefore publishes as `pass`. Since the run_id
+  is unchanged, the history roll-over is skipped (idempotency) and the snapshot
+  is replaced in place — history records one line per run, not per attempt.
+- **Why not publish from inside each matrix job?** Two concrete costs.
+  Permissions are static per job, so every matrix job would need
+  `contents: write` on GITHUB_TOKEN — handing a push-capable token to jobs that
+  execute example code and third-party dependencies, instead of confining it to
+  the one job that only runs our publisher script. And N matrix jobs pushing to
+  the same branch concurrently would need fetch-patch-retry loops (job-level
+  `concurrency` groups would serialize whole test jobs, not just the publish
+  step). The dependent-job re-run semantics above deliver the same outcome
+  without either cost.
+
 ## Edge cases and failure modes
 
 - **Fork PRs / feature branches** — publisher never runs; dashboard only ever reflects `develop`.

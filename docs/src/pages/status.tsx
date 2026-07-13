@@ -174,7 +174,7 @@ function mockDocs(): StatusDoc[] {
     type: "api",
     category,
     label,
-    description: "Mock data — the status-data branch is not reachable",
+    description: "Mock data shown because the status-data branch is not reachable",
     status,
     job_url: null,
   });
@@ -242,6 +242,7 @@ function TileCard({ tile }: { tile: Tile }) {
     `Example: ${tile.path}`,
     `Status: ${tile.status}${tile.stale ? " (stale)" : ""}`,
     `Last run: ${new Date(tile.completedAt).toLocaleString()}`,
+    "Click to open the GitHub Actions run",
   ]
     .filter(Boolean)
     .join("\n");
@@ -258,6 +259,9 @@ function TileCard({ tile }: { tile: Tile }) {
         <span className={`${styles.dot} ${STATUS_DOT[tile.status]}`} />
         <span className={styles.tileLabel}>{tile.label}</span>
         {tile.stale && <span className={styles.staleBadge}>stale</span>}
+        <span className={styles.externalHint} aria-hidden="true">
+          ↗
+        </span>
       </div>
       <div className={styles.tileMeta}>
         {tile.status === "fail" && tile.failingSince ? (
@@ -280,7 +284,7 @@ function TileCard({ tile }: { tile: Tile }) {
               }`}
               title={
                 cell
-                  ? `${cell.status} — ${new Date(cell.completedAt).toLocaleString()}`
+                  ? `${cell.status} · ${new Date(cell.completedAt).toLocaleString()}`
                   : "no data"
               }
             />
@@ -364,12 +368,17 @@ export default function StatusPage() {
     const extra = [...grouped.keys()]
       .filter((category) => !CATEGORY_ORDER.includes(category))
       .sort();
-    return [...known, ...extra].map((category) => ({
-      category,
-      tiles: (grouped.get(category) ?? []).sort((a, b) =>
+    return [...known, ...extra].map((category) => {
+      const categoryTiles = (grouped.get(category) ?? []).sort((a, b) =>
         a.label.localeCompare(b.label)
-      ),
-    }));
+      );
+      return {
+        category,
+        tiles: categoryTiles,
+        passing: categoryTiles.filter((tile) => tile.status === "pass").length,
+        failing: categoryTiles.filter((tile) => tile.status === "fail").length,
+      };
+    });
   }, [tiles]);
 
   const summary = useMemo(() => {
@@ -385,15 +394,20 @@ export default function StatusPage() {
       title="Integration Status"
       description="Live health of Agent Kernel's framework, cloud, memory, and messaging integrations, based on the latest test runs on the develop branch."
     >
-      <main className={styles.page}>
-        <div className={styles.header}>
-          <h1>Integration Status</h1>
-          <p className={styles.subtitle}>
-            Live health of every integration Agent Kernel supports — agent
+      <main className={styles.statusPage}>
+        <header className={styles.hero}>
+          <div className={styles.heroOrb} />
+          <div className={styles.badge}>
+            <span className={styles.badgeStar}>✦</span>
+            Live Test Results
+          </div>
+          <h1 className={styles.heroTitle}>Integration Status</h1>
+          <p className={styles.heroSubtitle}>
+            Live health of every integration Agent Kernel supports: agent
             frameworks, cloud deployment variants, memory and knowledge
-            backends, and messaging platforms — based on the latest test
-            pipeline runs on the <code>develop</code> branch. Every tile links
-            to the GitHub Actions run that produced it.
+            backends, and messaging platforms. Statuses come from the latest
+            test pipeline runs on the <code>develop</code> branch, and every
+            tile links to the GitHub Actions run that produced it.
           </p>
 
           {docs && (
@@ -420,95 +434,120 @@ export default function StatusPage() {
                   </span>
                 )}
               </div>
-              <ul className={styles.sources}>
+              <div className={styles.sourcesRow}>
                 {docs.map((doc) => (
-                  <li key={doc.workflow}>
-                    {SOURCE_TITLES[doc.workflow] ?? doc.workflow_name}: last run{" "}
-                    <a href={doc.run_url} target="_blank" rel="noopener noreferrer">
-                      {relativeTime(doc.completed_at)}
-                    </a>{" "}
-                    (commit <code>{doc.commit}</code>)
-                    {isStale(doc) && (
-                      <span className={styles.staleSource}> — stale</span>
-                    )}
-                  </li>
+                  <a
+                    key={doc.workflow}
+                    className={styles.sourceCard}
+                    href={doc.run_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open the GitHub Actions run"
+                  >
+                    <span className={styles.sourceTitle}>
+                      {SOURCE_TITLES[doc.workflow] ?? doc.workflow_name}
+                      <span className={styles.sourceArrow} aria-hidden="true">
+                        →
+                      </span>
+                    </span>
+                    <span className={styles.sourceMeta}>
+                      last run {relativeTime(doc.completed_at)} · commit{" "}
+                      <code>{doc.commit}</code>
+                      {isStale(doc) && (
+                        <span className={styles.staleSource}> · stale</span>
+                      )}
+                    </span>
+                  </a>
                 ))}
-              </ul>
+              </div>
             </>
           )}
-        </div>
+        </header>
 
-        {failed && (
-          <div className={styles.notice}>
-            Status data is not available right now. It is published by the test
-            workflows on the develop branch — see the{" "}
-            <a
-              href="https://github.com/yaalalabs/agent-kernel/actions"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              GitHub Actions runs
-            </a>{" "}
-            directly.
-          </div>
-        )}
-
-        {!docs && !failed && (
-          <div className={styles.grid}>
-            {Array.from({ length: 12 }).map((_, index) => (
-              <div key={index} className={styles.skeleton} />
-            ))}
-          </div>
-        )}
-
-        {categories.map(({ category, tiles: categoryTiles }) => (
-          <section key={category} className={styles.section}>
-            <h2>{category}</h2>
-            <div className={styles.grid}>
-              {categoryTiles.map((tile) => (
-                <TileCard
-                  key={tileKey(tile.category, tile.label)}
-                  tile={tile}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
-
-        {docs && (
-          <>
-            <div className={styles.legend}>
-              <span className={styles.legendItem}>
-                <span className={`${styles.dot} ${styles.dotPass}`} /> passing
-              </span>
-              <span className={styles.legendItem}>
-                <span className={`${styles.dot} ${styles.dotFail}`} /> failing
-              </span>
-              <span className={styles.legendItem}>
-                <span className={`${styles.dot} ${styles.dotSkipped}`} />{" "}
-                skipped / no data
-              </span>
-              <span className={styles.legendItem}>
-                <span className={styles.staleBadge}>stale</span> last run older
-                than its expected cadence
-              </span>
-            </div>
-            <p className={styles.footerNote}>
-              Each tile's strip shows its most recent runs, oldest to newest.
-              Statuses come from the Test, Nightly Integration Tests, and
-              Weekly Integration Tests workflows; tests are categorized via the
-              config files in{" "}
+        <div className={styles.content}>
+          {failed && (
+            <div className={styles.notice}>
+              Status data is not available right now. It is published by the
+              test workflows on the develop branch. You can check the{" "}
               <a
-                href="https://github.com/yaalalabs/agent-kernel/tree/develop/.github"
+                href="https://github.com/yaalalabs/agent-kernel/actions"
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                .github/
-              </a>
-              .
-            </p>
-          </>
-        )}
+                GitHub Actions runs
+              </a>{" "}
+              directly.
+            </div>
+          )}
+
+          {!docs && !failed && (
+            <div className={styles.grid} style={{ marginTop: "3rem" }}>
+              {Array.from({ length: 12 }).map((_, index) => (
+                <div key={index} className={styles.skeleton} />
+              ))}
+            </div>
+          )}
+
+          {categories.map(({ category, tiles: categoryTiles, passing, failing }) => (
+            <section key={category} className={styles.section}>
+              <div className={styles.sectionGlow} />
+              <h2 className={styles.sectionTitle}>{category}</h2>
+              <span className={styles.sectionCounts}>
+                {passing} passing
+                {failing > 0 && (
+                  <span className={styles.sectionCountFail}>
+                    {" "}
+                    · {failing} failing
+                  </span>
+                )}
+              </span>
+              <div className={styles.grid}>
+                {categoryTiles.map((tile) => (
+                  <TileCard
+                    key={tileKey(tile.category, tile.label)}
+                    tile={tile}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+
+          {docs && (
+            <>
+              <div className={styles.legend}>
+                <div className={styles.sectionGlow} />
+                <span className={styles.legendItem}>
+                  <span className={`${styles.dot} ${styles.dotPass}`} /> passing
+                </span>
+                <span className={styles.legendItem}>
+                  <span className={`${styles.dot} ${styles.dotFail}`} /> failing
+                </span>
+                <span className={styles.legendItem}>
+                  <span className={`${styles.dot} ${styles.dotSkipped}`} />{" "}
+                  skipped / no data
+                </span>
+                <span className={styles.legendItem}>
+                  <span className={styles.staleBadge}>stale</span> last run is
+                  older than its expected cadence
+                </span>
+              </div>
+              <p className={styles.footerNote}>
+                Each tile's strip shows its most recent runs, oldest to newest.
+                Statuses come from the Test, Nightly Integration Tests, and
+                Weekly Integration Tests workflows. Tests are categorized via
+                the config files in{" "}
+                <a
+                  href="https://github.com/yaalalabs/agent-kernel/tree/develop/.github"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  .github/
+                </a>
+                .
+              </p>
+            </>
+          )}
+        </div>
       </main>
     </Layout>
   );

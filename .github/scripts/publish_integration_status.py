@@ -104,13 +104,18 @@ def load_tests(workflow_key: str, repo_root: Path) -> tuple[list, list]:
 
 
 def fetch_run_jobs(repo: str, run_id: str, token: str) -> list:
-    """Fetch all jobs of a workflow run (paginated)."""
+    """Fetch all jobs of a workflow run (paginated).
+
+    filter=latest returns each job's most recent attempt, so when a failed
+    matrix job is re-run (which also re-runs this publisher, as a dependent
+    job) the corrected conclusion is published.
+    """
     jobs = []
     page = 1
     while True:
         url = (
             f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
-            f"?per_page=100&page={page}"
+            f"?filter=latest&per_page=100&page={page}"
         )
         request = urllib.request.Request(url, headers={
             'Authorization': f'Bearer {token}',
