@@ -86,10 +86,8 @@ class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):
                 opened = await client.conversations_open(users=target)
                 channel = opened["channel"]["id"]
             response = await client.chat_postMessage(channel=channel, text=message)
-            # A DM reply can be top-level (its own ts) or threaded (the bot message's
-            # ts), so DMs bind the DM channel id — the Slack handler falls back to it
-            # when the thread lookup misses. Channel replies arrive threaded under the
-            # posted message's ts, so channels bind that ts.
+            # DM replies arrive as top-level messages keyed by the DM channel id;
+            # channel replies arrive threaded under the posted message's ts.
             return channel if channel != target else response["ts"]
 
         return asyncio.run(_send())

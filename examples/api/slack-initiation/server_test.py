@@ -122,7 +122,7 @@ def test_send_initiation_message_member_id_opens_dm(initiation_handler):
     thread_id = handler.send_initiation_message("U123", "Your laptop is ready")
     assert fake.opened == ["U123"]
     assert fake.posted == [("D999", "Your laptop is ready")]
-    assert thread_id == "D999"  # DMs bind the channel id; the Slack handler's DM fallback resolves replies to it
+    assert thread_id == "D999"  # DM replies arrive keyed by the DM channel id
 
 
 def test_send_initiation_message_channel_returns_thread_root(initiation_handler):
