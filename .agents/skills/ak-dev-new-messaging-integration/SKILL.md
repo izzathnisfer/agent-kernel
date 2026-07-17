@@ -112,8 +112,12 @@ class Agent<Platform>RequestHandler(RESTRequestHandler):
             return
 
         # 3. Create service, select agent, run
+        # Resolve the platform-derived conversation id through the Session ID Mapping
+        # (agent-initiated conversations, AK-134): a thread an agent proactively started
+        # resolves to its initiated session; otherwise the id passes through unchanged.
+        # RESTRequestHandler provides resolve_session_id() via the SessionIdResolver mixin.
         service = AgentService()
-        service.select(session_id=user_id, name=self._agent_name)
+        service.select(session_id=self.resolve_session_id(user_id), name=self._agent_name)
 
         reply = await service.run_multi(requests)
 
@@ -242,6 +246,27 @@ def _split_reply(self, text: str, max_length: int = 4000) -> list[str]:
     return chunks
 ```
 
+### 8b. Agent-Initiated Conversations (optional)
+
+To let agents proactively open conversations on the platform (single-process REST deployments),
+also implement `InitiationSender` on the handler — `RESTAPI.run()` detects it and registers the
+in-process dispatcher, which sends and then binds the `session_id ↔ messaging_integration_thread_id`
+mapping automatically:
+
+```python
+from agentkernel.core.initiation import InitiationSender
+
+
+class AgentNewPlatformRequestHandler(RESTRequestHandler, InitiationSender):
+    def send_initiation_message(self, target: str, message: str, target_details: dict | None = None) -> str:
+        response = ...  # platform send API call to `target`
+        return response["thread_id"]  # whatever id the platform derives for replies
+```
+
+The returned id MUST equal the id your inbound webhook derives from a reply (before resolution) —
+that round-trip identity is what makes replies continue the initiated session. See
+`docs/docs/advanced/conversation-initiation.md` and `examples/api/slack-initiation/`.
+
 ### 9. Usage Pattern
 
 Users will use the integration like this:
@@ -292,6 +317,7 @@ Add `docs/docs/integrations/<platform>.md` covering:
 - [ ] Configuration class in `config.py`
 - [ ] Optional dependency group in `pyproject.toml`
 - [ ] Webhook verification
+- [ ] Session id derivation wrapped in `self.resolve_session_id(...)` (agent-initiated conversations)
 - [ ] Message chunking for long replies
 - [ ] Example in `examples/api/<platform>/`
 - [ ] Tests in `ak-py/tests/`

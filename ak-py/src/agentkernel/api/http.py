@@ -79,6 +79,33 @@ class RESTAPI:
         cls._custom_routers.append(router)
 
     @classmethod
+    def _register_initiation_sender(cls, handlers: list[RESTRequestHandler]) -> None:
+        """Register the in-process initiation dispatcher for single-process REST
+        deployments: the first handler implementing InitiationSender becomes the
+        send point for agent-initiated conversations (send, then bind the mapping
+        and initialize the AK thread via InitiationManager.complete()).
+        :param handlers: The handlers passed to run()
+        """
+        from ..core.initiation import InitiationManager, InitiationSender
+
+        senders = [handler for handler in handlers if isinstance(handler, InitiationSender)]
+        if not senders:
+            return
+        if len(senders) > 1:
+            ignored = ", ".join(type(sender).__name__ for sender in senders[1:])
+            cls._log.warning(f"Multiple InitiationSender handlers found; using {type(senders[0]).__name__} and ignoring: {ignored}")
+        sender = senders[0]
+
+        def _local_dispatch(initiation) -> None:
+            messaging_integration_thread_id = sender.send_initiation_message(initiation.target, initiation.message, initiation.target_details)
+            manager = InitiationManager.get()
+            if manager is not None:
+                manager.complete(initiation, messaging_integration_thread_id)
+
+        cls._log.info(f"Registering in-process initiation dispatcher bound to {type(sender).__name__}")
+        InitiationManager.register_dispatcher(_local_dispatch)
+
+    @classmethod
     def run(cls, handlers: list[RESTRequestHandler] = None):
         """Start the REST API server.
         :param handlers: List of REST request handlers to use (default: AgentRESTRequestHandler)
@@ -88,6 +115,8 @@ class RESTAPI:
         host = AKConfig.get().api.host
         port = AKConfig.get().api.port
         cls._log.info(f"Agent Kernel REST API listening on http://{host}:{port}")
+
+        cls._register_initiation_sender([handler for handler in handlers if handler is not None])
 
         routers = []
         for handler in handlers:

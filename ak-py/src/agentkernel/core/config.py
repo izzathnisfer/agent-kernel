@@ -175,12 +175,13 @@ class _GmailConfig(BaseModel):
     label_filter: str = Field(default="INBOX", description="Gmail label to monitor (e.g., INBOX, UNREAD)")
 
 
-class _MultimodalStorageRedisConfig(_RedisConfig):
+class _MultimodalStorageRedisConfig(BaseModel):
+    url: str = Field(default="redis://localhost:6379", description="Redis connection URL")
     ttl: int = Field(default=604800, description="Attachment TTL in seconds")
     prefix: str = Field(default="ak:attachments:", description="Key prefix for attachment keys")
 
 
-class _MultimodalStorageDynamoDBConfig(_DynamoDBConfig):
+class _MultimodalStorageDynamoDBConfig(BaseModel):
     table_name: str = Field(default="ak-attachments", description="DynamoDB table name for attachment storage")
     ttl: int = Field(default=604800, description="Attachment TTL in seconds (0 disables)")
 
@@ -211,12 +212,13 @@ class _MultimodalConfig(BaseModel):
     dynamodb: Optional[_MultimodalStorageDynamoDBConfig] = None
 
 
-class _ThreadRedisConfig(_RedisConfig):
+class _ThreadRedisConfig(BaseModel):
+    url: str = Field(default="redis://localhost:6379", description="Redis connection URL. Use rediss:// for SSL")
     ttl: int = Field(default=2592000, description="Thread TTL in seconds (0 disables)")
     prefix: str = Field(default="ak:thread:", description="Key prefix for Redis thread storage")
 
 
-class _ThreadDynamoDBConfig(_DynamoDBConfig):
+class _ThreadDynamoDBConfig(BaseModel):
     table_name: str = Field(
         default="ak-agent-threads",
         description="DynamoDB table name for thread storage. Table should have a partition key named 'session_id' (S) and a sort key named 'sk' (S)",
@@ -224,11 +226,13 @@ class _ThreadDynamoDBConfig(_DynamoDBConfig):
     ttl: int = Field(default=0, description="DynamoDB item TTL in seconds (0 disables)")
 
 
-class _ThreadFirestoreConfig(_FirestoreConfig):
+class _ThreadFirestoreConfig(BaseModel):
     collection_name: str = Field(
         default="ak-agent-threads",
         description="Firestore collection name for thread storage. Each document ID is a session_id.",
     )
+    project_id: Optional[str] = Field(default=None, description="GCP project ID. If null, inferred from Application Default Credentials.")
+    database_id: Optional[str] = Field(default=None, description="Firestore database ID. If null, defaults to '(default)' database.")
     ttl: int = Field(default=0, description="Thread TTL in seconds (0 disables)")
 
 
@@ -251,6 +255,20 @@ class _ThreadStoreConfig(BaseModel):
     dynamodb: Optional[_ThreadDynamoDBConfig] = None
     firestore: Optional[_ThreadFirestoreConfig] = None
     cosmosdb: Optional[_ThreadCosmosDBConfig] = None
+
+
+class _MappingTableConfig(BaseModel):
+    """Configuration for the Session ID Mapping table used by agent-initiated conversations.
+    Presence of this block enables the feature. The store backend follows session.type;
+    connection settings are read from the corresponding session.<backend> block."""
+
+    table_name: str = Field(
+        default="ak-session-id-mapping",
+        description="Table name for the mapping store (DynamoDB / Cosmos DB). Table should have a partition key named 'map_key' (S)",
+    )
+    collection_name: str = Field(default="ak-session-id-mapping", description="Firestore collection name for the mapping store")
+    prefix: str = Field(default="ak:session-map:", description="Key prefix for the mapping store (Redis / Valkey)")
+    ttl: int = Field(default=0, description="Mapping TTL in seconds (0 disables; not supported on Cosmos DB)")
 
 
 class _TraceConfig(BaseModel):
@@ -393,6 +411,10 @@ class AKConfig(YamlBaseSettingsModified):
     thread: Optional[_ThreadStoreConfig] = Field(
         default=None,
         description="Conversation Thread Support configurations. Feature is enabled only when this block is present.",
+    )
+    mapping_table: Optional[_MappingTableConfig] = Field(
+        default=None,
+        description="Session ID Mapping table for agent-initiated conversations. Feature is enabled only when this block is present.",
     )
 
     trace: _TraceConfig = Field(description="Tracing related configurations", default_factory=_TraceConfig)

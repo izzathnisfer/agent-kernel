@@ -39,6 +39,7 @@ Which capability would you like to add?
 7. **Hooks** — Custom pre/post processing (RAG, logging, prompt modification)
 8. **Multimodal** — Image and file attachment support
 9. **Conversation Threads** — Persistent, named conversation history keyed by `session_id`
+10. **Agent-Initiated Conversations** — Agents proactively message users on a messaging platform; replies continue the same session
 
 ### Step 3: Generate Changes
 
@@ -778,6 +779,38 @@ curl -X POST http://localhost:8000/api/v1/chat \
 ```
 
 See `examples/api/thread-openai` and `examples/api/multimodal/thread-openai`.
+
+---
+
+#### Agent-Initiated Conversations
+
+**Ask:** Which deployment shape — single-process REST (integration handler in the same process) or queue-based (AWS Lambda / ECS)?
+
+1. Update `config.yaml` — presence of the `mapping_table:` block enables the feature; the mapping store backend follows `session.type` (connection settings are reused from `session.<backend>`):
+```yaml
+mapping_table:
+  prefix: "ak:session-map:"            # Redis / Valkey key prefix
+  table_name: ak-session-id-mapping    # DynamoDB / Cosmos DB (partition key 'map_key' (S))
+  ttl: 0                               # seconds, 0 disables (not supported on Cosmos DB)
+```
+
+2. When enabled, the `initiate_conversation(target, prompt, user_id, agent, target_details)` system tool is registered on all agents: it creates a fresh session, composes the outbound message by running the agent with `prompt` (the new session's history contains the exchange), and dispatches it for delivery. Inbound platform messages resolve their conversation id through the Session ID Mapping automatically.
+
+3. Wire the send point:
+   - **Single-process REST**: implement `InitiationSender` on your handler — `RESTAPI.run()` registers the in-process dispatcher (send, then the mapping is bound automatically):
+     ```python
+     from agentkernel.core.initiation import InitiationSender
+
+     class MySlackHandler(AgentSlackRequestHandler, InitiationSender):
+         def send_initiation_message(self, target, message, target_details=None) -> str:
+             response = ...  # platform send call
+             return response["ts"]  # the platform's reply-thread id
+     ```
+   - **Queue deployments**: initiation messages arrive on the Output Queue marked `message_type=INITIATION`; your response-handler `process_message` override parses the `InitiationMessage`, sends it, then MUST call `InitiationManager.get().complete(initiation, thread_id)`. When delivering ordinary replies, check `InitiationManager.get().get_messaging_integration_thread_id(session_id)` to thread them correctly.
+
+With Conversation Threads also enabled, each initiated conversation gets a thread owned by the recipient (`user_id`, defaults to `target`), seeded with the outbound message.
+
+See `examples/api/slack-initiation` and `docs/docs/advanced/conversation-initiation.md`.
 
 ---
 

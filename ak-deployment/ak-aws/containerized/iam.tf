@@ -79,3 +79,42 @@ resource "aws_iam_role_policy_attachment" "rest_service_response_store_attachmen
   role       = module.rest_service.task_role_name
   policy_arn = aws_iam_policy.rest_service_response_store_policy[0].arn
 }
+
+# ---------- Session ID Mapping IAM (agent-initiated conversations) ----------
+# Attached to the REST/IO service only: the request-handler resolve and the
+# response-handler bind both run there. The Agent Runner never touches the
+# mapping table (it is messaging-platform blind), so it gets no grant.
+
+resource "aws_iam_policy" "rest_service_session_id_mapping_policy" {
+  count = var.conversation_initiation ? 1 : 0
+
+  name        = "${local.prefix}-rest-svc-session-id-mapping"
+  description = "Allow REST Service ECS task to read/write the Session ID Mapping table"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeTable",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan"
+        ]
+        Resource = [
+          aws_dynamodb_table.session_id_mapping[0].arn
+        ]
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "rest_service_session_id_mapping_attachment" {
+  count      = var.conversation_initiation ? 1 : 0
+  role       = module.rest_service.task_role_name
+  policy_arn = aws_iam_policy.rest_service_session_id_mapping_policy[0].arn
+}

@@ -176,6 +176,11 @@ class SystemToolFactory:
 
             tools.append(AnalyzeAttachmentsTool())
 
+        if getattr(AKConfig.get(), "mapping_table", None) is not None:
+            from .initiation import InitiateConversationTool
+
+            tools.append(InitiateConversationTool())
+
         return tools
 
     @staticmethod

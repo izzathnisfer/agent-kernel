@@ -25,6 +25,9 @@ def test_config_defaults_no_file(monkeypatch):
     # Defaults for nested redis should be None
     assert cfg.session.redis is None
 
+    # Session ID Mapping (agent-initiated conversations) is disabled by default
+    assert cfg.mapping_table is None
+
 
 @pytest.mark.usefixtures("tmp_path")
 def test_config_yaml_and_env_override(tmp_path, monkeypatch):

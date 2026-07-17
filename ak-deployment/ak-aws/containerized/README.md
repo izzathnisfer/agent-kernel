@@ -330,6 +330,21 @@ curl -X GET .../chat/{session_id}?request_id=...
 # Returns: {"result":"..."}
 ```
 
+### Agent-Initiated Conversations
+
+Enable the Session ID Mapping table so agents can proactively open conversations on messaging
+platforms and have replies continue the same session (see
+`docs/docs/advanced/conversation-initiation.md`):
+
+```hcl
+conversation_initiation = true
+```
+
+Creates a `-session-id-mapping` DynamoDB table (partition key `map_key` (S), TTL attribute
+`expiry_time`) with read/write IAM grants for the REST/IO service task role only — the Agent
+Runner is messaging-platform blind and never touches the table. Configure the application side
+with a `mapping_table:` block in `config.yaml` (the store backend follows `session.type`).
+
 ## Auto Scaling
 
 ### How It Works
@@ -450,6 +465,7 @@ output "rest_service_name"          # ECS REST service name
 output "agent_runner_service_name"  # ECS agent runner service name (queue mode)
 output "input_queue_url"            # Input queue URL (queue mode)
 output "output_queue_url"           # Output queue URL (queue mode)
+output "session_id_mapping_table_name" # Session ID Mapping table name (conversation_initiation)
 output "vpc_id"                     # VPC ID
 output "private_subnet_ids"         # Private subnet IDs
 ```

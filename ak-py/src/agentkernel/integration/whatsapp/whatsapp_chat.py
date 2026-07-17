@@ -273,8 +273,9 @@ class AgentWhatsAppRequestHandler(RESTRequestHandler):
         # Add text as the first request
         requests.insert(0, AgentRequestText(text=text))
 
-        # Use from_number as session_id to maintain conversation context
-        session_id = from_number
+        # Use from_number as session_id to maintain conversation context; a number an
+        # agent already initiated a conversation with resolves to that session (overridable).
+        session_id = self.resolve_session_id(from_number)
 
         service = AgentService()
         try:

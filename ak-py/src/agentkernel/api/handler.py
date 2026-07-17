@@ -8,11 +8,12 @@ from pydantic import ConfigDict
 
 from ..core import Config
 from ..core.chat_service import ChatService
+from ..core.initiation import SessionIdResolver
 from ..core.model import BaseChatRequest, BaseRunRequest, ExecutionMode
 from ..core.runtime import Runtime
 
 
-class RESTRequestHandler(ABC):
+class RESTRequestHandler(SessionIdResolver, ABC):
     @abstractmethod
     def get_router(self) -> APIRouter:
         """

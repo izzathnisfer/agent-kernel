@@ -18,9 +18,10 @@ from ...core import (
     AgentService,
     Config,
 )
+from ...core.initiation import SessionIdResolver
 
 
-class AgentGmailRequestHandler:
+class AgentGmailRequestHandler(SessionIdResolver):
     """
     Gmail integration handler for Agent Kernel.
 
@@ -261,8 +262,9 @@ class AgentGmailRequestHandler:
             if attachments:
                 self._log.info(f"[EMAIL] Found {len(attachments)} attachment(s)")
 
-            # Use thread_id as session_id for agent context (threaded conversations)
-            session_id = thread_id or sender
+            # Use thread_id as session_id for agent context (threaded conversations);
+            # a thread an agent already initiated resolves to that session (overridable).
+            session_id = self.resolve_session_id(thread_id or sender)
 
             # Fetch thread history for context (all messages in the thread, sorted by internalDate)
             thread_history = await self._get_thread_history(thread_id, message_id)
@@ -408,7 +410,7 @@ class AgentGmailRequestHandler:
             attachments = []
 
         service = AgentService()
-        session_id = session_id or sender
+        session_id = self.resolve_session_id(session_id or sender)
 
         try:
             # Format email content for agent, including thread history if available

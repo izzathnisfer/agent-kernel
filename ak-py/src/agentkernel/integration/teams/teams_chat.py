@@ -138,7 +138,10 @@ class AgentTeamsRequestHandler(RESTRequestHandler):
                 await turn_context.send_activity(f"Hi {user_name}, {self._teams_agent_acknowledgement}")
 
             # Select agent
-            service.select(session_id=conversation_id, name=self._teams_agent)
+            # Agent-initiated conversations: a conversation started by an agent resolves
+            # to its initiated session via the Session ID Mapping (overridable).
+            session_id = self.resolve_session_id(conversation_id)
+            service.select(session_id=session_id, name=self._teams_agent)
             if not service.agent:
                 await turn_context.send_activity("No agent available to handle your request.")
                 return

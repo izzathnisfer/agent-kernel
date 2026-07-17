@@ -5,6 +5,7 @@ import logging
 from typing import Any, Dict
 
 from ....core.config import AKConfig
+from ....core.initiation import INITIATION_MESSAGE_TYPE
 from ..core.response_store import ResponseDBHandler
 from ..core.sqs_handler import SQSHandler
 from .core import ECSSQSConsumer
@@ -37,6 +38,17 @@ class ECSOutputConsumer(ECSSQSConsumer):
         return cls._response_store
 
     @classmethod
+    def _is_initiation_message(cls, record: Dict[str, Any]) -> bool:
+        """
+        Check whether the record carries an agent-initiated conversation message
+        (INITIATION message-type attribute).
+
+        :param record: boto3 SQS ``receive_message`` record
+        :return: True when the record is an InitiationMessage
+        """
+        return SQSHandler.get_message_custom_attributes(record).get("message_type") == INITIATION_MESSAGE_TYPE
+
+    @classmethod
     def process_message(cls, record: Dict[str, Any]) -> None:
         """
         Process one message from the Output Queue by writing it to the
@@ -46,6 +58,13 @@ class ECSOutputConsumer(ECSSQSConsumer):
         """
         message_id = record.get("MessageId")
         cls._log.info(f"[OUTPUT START] Processing output message {message_id}")
+
+        if cls._is_initiation_message(record):
+            cls._log.warning(
+                "Initiation message received but this handler does not deliver initiation messages — "
+                "override process_message to send it and call InitiationManager.complete(); see the conversation-initiation docs"
+            )
+            return
 
         message = cls._construct_message_for_store(record)
         cls._log.info(
@@ -66,6 +85,11 @@ class ECSOutputConsumer(ECSSQSConsumer):
         """
         max_retries = cls._config.execution.queues.output.max_receive_count
         cls._log.error(f"Permanent failure for output message {record.get('MessageId')} " f"after {max_retries} retries")
+
+        if cls._is_initiation_message(record):
+            # No HTTP caller waits on an initiation — log only, no response-store error entry.
+            cls._log.error("Initiation message permanently failed — the initiation was not delivered to the user")
+            return
 
         try:
             message_attributes = SQSHandler.get_message_custom_attributes(record)

@@ -345,3 +345,9 @@ variable "scaling_config" {
     error_message = "scaling_config.enabled requires queue_mode = true."
   }
 }
+
+variable "conversation_initiation" {
+  type        = bool
+  description = "Enable agent-initiated conversations. Creates the Session ID Mapping DynamoDB table used to bind initiated sessions to messaging platform thread ids."
+  default     = false
+}

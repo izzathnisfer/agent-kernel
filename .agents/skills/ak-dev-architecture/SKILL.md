@@ -106,7 +106,7 @@ Pydantic-based configuration:
 - **Auto-initialized** at import time via `AKConfig._set()`
 - **Config sources** (priority order): environment variables (`AK_` prefix) → config file (YAML/JSON, default `config.yaml`) → defaults
 - **Override path**: Set `AK_CONFIG_PATH_OVERRIDE` env var
-- **Key sections**: `session`, `api`, `websocket_api`, `a2a`, `mcp`, `slack`, `whatsapp`, `messenger`, `instagram`, `telegram`, `gmail`, `multimodal`, `trace`, `guardrail`, `execution`, `logging`
+- **Key sections**: `session`, `api`, `websocket_api`, `a2a`, `mcp`, `slack`, `whatsapp`, `messenger`, `instagram`, `telegram`, `gmail`, `multimodal`, `thread`, `mapping_table`, `trace`, `guardrail`, `execution`, `logging`
 
 ## Request/Reply Model (`ak-py/src/agentkernel/core/model.py`)
 
@@ -231,6 +231,36 @@ thread:
 
 Attachments in thread mode additionally require `multimodal.enabled: true` with a shared attachment store (`in_memory`, `redis`, or `dynamodb` — `session_cache` is rejected, since threads need durable, cross-request-scoped attachment storage that a session-local cache can't provide).
 
+## Agent-Initiated Conversations (`ak-py/src/agentkernel/core/initiation/`)
+
+Lets an agent proactively message a user on a messaging platform such that the user's reply continues the same session. Gated by the presence of the `mapping_table:` config block (mirrors the `thread:` pattern); spec set under `docs/specs/ak-134/`.
+
+### Key Components
+
+- **`InitiationManager`** (`manager.py`): Process-wide singleton façade (`get()` → `None` when disabled, `reset()` for tests, `RLock`). API: `resolve_session_id(messaging_integration_thread_id)` (mapping hit → session id; miss **or store error** → id unchanged), `get_messaging_integration_thread_id(session_id)` (reverse lookup for reply delivery), `bind()` (save-if-absent), `complete(initiation, thread_id)` (bind + AK-thread init; **never raises** — raising after a successful platform send would redeliver the queue message and message the user twice), `register_dispatcher()`/`dispatch()`
+- **`SessionIdResolver`** (`manager.py`): Mixin providing the overridable request-handler method `resolve_session_id()`; inherited by `RESTRequestHandler` (so every integration handler and `QueueRequestHandler` gets it) and by `AgentGmailRequestHandler` directly
+- **`InitiationSender`** (`manager.py`): Single-process REST sender contract — `RESTAPI.run()` scans handlers for it and registers an in-process dispatcher (send → `complete()`)
+- **`InitiationMessage`** (`model.py`): `session_id`, agent-generated `message`, opaque `target`/`target_details`, recipient `user_id`, `request_id`; `INITIATION_MESSAGE_TYPE` is the queue message-type attribute value
+- **`InitiateConversationTool`** (`tools.py`): `SystemTool` registered on all agents when enabled. `initiate_conversation(target, prompt, user_id="", agent="", target_details=None)`: creates a fresh uuid4 session, runs the owning agent with the prompt **on a dedicated thread with its own event loop** (tool functions execute inside a running framework loop) so the reply becomes the outbound message and history lands in the new session naturally (prompt-only — no fixed-text path), then dispatches. All failures are returned as text, never raised
+- **`SessionIdMappingStore`** (`mapping/base.py`): ABC storing the `session_id ↔ messaging_integration_thread_id` association as **two records** (`thread#<id>` → session, `session#<id>` → thread id) so both directions are O(1). Backend follows `session.type` (`SessionIdMappingStoreBuilder` reuses `SessionStoreBuilder.Types`); connection settings come from `session.<backend>`, namespace settings (`table_name`/`collection_name`/`prefix`/`ttl`) from `mapping_table`. Backends reuse the shared `core/util/driver/` drivers; DynamoDB uses a hash-only table (partition key `map_key`)
+
+### Rules
+
+1. The **Agent Runner is messaging-platform blind**: `target` is opaque, and the runner never touches the mapping table (the ECS Terraform grants it no table access)
+2. **Messages reach the user only from the Response Handler role.** Queue deployments: initiation messages arrive on the Output Queue marked `message_type=INITIATION`; stock `ResponseHandler`/`ECSOutputConsumer` log a warning and drop them — the user's `process_message` override parses the `InitiationMessage`, sends via the platform API, then **must call `InitiationManager.get().complete(initiation, thread_id)`**. Single-process REST: implement `InitiationSender` on a handler
+3. Dispatchers are registered by the deployment layer (`ECSAgentRunner.run()`, the Lambda runners' `_get_chat_service()`, `RESTAPI._register_initiation_sender()`); core never imports deployment
+4. Reply-side agent selection stays request-based — no agent pin is persisted
+
+### Configuration (`_MappingTableConfig` in `config.py`)
+
+```yaml
+mapping_table:            # presence enables the feature; backend follows session.type
+  table_name: ak-session-id-mapping   # DynamoDB / Cosmos DB (partition key 'map_key' (S))
+  collection_name: ak-session-id-mapping  # Firestore
+  prefix: "ak:session-map:"           # Redis / Valkey
+  ttl: 0                              # 0 disables; not supported on Cosmos DB
+```
+
 ## Knowledge Bases (`ak-py/src/agentkernel/knowledgebase/`)
 
 Pluggable storage backends agents can read from and write to as tools:
@@ -241,8 +271,8 @@ Pluggable storage backends agents can read from and write to as tools:
 
 ## Shared Database Drivers (`ak-py/src/agentkernel/core/util/driver/`)
 
-The Session, Multimodal attachment, Response Store, and Thread backends share one set of
-connection drivers: `RedisDriver`, `ValkeyDriver` (both subclassing `_RedisLikeDriver`),
+The Session, Multimodal attachment, Response Store, Thread, and Session ID Mapping backends share
+one set of connection drivers: `RedisDriver`, `ValkeyDriver` (both subclassing `_RedisLikeDriver`),
 `DynamoDBDriver`, `CosmosDBDriver`, and `FirestoreDriver`. Three rules govern the package:
 
 1. **Drivers never read `AKConfig`** — all connection parameters are explicit constructor
@@ -277,6 +307,11 @@ ak-py/src/agentkernel/
 │   ├── logger.py            # Logging setup
 │   ├── util/                # Shared utilities
 │   │   └── driver/          # Shared DB connection drivers (Redis, Valkey, DynamoDB, Cosmos DB, Firestore)
+│   ├── initiation/          # Agent-initiated conversations (AK-134)
+│   │   ├── manager.py        # InitiationManager, InitiationSender, SessionIdResolver
+│   │   ├── model.py          # InitiationMessage, INITIATION_MESSAGE_TYPE
+│   │   ├── tools.py          # InitiateConversationTool (SystemTool)
+│   │   └── mapping/          # SessionIdMappingStore ABC + per-backend stores + builder
 │   └── session/             # Session store implementations
 │       ├── base.py           # SessionStore, SessionCache
 │       ├── serde.py          # Session (de)serialization helpers

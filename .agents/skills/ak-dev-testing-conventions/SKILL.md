@@ -74,6 +74,10 @@ Tests live in `ak-py/tests/` and follow the naming convention `test_<module>.py`
 | `test_error_util.py` | `user_facing_error_message` error mapping |
 | `test_thread_runner.py` | ThreadRunner task validation, failure/shutdown semantics |
 | `test_ecs_sqs_consumer_parallel.py` | ECSSQSConsumer message processing + delete/retry semantics |
+| `test_session_id_mapping.py` | SessionIdMappingStore backends/builder, InitiationManager (resolve/bind/complete/dispatch) |
+| `test_initiation_tool.py` | `initiate_conversation` system tool, SystemToolFactory gating, RESTAPI local dispatch |
+| `test_initiation_response_handlers.py` | Response-handler INITIATION guards, `process_message` override contract, queue dispatcher |
+| `test_queue_request_handler_resolve.py` | QueueRequestHandler session-id resolve rewrite + fallback |
 
 ## Test Patterns
 

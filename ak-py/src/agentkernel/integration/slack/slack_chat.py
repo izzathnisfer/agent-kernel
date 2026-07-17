@@ -122,7 +122,10 @@ class AgentSlackRequestHandler(RESTRequestHandler):
                     thread_ts=thread_ts,
                     text=f"Hi <@{user}>, {self._slack_agent_acknowledgement} :rolling-loader:",
                 )
-            service.select(session_id=thread_ts, name=self._slack_agent)
+            # Agent-initiated conversations: a thread started by an agent resolves to
+            # its initiated session via the Session ID Mapping (overridable).
+            session_id = self.resolve_session_id(thread_ts)
+            service.select(session_id=session_id, name=self._slack_agent)
             if not service.agent:
                 await say(channel=channel, text="No agent available to handle your request.")
                 return

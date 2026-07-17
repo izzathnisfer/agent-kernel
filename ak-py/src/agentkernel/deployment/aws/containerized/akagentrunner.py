@@ -6,6 +6,7 @@ import logging
 from ....core.chat_service import ChatService
 from ....core.config import AKConfig
 from ....core.model import BaseRunRequest
+from ..core.initiation_dispatch import register_initiation_queue_dispatcher
 from ..core.sqs_handler import SQSHandler
 from .core import ECSSQSConsumer
 
@@ -35,6 +36,15 @@ class ECSAgentRunner(ECSSQSConsumer):
     @classmethod
     def get_queue_url(cls) -> str:
         return cls._config.execution.queues.input.url
+
+    @classmethod
+    def run(cls) -> None:
+        """
+        Container entry-point: registers the Output Queue dispatcher for
+        agent-initiated conversations, then starts the inherited poll loop.
+        """
+        register_initiation_queue_dispatcher()
+        super().run()
 
     @classmethod
     def _get_chat_service(cls) -> ChatService:

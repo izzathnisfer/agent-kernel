@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Optional
 
 from ......core.chat_service import ChatService
 from ......core.config import AKConfig
+from ......core.initiation import InitiationManager
 from ......core.model import BaseRequest, ExecutionMode
 from ....core.response_store import ResponseDBHandler
 from ....core.sqs_handler import SQSHandler
@@ -137,6 +138,16 @@ class DefaultEndpointsHandler:
         session_id = request_body.session_id
         if not session_id:
             raise ValueError("session_id is required")
+
+        # Agent-initiated conversations: rewrite a mapped messaging thread id to the
+        # initiated session id. This router is not a RESTRequestHandler, so the
+        # override point here is InitiationManager.resolve_session_id itself.
+        manager = InitiationManager.get()
+        if manager is not None:
+            resolved_session_id = manager.resolve_session_id(session_id)
+            if resolved_session_id != session_id:
+                self._log.info(f"Resolved session_id {session_id} -> {resolved_session_id} via Session ID Mapping")
+                request_body.session_id = resolved_session_id
 
         response = SQSHandler.send_message_to_input_queue(
             message_body=request_body.model_dump(exclude_none=True),
