@@ -54,6 +54,8 @@ e2e:
       path: examples/api/slack
       requires_slack: true
     - type: api
+      path: examples/api/slack-initiation
+    - type: api
       path: examples/api/telegram
     - type: api
       path: examples/api/messenger

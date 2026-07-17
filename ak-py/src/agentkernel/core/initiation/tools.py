@@ -64,10 +64,11 @@ def _initiate_conversation(target: str, prompt: str, user_id: str = "", agent: s
         session_id = str(uuid.uuid4())
         session = runtime.sessions().new(session_id)
 
-        # Tool functions execute inside a running framework event loop, so the
-        # nested agent run gets its own event loop on a dedicated thread. The new
-        # session has its own lock and context, so this cannot deadlock the
-        # caller's run.
+        # Tool functions may execute inside a running framework event loop
+        # (adapter-dependent — the OpenAI SDK runs sync tools via
+        # asyncio.to_thread), so the nested agent run gets its own event loop on
+        # a dedicated thread. The new session has its own lock and context, so
+        # this cannot deadlock the caller's run.
         outcome: dict = {}
 
         def _run() -> None:

@@ -794,7 +794,7 @@ mapping_table:
   ttl: 0                               # seconds, 0 disables (not supported on Cosmos DB)
 ```
 
-2. When enabled, the `initiate_conversation(target, prompt, user_id, agent, target_details)` system tool is registered on all agents: it creates a fresh session, composes the outbound message by running the agent with `prompt` (the new session's history contains the exchange), and dispatches it for delivery. Inbound platform messages resolve their conversation id through the Session ID Mapping automatically.
+2. When enabled, the `initiate_conversation(target, prompt, user_id, agent)` system tool is registered on all agents: it creates a fresh session, composes the outbound message by running the agent with `prompt` (the new session's history contains the exchange), and dispatches it for delivery. Inbound platform messages resolve their conversation id through the Session ID Mapping automatically.
 
 3. Wire the send point:
    - **Single-process REST**: implement `InitiationSender` on your handler — `RESTAPI.run()` registers the in-process dispatcher (send, then the mapping is bound automatically):
