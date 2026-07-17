@@ -8,7 +8,7 @@ Builds [spec.md](spec.md) in order; every iteration leaves the branch working an
 - **Files:** `ak-py/src/agentkernel/core/config.py`; new `ak-py/src/agentkernel/core/initiation/__init__.py`, `initiation/mapping/{__init__,base,in_memory,redis,valkey,dynamodb,cosmosdb,firestore}.py`; new `ak-py/tests/test_session_id_mapping.py`
 - **Steps:**
   1. Add `_MappingTableConfig` and the optional `mapping_table` root field (§Config changes).
-  2. Implement `SessionIdMappingStore` ABC and the six backends with the two-records-per-mapping model (§Mapping store data model).
+  2. Implement `SessionIdMappingStore` ABC and the six backends with the two-records-per-mapping model, reusing the shared `core/util/driver/` drivers as the session/thread stores do (§Mapping store data model).
   3. Implement the builder following `session.type`, including the valkey ImportError pattern (§rule 4).
 - **Verify:** `uv run pytest tests/test_session_id_mapping.py tests/test_config.py` (add the `mapping_table` default-None assertion to `test_config.py` here).
 
@@ -78,6 +78,5 @@ Builds [spec.md](spec.md) in order; every iteration leaves the branch working an
   1. Dev skills (update both `.agents/skills/` and `.claude/skills/` copies): `ak-dev-architecture/SKILL.md` — add `core/initiation/` to the package map/directory tree, the `mapping_table` config section, and the response-handler initiation contract; `ak-dev-new-messaging-integration/SKILL.md` — add the `resolve_session_id` wiring step to the new-integration checklist; `ak-dev-testing-conventions/SKILL.md` — add the four new test files to the test-file table.
   2. Docs site: new page under `docs/docs/advanced/` (conversation initiation: config, tool, override contract, REST mode); update `docs/docs/deployment/` pages that describe response-handler customization; `ak-deployment/ak-aws/containerized/README.md` — new table + variable.
   3. Bundled user skills (`ak-py/src/agentkernel/skills/`): check for config-block references; update or record that none apply.
-  4. Delete the superseded flat specs `docs/specs/ak-134-agent-initiated-conversations.md` and `docs/specs/ak-134-agent-initiated-conversations-plan.md`.
-  5. Run the `ak-dev-sync-docs-from-branch` and `ak-dev-sync-skills-from-branch` flows to confirm nothing was missed before merge.
+  4. Run the `ak-dev-sync-docs-from-branch` and `ak-dev-sync-skills-from-branch` flows to confirm nothing was missed before merge.
 - **Verify:** sync flows report no remaining drift; `git grep send_initiation_message docs/ .agents/` shows only the REST-mode contract.

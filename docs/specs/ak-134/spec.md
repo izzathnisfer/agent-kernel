@@ -32,7 +32,7 @@ ak-py/src/agentkernel/core/initiation/
 ```python
 class InitiationMessage(BaseModel):
     session_id: str                      # created by the tool inside the runner
-    message: str                         # outbound text (fixed or agent-generated)
+    message: str                         # agent-generated outbound text
     target: str                          # opaque recipient address — never interpreted by core
     target_details: dict | None = None   # opaque platform extras
     user_id: str                         # recipient id — owns the AK thread; defaults to target
@@ -44,7 +44,7 @@ class SessionIdMappingStore(ABC):
     @abstractmethod
     def get_session_id(self, messaging_integration_thread_id: str) -> str | None: ...
     @abstractmethod
-    def get_thread_id(self, session_id: str) -> str | None: ...
+    def get_messaging_integration_thread_id(self, session_id: str) -> str | None: ...
     @abstractmethod
     def save(self, session_id: str, messaging_integration_thread_id: str) -> None: ...
     @abstractmethod
@@ -68,11 +68,15 @@ class InitiationManager:
     def reset(cls) -> None: ...                                  # testing hook, mirrors thread manager
 
     # Request-handler direction
-    def resolve_session_id(self, thread_id: str) -> str: ...     # mapping hit → session_id, miss/error → thread_id
+    def resolve_session_id(self, messaging_integration_thread_id: str) -> str: ...
+        # mapping hit → session_id; miss/error → the given id unchanged
 
     # Response-handler direction
-    def bind(self, session_id: str, thread_id: str) -> None: ...  # save if absent (get_session_id first)
-    def complete(self, initiation: InitiationMessage, thread_id: str) -> None:
+    def get_messaging_integration_thread_id(self, session_id: str) -> str | None: ...
+        # reverse lookup for delivering later replies of an initiated conversation
+    def bind(self, session_id: str, messaging_integration_thread_id: str) -> None: ...
+        # save if absent (get_session_id first)
+    def complete(self, initiation: InitiationMessage, messaging_integration_thread_id: str) -> None:
         """bind() + AK-thread initialization (when thread support is enabled):
         ConversationThreadManager.get_or_create_thread(session_id, user_id=initiation.user_id,
         first_prompt=initiation.message) — no group_id, no explicit name, so the configured
@@ -94,16 +98,18 @@ class InitiationManager:
 
 Both lookup directions must be O(1) on key-value backends, so `save()` writes **two records per mapping**:
 
-| Record key | Value |
-|---|---|
-| `thread#<messaging_integration_thread_id>` | `session_id` |
-| `session#<session_id>` | `messaging_integration_thread_id` |
+| Record key | Value | Consumer |
+|---|---|---|
+| `thread#<messaging_integration_thread_id>` | `session_id` | Request Handler: `resolve_session_id()` routes inbound replies |
+| `session#<session_id>` | `messaging_integration_thread_id` | Response Handler: the user's reply-delivery override calls `InitiationManager.get_messaging_integration_thread_id(session_id)` to deliver later agent replies of an initiated conversation into the same platform thread (§Consumer changes) |
 
-- **in_memory**: `ClassVar[dict]` (pattern: `InMemoryAttachmentStore`).
-- **redis / valkey**: `SET` with key `{mapping_table.prefix}{record_key}`, `EX {mapping_table.ttl}` when ttl > 0. Own thin driver per store module following `RedisDriver` (`ak-py/src/agentkernel/core/session/redis.py:14-68`: lazy connect, ping-reconnect, 3 retries) but reading url from `session.redis`/`session.valkey` and prefix/ttl from `mapping_table`.
-- **dynamodb**: table `mapping_table.table_name`, partition key `map_key` (S), attribute `value` (S), TTL attribute `expiry_time` when ttl > 0.
-- **firestore**: collection `mapping_table.collection_name`, one document per record key.
-- **cosmosdb**: table `mapping_table.table_name`, partition key `map_key`; no TTL (matches `CosmosDBThreadStore`'s no-TTL support).
+The backends **reuse the shared drivers in `core/util/driver/`** — the same ones every session store and thread store already instantiates with explicit constructor params (config reading stays in the stores, per the drivers' contract):
+
+- **in_memory**: `ClassVar[dict]` (pattern: `InMemoryAttachmentStore`); no driver.
+- **redis / valkey**: `RedisDriver` (`ak-py/src/agentkernel/core/util/driver/redis.py:8`) / `ValkeyDriver` (`driver/valkey.py:8`) — lazy connect, ping-reconnect, and retry lifecycle inherited from `_RedisLikeDriver` (`driver/redis_like.py:32`). Instantiated as the session stores do (e.g. `session/valkey.py:26`) but splitting the sources: `url` from `session.redis`/`session.valkey`, `prefix`/`ttl` from `mapping_table`. Records via `driver.set(key, value)` / `driver.get(key)`; `set(..., nx=True)` (`redis_like.py:112`) gives an atomic save-if-absent.
+- **dynamodb**: `DynamoDBDriver(table_name=mapping_table.table_name, partition_key="map_key", ttl=mapping_table.ttl)` (`driver/dynamodb.py:23`) — `sort_key` stays `None`, which the driver supports (key built from the partition key alone, `driver/dynamodb.py:79-81`), fitting the hash-only table; TTL > 0 attaches the `expiry_time` attribute on put, matching the Terraform TTL attribute.
+- **firestore**: `FirestoreDriver` (`driver/firestore.py:12`) with `collection_name` from `mapping_table`, `project_id`/`database_id` from `session.firestore`; one document per record key.
+- **cosmosdb**: `CosmosDBDriver(connection_string=session.cosmosdb.connection_string, table_name=mapping_table.table_name)` (`driver/cosmosdb.py:23`); no TTL (matches `CosmosDBThreadStore`'s no-TTL support).
 - `save()` is last-writer-wins and idempotent; no transactional coupling between the two records (a torn write is repaired by the next `bind()`, which re-saves when `get_session_id` misses).
 
 ### Initiation tool (`tools.py`)
@@ -112,7 +118,7 @@ Registered by `SystemToolFactory.get_all()` (`ak-py/src/agentkernel/core/tool.py
 
 ```python
 def _initiate_conversation(target: str, prompt: str,
-                           user_id: str = "", agent: str = "", target_details: dict | None = None) -> str:
+                           user_id: str = "", agent: str = "") -> str:
     """Runs the owning agent with the prompt in a new session; the reply is the outbound
     message. Returns status text, never raises."""
 ```
@@ -123,7 +129,7 @@ Behavior (all failures returned as actionable text, mirroring `_analyze_attachme
 2. `session_id = str(uuid.uuid4())` — always fresh, so it can never collide with the caller's current session (the v1 same-session guard is obsolete and intentionally dropped).
 3. `session = Runtime.current().sessions().new(session_id)` (via `ToolContext.get().runtime`).
 4. Select the agent (named `agent` param, else first registered — `AgentService.select` default, `ak-py/src/agentkernel/core/service.py:62-65`) and execute `Runtime.current().run(agent, session, [AgentRequestText(prompt)])` on a **dedicated thread with its own event loop** (`asyncio.run` inside `threading.Thread`, joined) — tool functions execute inside a running framework event loop, so `run_until_complete` on the current loop is not safe. The reply text is the outbound `message`; the prompt/reply exchange lands in the new session's framework history naturally (no injection mechanism needed — there is no fixed-message path), and `Runtime.run` already stores the session (`ak-py/src/agentkernel/core/runtime.py:217`).
-5. Build `InitiationMessage(session_id, message, target, target_details, user_id=user_id or target, request_id=uuid4)` and call `InitiationManager.get().dispatch(...)`.
+5. Build `InitiationMessage(session_id, message, target, user_id=user_id or target, request_id=uuid4)` and call `InitiationManager.get().dispatch(...)`. `target_details` stays `None` from the tool: LLM tool schemas must be strict (the OpenAI Agents SDK rejects free-form `dict` parameters — `additionalProperties` is not allowed), so platform extras can only come from custom dispatch paths.
 6. Return `f"Conversation initiated. session_id={session_id}"`.
 
 Callers needing near-exact wording embed it in the prompt ("send this message exactly as written: ..."); verbatim output is not guaranteed (design non-goal).
@@ -134,7 +140,7 @@ Callers needing near-exact wording embed it in the prompt ("send this message ex
 |---|---|---|
 | ECS containerized | `ECSAgentRunner.run()` (`ak-py/src/agentkernel/deployment/aws/containerized/akagentrunner.py`) at startup, before the poll loop | `SQSHandler.send_message_to_output_queue(message_body=initiation.model_dump(), attributes={"message_group_id": initiation.session_id, "message_deduplication_id": initiation.request_id}, request_id=initiation.request_id, user_id=initiation.user_id, custom_message_attributes=[CustomAttribute(name="message_type", value="INITIATION", ...)])` (`ak-py/src/agentkernel/deployment/aws/core/sqs_handler.py:353`) |
 | Lambda serverless | `ServerlessAgentRunner._get_chat_service()` lazy init (`ak-py/src/agentkernel/deployment/aws/serverless/akagentrunner.py:21-24`) — also from `ServerlessStreamAgentRunner` | same SQS send |
-| Single-process REST | `RESTAPI.run()` (`ak-py/src/agentkernel/api/http.py:81`): scans `handlers` for instances of `InitiationSender`; registers a local dispatcher bound to the first match (warn and ignore additional matches) | in-process: `thread_id = sender.send_initiation_message(target, message, target_details)` then `InitiationManager.get().complete(initiation, thread_id)` |
+| Single-process REST | `RESTAPI.run()` (`ak-py/src/agentkernel/api/http.py:81`): scans `handlers` for instances of `InitiationSender`; registers a local dispatcher bound to the first match (warn and ignore additional matches) | in-process: `messaging_integration_thread_id = sender.send_initiation_message(target, message, target_details)` then `InitiationManager.get().complete(initiation, messaging_integration_thread_id)` |
 
 When no dispatcher is registered (e.g. REST deployment without a sender handler), `dispatch()` raises `ValueError` and the tool returns the error as text.
 
@@ -149,8 +155,9 @@ No new send method is added. `QueueConsumer.process_message` (`ak-py/src/agentke
   1. detects the `message_type=INITIATION` attribute,
   2. parses `initiation = InitiationMessage.model_validate_json(<record body>)` (boto3 PascalCase `Body` vs Lambda `body`, per each class's existing record shape),
   3. sends via the platform API (e.g. Slack `chat.postMessage`) and captures the returned `messaging_integration_thread_id` (`ts`),
-  4. calls `InitiationManager.get().complete(initiation, thread_id)` — binds the mapping and initializes the AK thread.
+  4. calls `InitiationManager.get().complete(initiation, messaging_integration_thread_id)` — binds the mapping and initializes the AK thread.
 - **Bind-after-send is a user obligation** under this contract: an override that sends but skips step 4 yields context-less replies (no mapping). This is called out in the docs and the example; `complete()` itself never raises (see its contract), so calling it cannot cause a redelivery-driven duplicate send.
+- **Reply delivery (ordinary output messages)**: when the same override delivers a normal agent reply to the messaging platform, it calls `InitiationManager.get().get_messaging_integration_thread_id(reply_session_id)` — a hit means the session was agent-initiated and the reply must be threaded under the returned platform thread id; a miss means an ordinary reactive conversation (the session id *is* the platform-derived id, today's behavior). This is the consumer of the mapping table's reverse direction (§Mapping store data model).
 
 **Request handlers — resolve hook**
 
@@ -172,7 +179,7 @@ class SessionIdResolver:
 
 ### Config changes
 
-New classes in `ak-py/src/agentkernel/core/config.py`, and a new optional root field after `thread` (`config.py:397`):
+New classes in `ak-py/src/agentkernel/core/config.py`, and a new optional root field after `thread` (`config.py:393`):
 
 ```python
 class _MappingTableConfig(BaseModel):

@@ -36,7 +36,7 @@ Agents gain the ability to open a conversation with a user on a messaging platfo
   - Stock response handlers cannot deliver to messaging platforms today (they only write to the response store or broadcast via WebSocket), so platform delivery already lives in user overrides; initiation delivery joins it.
   - After a successful send, the override calls a provided completion API to create the mapping and initialize the AK thread.
 - Messages must be sent to the user only from the Response Handler.
-- If conversation thread support is enabled (`thread:` config block present, `ak-py/src/agentkernel/core/config.py:397`), an AK conversation thread must be created for the initiated conversation.
+- If conversation thread support is enabled (`thread:` config block present, `ak-py/src/agentkernel/core/config.py:393`), an AK conversation thread must be created for the initiated conversation.
   - The thread's `user_id` is the message **recipient** (the user being contacted, e.g. Monroe) — not the initiating user.
   - No `group_id` is set.
   - The thread name comes from the configured naming strategy, derived from the outbound message; the strategy's built-in truncation fallback applies when no naming model is available.
@@ -52,6 +52,7 @@ Agents gain the ability to open a conversation with a user on a messaging platfo
 
 - The `session_id ↔ messaging_integration_thread_id` association (`thread_ts` for Slack) must be maintained in a dedicated table — the **Session ID Mapping** table.
   - Used by both the Request Handler and the Response Handler; never touched by the Agent Runner.
+  - The Request Handler reads the forward direction (thread id → session id) to route replies; the Response Handler reads the reverse direction (session id → thread id) when delivering later agent replies of an initiated conversation into the same platform thread.
   - The mapping store uses the same backend as the configured **session store** (follows the `session:` config `type`) — no separate backend selection.
   - Store details (table/key name, TTL, key prefix, etc.) are configurable in `config.yaml` under a new `mapping_table` config block.
   - The backing table is provisioned in Terraform under `ak-deployment/`, mirroring the existing response-store table pattern (`ak-deployment/ak-aws/containerized/dynamodb.tf:3`), with matching IAM grants.
@@ -65,9 +66,32 @@ Agents gain the ability to open a conversation with a user on a messaging platfo
 
 ## Architecture
 
-![Agent Conversation Initiation](agent-conversation-initiation.png)
+```mermaid
+sequenceDiagram
+    participant J as James
+    participant RH as Request Handler
+    participant IQ as Input Queue
+    participant AR as Agent Runner
+    participant OQ as Output Queue
+    participant RSH as Response Handler
+    participant MAP as Session ID Map Table
+    participant Mo as Monroe
 
-Flow shown: James asks the agent to inform Monroe → the Runner's tool creates a new session with the outbound context → the Output Queue carries both the agent's reply to James and the initiation message (with the new `session_id`) → the Response Handler sends to Monroe and writes the new `session_id ↔ thread_id` mapping → when Monroe replies, the Request Handler resolves the thread id through the Session ID Map table.
+    J->>RH: "Inform Monroe that ..." (session_id, agent, prompt)
+    RH->>MAP: resolve messaging_integration_thread_id → session_id
+    RH->>IQ: chat request
+    IQ->>AR: consume — agent runs, calls initiate_conversation tool
+    AR->>AR: tool: new session + prompt run (context recorded in its history)
+    AR->>OQ: InitiationMessage (new session_id, message, opaque target)
+    AR->>OQ: agent's reply to James
+    OQ->>RSH: consume
+    RSH->>Mo: send message (user's process_message override)
+    RSH->>MAP: bind new session_id ↔ Monroe's messaging_integration_thread_id
+    RSH->>J: deliver reply
+    Note over Mo,RH: Monroe's reply → Request Handler resolves her thread id<br/>through the map table → same session, full context
+```
+
+Flow: James asks the agent to inform Monroe → the Runner's tool creates a new session with the outbound context → the Output Queue carries both the agent's reply to James and the initiation message (with the new `session_id`) → the Response Handler sends to Monroe and writes the new `session_id ↔ thread_id` mapping → when Monroe replies, the Request Handler resolves the thread id through the Session ID Map table.
 
 ## Assumptions
 
