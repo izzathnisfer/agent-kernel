@@ -96,9 +96,9 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
     evaluation observed; the project's own version policy caps the no-breaking-change window at
     three months between majors), so a pickled session risks more version-skew than the OpenAI
     adapter's plain-dict `_items` ever did.
-  - Requirement: `PydanticAISession` stores the jsonable form (`to_jsonable_python(messages)`), not
-    the raw object list, and reconstructs via `ModelMessagesTypeAdapter.validate_python()` before
-    each run — flagged for explicit sign-off (see Open questions).
+  - Requirement, confirmed: `PydanticAISession` stores the jsonable form
+    (`to_jsonable_python(messages)`), not the raw object list, and reconstructs via
+    `ModelMessagesTypeAdapter.validate_python()` before each run.
 
 ### `PydanticAIRunner.run()`
 
@@ -171,18 +171,29 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
   (`trace/trace.py:8-94`) — mechanical, matching the existing five frameworks' identical
   two-method pattern.
 - Must add `trace/langfuse/pydanticai.py` and `trace/openllmetry/pydanticai.py`, following the
-  established pattern (`trace/langfuse/openai.py:12-41`): call the framework's own instrumentation
-  once in `__init__`, wrap `run()` in AK's span for session_id/tags/input-output.
-  - Pydantic AI's instrumentation is natively OTel (`Agent.instrument_all()`/
-    `InstrumentationSettings`) rather than an external OpenInference shim — the `__init__` call
-    differs from the OpenAI runner's `OpenAIAgentsInstrumentor().instrument()`; the `run()`
-    wrapping does not.
-  - Whether a companion instrumentation package is needed at all is an open question (below).
+  established pattern (`trace/langfuse/openai.py:12-41`): instrument once in `__init__`, wrap
+  `run()` in AK's span for session_id/tags/input-output — the instrumentation step itself is
+  shaped differently from the OpenAI runner's single `OpenAIAgentsInstrumentor().instrument()`
+  call, confirmed against `openinference-instrumentation-pydantic-ai` (Arize-ai, PyPI, v0.1.17,
+  last released 2026-06-30 — matching the `crewai`/`adk` convention of bundling a companion
+  OpenInference package):
+  - Register `OpenInferenceSpanProcessor()` on the active OpenTelemetry `TracerProvider` — a span
+    processor, not an `.instrument()`-style instrumentor object.
+  - Enable Pydantic AI's own native instrumentation via `Agent.instrument_all()` (a global call,
+    made once — matches the OpenAI runner's pattern of not requiring the user to change how they
+    construct their own native agent), not per-agent `instrument=InstrumentationSettings(...)`,
+    since AK never constructs the user's native `Agent` object (see "Model and provider
+    selection").
 
 ### Packaging (`ak-py/pyproject.toml`)
 
-- Must add a `pydanticai` optional-dependency group with a version-pinned `pydantic-ai`
-  requirement (exact bounds: open question below).
+- Must add a `pydanticai` optional-dependency group:
+  - `pydantic-ai~=2.13.0` (patch-only within 2.13.x, i.e. `>=2.13.0,<2.14.0`, matching the
+    LangGraph group's tightness) — confirmed, given Pydantic AI's fast release cadence; the
+    ceiling moves forward deliberately as later versions are vetted, not automatically.
+  - `openinference-instrumentation-pydantic-ai>=0.1.17` — confirmed to exist (Arize-ai, PyPI, last
+    released 2026-06-30), mirroring the `crewai`/`adk` groups' inclusion of their own
+    instrumentation packages (see Tracing).
 - `requires-python = ">=3.12,<3.14"` (`pyproject.toml:10`) already exceeds Pydantic AI's own
   `>=3.10` floor — no compatibility gate needed.
 
@@ -218,19 +229,3 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
 - The AG-UI protocol integration — AK already has REST/WebSocket/MCP/A2A frontends; a second
   framework-specific UI protocol is redundant with "frontends depend on core, never the reverse."
 - Touching any existing adapter, example, or doc page — purely additive.
-
-## Open questions
-
-1. **Session serialization sign-off**: `PydanticAISession` storing the pre-converted jsonable form
-   (`to_jsonable_python()`/`ModelMessagesTypeAdapter`) rather than raw `ModelMessage` objects (see
-   "Session and message history") is a deliberate departure from how every other adapter holds
-   session state — needs explicit sign-off since it adds a conversion step no other adapter has.
-2. **Version pin tightness**: full-`v2` range (`>=2.13.0,<3.0.0`) vs. LangGraph-style patch-only
-   (`~=2.13.0`, i.e. `<2.14.0`) given the observed release cadence. The tighter pin trades a
-   materially higher maintenance burden for materially lower regression exposure.
-3. **Tracing instrumentation package**: whether a maintained
-   `openinference-instrumentation-pydantic-ai`-equivalent exists and should be bundled (matching
-   `crewai`/`adk`), or whether Pydantic AI's native instrumentation makes one unnecessary. To
-   confirm in spec.md.
-4. **`get_description()`/`get_a2a_card()` exact attribute paths** on the native `Agent`/`Tool`
-   objects. Not blocking design approval — routine spec.md detail, called out so it isn't dropped.
