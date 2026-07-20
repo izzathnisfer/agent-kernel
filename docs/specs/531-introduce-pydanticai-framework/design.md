@@ -1,4 +1,4 @@
-# AK-165: Evaluate and Integrate Pydantic AI as an Agentic Platform
+# #531: Evaluate and Integrate Pydantic AI as an Agentic Platform
 
 Recommends integrating Pydantic AI as a sixth AK framework adapter (`framework/pydanticai/`),
 mirroring the `Agent`/`Runner`/`Module`/`ToolBuilder` pattern used by openai/crewai/langgraph/adk/
@@ -62,8 +62,22 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
 - `FRAMEWORK = "pydanticai"` constant, used as the session data key (mirrors `FRAMEWORK = "openai"`,
   `openai.py:28`; matches `Session.get`/`Session.set`, `core/base.py:124-168`).
 - Naming follows AK's own shorthand rather than the upstream package name, matching existing
-  precedent (`openai` for `agents`/`openai-agents`, `adk` for `google-adk`) — exact spelling is an
-  open question below.
+  precedent (`openai` for `agents`/`openai-agents`, `adk` for `google-adk`): settled as
+  `pydanticai` — used consistently throughout this document for the directory, class prefixes,
+  `FRAMEWORK` constant, and pyproject extra — not `pydantic_ai`, the upstream import name.
+
+### Model and provider selection
+
+- Model/provider choice — including configuring `FallbackModel` for automatic failover — is
+  entirely the user's responsibility via the native `pydantic_ai.Agent(model=...)` constructor.
+  AK adds no `AKConfig` surface for model or provider selection.
+  - Matches every existing adapter: users build the native agent object with whatever model
+    configuration they want (e.g. `Agent(name="math", instructions=...)` for the OpenAI SDK), and
+    AK only wraps the resulting object — it never re-abstracts over model choice.
+  - This is the mechanism behind the "zero-degradation provider switching" motivation: Pydantic
+    AI's own model classes and `FallbackModel` make switching providers a one-line change in the
+    user's own agent construction — AK doesn't mediate or add a second configuration surface for
+    it.
 
 ### Session and message history
 
@@ -98,7 +112,7 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
   explicit-mutation equivalent of the OpenAI SDK's self-mutating `Session` object).
 - Must route a `BaseModel`-typed `result.output` through `AgentReplyAny.from_output()` before
   falling back to `AgentReplyText` (mirrors the two-step fallback at `openai.py:185-190`, modulo
-  the `text`→`response` rename from AK-166).
+  the `text`→`response` rename from #500).
 - Must preserve the existing catch-all error contract: any exception becomes
   `AgentReplyText(response=user_facing_error_message(e), prompt=prompt)` (`openai.py:191-192`).
 
@@ -207,12 +221,16 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
 
 ## Open questions
 
-1. **Version pin tightness**: full-`v2` range (`>=2.13.0,<3.0.0`) vs. LangGraph-style patch-only
+1. **Session serialization sign-off**: `PydanticAISession` storing the pre-converted jsonable form
+   (`to_jsonable_python()`/`ModelMessagesTypeAdapter`) rather than raw `ModelMessage` objects (see
+   "Session and message history") is a deliberate departure from how every other adapter holds
+   session state — needs explicit sign-off since it adds a conversion step no other adapter has.
+2. **Version pin tightness**: full-`v2` range (`>=2.13.0,<3.0.0`) vs. LangGraph-style patch-only
    (`~=2.13.0`, i.e. `<2.14.0`) given the observed release cadence. The tighter pin trades a
    materially higher maintenance burden for materially lower regression exposure.
-2. **Tracing instrumentation package**: whether a maintained
+3. **Tracing instrumentation package**: whether a maintained
    `openinference-instrumentation-pydantic-ai`-equivalent exists and should be bundled (matching
    `crewai`/`adk`), or whether Pydantic AI's native instrumentation makes one unnecessary. To
    confirm in spec.md.
-3. **`get_description()`/`get_a2a_card()` exact attribute paths** on the native `Agent`/`Tool`
+4. **`get_description()`/`get_a2a_card()` exact attribute paths** on the native `Agent`/`Tool`
    objects. Not blocking design approval — routine spec.md detail, called out so it isn't dropped.
