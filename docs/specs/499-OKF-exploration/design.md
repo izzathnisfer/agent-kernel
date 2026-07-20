@@ -71,8 +71,9 @@ Sources:
   S3 sync, and doubles as living documentation of the format.
 - README documents: the OKF format, a **local filesystem run path** (no AWS — point the bundle
   at a local directory, see Storage abstraction), required AWS credentials/bucket setup for the
-  S3 path, how to seed the source folder, and a scripted walkthrough of the three flows
-  (sync → ask → update).
+  S3 path (a **read-write** grant on the bundle bucket and a separate **read-only** grant on the
+  source bucket — see Agents), how to seed the source folder, and a scripted walkthrough of the
+  three flows (sync → ask → update).
 
 ### Storage abstraction
 
@@ -95,7 +96,9 @@ Sources:
     well as the backend used by `demo_test.py` and offline runs. Choosing the backend is the only
     difference between running the example locally and against S3.
 - The **sync source folder** is read through the same `OKFStorage` interface (a second instance
-  pointed at the source bucket/prefix) — no separate source-reader abstraction.
+  pointed at the source bucket/prefix) — no separate source-reader abstraction. This instance is
+  used **read-only**: only the Curator reaches it, only via the read/list source tools, and (for
+  `S3Storage`) it is documented as needing read-only IAM on the source bucket (see Agents).
 
 ### Knowledge cache
 
@@ -190,9 +193,18 @@ Sources:
     Applies user-requested updates; prompt requires it to (1) validate-by-reading first and
     (2) `append_log` after every successful write. Updating the affected `index.md` is **not** a
     prompt duty — `write_concept` does it automatically (see the invariant note above).
-  - **Curator** (read + write + source access): Producer tools + `list_source_files()` /
-    `read_source_file(path)`, thin wrappers over a **second `OKFStorage` instance** pointed at the
-    source prefix (so "no separate source-reader abstraction" holds). Executes the sync flow on demand.
+    **No source access** — the Producer only ever touches the bundle.
+  - **Curator** (read + write + read-only source): Producer tools + the source tools
+    `list_source_files()` / `read_source_file(path)`. Executes the sync flow on demand.
+- **Only the Curator has source access, and it is read-only.** The source is exposed *only*
+  through `list_source_files()` / `read_source_file(path)` — thin wrappers over a **second
+  `OKFStorage` instance** pointed at the source bucket/prefix (so "no separate source-reader
+  abstraction" holds). No write/delete tool over the source is ever defined or bound to any
+  agent, so read-only is enforced by the tool subset — the permission model — exactly like the
+  rest of the design. As defence in depth beyond the tool layer, the source `S3Storage` needs
+  only read IAM permissions (`s3:GetObject` + `s3:ListBucket`, never `s3:PutObject` /
+  `s3:DeleteObject`); the README documents the source bucket/prefix as a read-only grant,
+  distinct from the read-write grant the bundle bucket requires.
 - Interface: interactive `CLI.main()` (as in `examples/cli/openai/demo.py`); the user switches
   agents with the CLI's agent selection.
 
