@@ -58,9 +58,7 @@ def handler(monkeypatch):
     # AsyncApp only needs non-empty credentials at construction; nothing connects.
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-token")
     monkeypatch.setenv("SLACK_SIGNING_SECRET", "test-signing-secret")
-    monkeypatch.setattr(
-        "agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg())
-    )
+    monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg()))
     from agentkernel.slack import AgentSlackRequestHandler
 
     h = AgentSlackRequestHandler()
@@ -107,9 +105,7 @@ class TestHandleSessionResolution:
     """Drives handle(body, say) end-to-end — the actual regression guard."""
 
     @pytest.mark.asyncio
-    async def test_threaded_dm_reply_resolves_to_mapped_session(
-        self, handler, monkeypatch
-    ):
+    async def test_threaded_dm_reply_resolves_to_mapped_session(self, handler, monkeypatch):
         InitiationManager.get()._store.save("session-1", "1111.2222")
         fake_service = FakeAgentService()
         monkeypatch.setattr(
@@ -122,9 +118,7 @@ class TestHandleSessionResolution:
         assert fake_service.selected_session_id == "session-1"
 
     @pytest.mark.asyncio
-    async def test_unthreaded_dm_reply_resolves_to_its_own_ts(
-        self, handler, monkeypatch
-    ):
+    async def test_unthreaded_dm_reply_resolves_to_its_own_ts(self, handler, monkeypatch):
         InitiationManager.get()._store.save("session-1", "1111.2222")
         fake_service = FakeAgentService()
         monkeypatch.setattr(
@@ -137,9 +131,7 @@ class TestHandleSessionResolution:
         assert fake_service.selected_session_id == "3333.4444"
 
     @pytest.mark.asyncio
-    async def test_channel_id_mapping_is_never_consulted_by_handle(
-        self, handler, monkeypatch
-    ):
+    async def test_channel_id_mapping_is_never_consulted_by_handle(self, handler, monkeypatch):
         # Regression guard: a mapping saved under the DM channel id (not a message
         # ts) must never be reachable from handle() — no channel-id fallback exists.
         InitiationManager.get()._store.save("session-dm", "D999")
