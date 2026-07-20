@@ -124,8 +124,10 @@ See `examples/api/slack-initiation/` for a runnable example.
 Every request-handler surface resolves inbound conversation ids through the mapping with an
 identity fallback (unmapped ids behave exactly as before):
 
-- all messaging integrations (Slack `thread_ts` — with a DM fallback to the channel id, since a DM
-  reply can be top-level or threaded; WhatsApp number, Telegram chat id, ...);
+- all messaging integrations (Slack `thread_ts`; WhatsApp number, Telegram chat id, ...) — for Slack,
+  a reply must be threaded to continue an initiated conversation: an un-threaded reply's own `ts`
+  never matches a bound mapping, so it starts a new session rather than guessing which prior
+  conversation it's answering;
 - `POST /api/v1/chat` in queue deployments — note that a mapped `session_id` is **rewritten**, and
   the resolved id is returned in the response; poll with the returned `session_id`;
 - override `resolve_session_id(messaging_integration_thread_id)` on any handler to customize the logic.

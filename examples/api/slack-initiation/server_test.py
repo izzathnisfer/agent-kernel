@@ -85,7 +85,9 @@ async def test_unsigned_event_is_rejected(http_client):
     body = json.dumps({"type": "url_verification", "challenge": "x"}).encode()
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
-            f"{http_client}/slack/events", content=body, headers={"content-type": "application/json"}
+            f"{http_client}/slack/events",
+            content=body,
+            headers={"content-type": "application/json"},
         )
     assert resp.status_code == 401
 
@@ -108,7 +110,9 @@ class FakeSlackClient:
 
 @pytest.fixture
 def initiation_handler():
-    from server import SlackInitiationHandler  # imported here so the env above is set first
+    from server import (  # imported here so the env above is set first
+        SlackInitiationHandler,
+    )
 
     handler = SlackInitiationHandler()
     fake = FakeSlackClient()
@@ -122,7 +126,7 @@ def test_send_initiation_message_member_id_opens_dm(initiation_handler):
     thread_id = handler.send_initiation_message("U123", "Your laptop is ready")
     assert fake.opened == ["U123"]
     assert fake.posted == [("D999", "Your laptop is ready")]
-    assert thread_id == "D999"  # DMs bind the channel id; the Slack handler's DM fallback resolves replies to it
+    assert thread_id == "1111.2222"  # DMs bind the posted message's own ts, same as channels
 
 
 def test_send_initiation_message_channel_returns_thread_root(initiation_handler):
@@ -132,3 +136,35 @@ def test_send_initiation_message_channel_returns_thread_root(initiation_handler)
     assert fake.opened == []
     assert fake.posted == [("C42", "Deploy finished")]
     assert thread_id == "1111.2222"  # channel replies arrive threaded under the posted ts
+
+
+def test_get_requester_id_reads_slack_user_from_body():
+    print("test_get_requester_id_reads_slack_user_from_body")
+    from agentkernel.core import AgentRequestAny, AgentRequestText, ToolContext
+
+    from server import get_requester_id
+
+    requests = [
+        AgentRequestText(text="tell <@U0RECIPIENT> that I'll be late"),
+        AgentRequestAny(name="body", content={"user": "U0REQUESTER", "channel": "C1"}),
+    ]
+    context = ToolContext(runtime=None, agent=None, session=None, requests=requests)
+    context.set()
+    try:
+        assert get_requester_id() == "U0REQUESTER"
+    finally:
+        context.reset()
+
+
+def test_get_requester_id_returns_empty_without_body():
+    print("test_get_requester_id_returns_empty_without_body")
+    from agentkernel.core import AgentRequestText, ToolContext
+
+    from server import get_requester_id
+
+    context = ToolContext(runtime=None, agent=None, session=None, requests=[AgentRequestText(text="hi")])
+    context.set()
+    try:
+        assert get_requester_id() == ""
+    finally:
+        context.reset()

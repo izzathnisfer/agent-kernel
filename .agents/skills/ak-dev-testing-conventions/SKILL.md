@@ -78,7 +78,7 @@ Tests live in `ak-py/tests/` and follow the naming convention `test_<module>.py`
 | `test_initiation_tool.py` | `initiate_conversation` system tool, SystemToolFactory gating, RESTAPI local dispatch |
 | `test_initiation_response_handlers.py` | Response-handler INITIATION guards, `process_message` override contract, queue dispatcher |
 | `test_queue_request_handler_resolve.py` | QueueRequestHandler session-id resolve rewrite + fallback |
-| `test_slack_session_resolution.py` | Slack inbound session derivation: thread_ts resolve + DM channel-id fallback |
+| `test_slack_session_resolution.py` | Slack inbound session resolution: thread_ts-only, DMs and channels identical, no channel-id fallback |
 
 ## Test Patterns
 

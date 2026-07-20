@@ -10,7 +10,15 @@ from slack_sdk.errors import SlackApiError
 
 from ...api import RESTRequestHandler
 from ...core import AgentService, Config
-from ...core.model import AgentReplyAny, AgentReplyImage, AgentReplyText, AgentRequestAny, AgentRequestFile, AgentRequestImage, AgentRequestText
+from ...core.model import (
+    AgentReplyAny,
+    AgentReplyImage,
+    AgentReplyText,
+    AgentRequestAny,
+    AgentRequestFile,
+    AgentRequestImage,
+    AgentRequestText,
+)
 
 
 class AgentSlackRequestHandler(RESTRequestHandler):
@@ -55,29 +63,6 @@ class AgentSlackRequestHandler(RESTRequestHandler):
             return await self._handler.handle(req)
 
         return router
-
-    def _derive_session_id(self, thread_ts: str, channel: str, channel_type: str | None) -> str:
-        """
-        Derives the session id for an inbound Slack message, resolving agent-initiated
-        conversations through the Session ID Mapping.
-
-        DM fallback: an agent-initiated DM is bound under the DM channel id (a DM reply
-        can be top-level — its own ts — or threaded under the bot message's ts, so no
-        single ts round-trips). When the thread_ts lookup misses in a DM, the channel id
-        is tried; when both miss, the platform-derived thread_ts is kept (reactive
-        behavior, unchanged).
-
-        :param thread_ts: The platform-derived conversation key (thread_ts or message ts).
-        :param channel: The Slack channel id the message arrived in.
-        :param channel_type: Slack's channel_type for the event ("im" for DMs).
-        :return: The session id to run under.
-        """
-        session_id = self.resolve_session_id(thread_ts)
-        if session_id == thread_ts and channel_type == "im":
-            mapped = self.resolve_session_id(channel)
-            if mapped != channel:
-                session_id = mapped
-        return session_id
 
     async def handle(self, body: dict, say):
         """
@@ -146,9 +131,11 @@ class AgentSlackRequestHandler(RESTRequestHandler):
                     text=f"Hi <@{user}>, {self._slack_agent_acknowledgement} :rolling-loader:",
                 )
             # Agent-initiated conversations: a thread started by an agent resolves to
-            # its initiated session via the Session ID Mapping (overridable), with a
-            # DM fallback to the channel id.
-            session_id = self._derive_session_id(thread_ts, channel, body.get("channel_type"))
+            # its initiated session via the Session ID Mapping (overridable). A reply
+            # must be threaded to continue an initiated conversation — an un-threaded
+            # reply's own ts never matches a bound mapping, so it starts a new session
+            # (unambiguous by construction: no guessing which conversation it answers).
+            session_id = self.resolve_session_id(thread_ts)
             service.select(session_id=session_id, name=self._slack_agent)
             if not service.agent:
                 await say(channel=channel, text="No agent available to handle your request.")
@@ -178,7 +165,11 @@ class AgentSlackRequestHandler(RESTRequestHandler):
                 requests.append(AgentRequestAny(name="body", content=body))
                 result = await service.run_multi(requests=requests)
             else:
-                await say(channel=channel, thread_ts=thread_ts, text="Please provide a message or attachment.")
+                await say(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text="Please provide a message or attachment.",
+                )
                 return
 
             response_text = str(result) if isinstance(result, (AgentReplyText, AgentReplyImage, AgentReplyAny)) else "Non textual result received"

@@ -1,7 +1,12 @@
 """
-Inbound Slack session-id derivation for agent-initiated conversations: the
-thread_ts lookup plus the DM fallback to the channel id (a DM reply can be
-top-level or threaded, so only the DM channel id round-trips reliably).
+Inbound Slack session-id derivation for agent-initiated conversations.
+
+DMs and channels are resolved identically: AgentSlackRequestHandler.handle()
+calls the inherited resolve_session_id(thread_ts) directly, with no Slack- or
+DM-specific fallback. A reply must be threaded to continue an initiated
+conversation; an un-threaded reply's own ts never matches a bound mapping, so
+it starts a new session rather than guessing which prior conversation (if any)
+it's answering.
 """
 
 import pytest
@@ -55,34 +60,29 @@ def handler(monkeypatch):
 
 
 class TestSlackSessionDerivation:
-    def test_channel_thread_mapping_resolves(self, handler):
+    def test_channel_threaded_reply_resolves(self, handler):
         InitiationManager.get()._store.save("session-1", "1111.2222")
-        assert handler._derive_session_id("1111.2222", "C42", None) == "session-1"
+        assert handler.resolve_session_id("1111.2222") == "session-1"
 
-    def test_dm_top_level_reply_falls_back_to_channel_mapping(self, handler):
-        # Initiated DM bound under the DM channel id; the reply's own ts misses.
+    def test_dm_threaded_reply_resolves(self, handler):
+        # DMs bind their own message ts, exactly like channels — no channel-id fallback.
+        InitiationManager.get()._store.save("session-1", "1111.2222")
+        assert handler.resolve_session_id("1111.2222") == "session-1"
+
+    def test_unthreaded_dm_reply_starts_new_session(self, handler):
+        # No mapping for this reply's own ts: unambiguous by construction, not a guess.
+        InitiationManager.get()._store.save("session-1", "1111.2222")
+        assert handler.resolve_session_id("3333.4444") == "3333.4444"
+
+    def test_dm_channel_id_is_never_consulted(self, handler):
+        # Regression guard: a mapping saved under a channel id (not a message ts) must
+        # never be reachable from resolve_session_id — there is no channel-id fallback.
         InitiationManager.get()._store.save("session-1", "D999")
-        assert handler._derive_session_id("3333.4444", "D999", "im") == "session-1"
-
-    def test_dm_threaded_reply_falls_back_to_channel_mapping(self, handler):
-        # A reply threaded under the bot's DM message resolves the bot ts (miss) then the channel.
-        InitiationManager.get()._store.save("session-1", "D999")
-        assert handler._derive_session_id("1111.2222", "D999", "im") == "session-1"
-
-    def test_dm_without_mapping_keeps_platform_derived_id(self, handler):
-        # Reactive DM behavior unchanged: both lookups miss -> thread_ts.
-        assert handler._derive_session_id("3333.4444", "D999", "im") == "3333.4444"
-
-    def test_channel_message_never_uses_dm_fallback(self, handler):
-        # A mapping under a channel id must not hijack non-DM messages.
-        InitiationManager.get()._store.save("session-1", "C42")
-        assert handler._derive_session_id("3333.4444", "C42", "channel") == "3333.4444"
-
-    def test_thread_hit_wins_over_dm_fallback(self, handler):
-        InitiationManager.get()._store.save("session-thread", "1111.2222")
-        InitiationManager.get()._store.save("session-dm", "D999")
-        assert handler._derive_session_id("1111.2222", "D999", "im") == "session-thread"
+        assert handler.resolve_session_id("3333.4444") == "3333.4444"
 
     def test_disabled_feature_is_identity(self, monkeypatch, handler):
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg(mapping_table=None)))
-        assert handler._derive_session_id("3333.4444", "D999", "im") == "3333.4444"
+        monkeypatch.setattr(
+            "agentkernel.core.config.AKConfig.get",
+            classmethod(lambda cls: make_fake_cfg(mapping_table=None)),
+        )
+        assert handler.resolve_session_id("3333.4444") == "3333.4444"
