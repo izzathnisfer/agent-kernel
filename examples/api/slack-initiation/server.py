@@ -113,11 +113,19 @@ notifier_agent = OpenAIAgent(
 
 
 class PrintSessionContextHook(PostHook):
-    """Prints the new session's retained context right after notifier composes the outbound message."""
+    """
+    Demo aid: prints the new session's retained turn count and roles right after
+    notifier composes the outbound message, showing the seeding exchange landed
+    in the new session's history (see the README's "Try it" section). Prints
+    roles only, not message content, to stay a one-line log rather than a dump.
+    """
 
     async def on_run(self, session, requests, agent, agent_reply):
         items = await session.get("openai").get_items()
-        print(f"initiated session context | session_id={session.id} | items={items}")
+        roles = [item.get("role", "?") for item in items]
+        print(
+            f"[SESSION-CONTEXT-DEMO] initiated session context | session_id={session.id} | turns={len(items)} | roles={roles}"
+        )
         return agent_reply
 
     def name(self) -> str:

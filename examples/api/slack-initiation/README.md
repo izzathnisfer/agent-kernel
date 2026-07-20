@@ -1,6 +1,6 @@
 # Agent-Initiated Slack Conversations
 
-Demonstrates AK-134 agent-initiated conversations in a single-process REST
+Demonstrates agent-initiated conversations in a single-process REST
 deployment: an agent proactively messages another Slack user, and that user's
 reply continues the same conversation instead of starting a context-less one.
 
@@ -72,6 +72,12 @@ third-person prompt for `notifier` naming both explicitly. A DM lands in
 Monroe's inbox, correctly attributed instead of first person:
 
 > Hi! Just a heads up — <@U0JAMES> will be late, held up in traffic.
+
+Watch the server's stdout at this point: `PrintSessionContextHook` logs a line
+like `[SESSION-CONTEXT-DEMO] initiated session context | session_id=... |
+turns=2 | roles=['user', 'assistant']` — this is the composed prompt/reply
+exchange that just landed in the new session's framework history, which is
+exactly what makes the context-retention behavior below work.
 
 When Monroe replies **in a thread** under that DM (Slack's "Reply in thread"),
 the reply resolves through the Session ID Mapping to the initiated session —
