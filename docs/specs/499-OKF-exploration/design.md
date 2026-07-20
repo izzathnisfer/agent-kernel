@@ -62,7 +62,8 @@ Sources:
   `examples/cli/knowledgebase/openai/<backend>/` precedent and leaving room for other runtimes),
   following the existing CLI example layout: `demo.py`, `demo_test.py`, `okf/` (the OKF
   implementation package), `sample_bundle/` (a small committed OKF bundle — see below),
-  `README.md`, `pyproject.toml`, `build.sh`, `uv.lock`.
+  `deploy/` (Terraform that provisions the S3 buckets — see Deployment), `README.md`,
+  `pyproject.toml`, `build.sh`, `uv.lock`.
 - Depends on `agentkernel[cli,openai]` plus `boto3` and `pyyaml` at runtime, and
   `agentkernel[test]` as a dev dependency (the `Test` harness, as in `examples/cli/openai`);
   **no changes to the ak-py library** (no new config sections, extras, factories, or exports).
@@ -70,10 +71,33 @@ Sources:
   ships with the example so the Consumer flow and the offline tests run without first doing an
   S3 sync, and doubles as living documentation of the format.
 - README documents: the OKF format, a **local filesystem run path** (no AWS — point the bundle
-  at a local directory, see Storage abstraction), required AWS credentials/bucket setup for the
-  S3 path (a **read-write** grant on the bundle bucket and a separate **read-only** grant on the
-  source bucket — see Agents), how to seed the source folder, and a scripted walkthrough of the
-  three flows (sync → ask → update).
+  at a local directory, see Storage abstraction), the S3 path (provision the two buckets and
+  their IAM policies with the `deploy/` Terraform — see Deployment — then point the demo at
+  them), how to seed the source folder, and a scripted walkthrough of the three flows
+  (sync → ask → update).
+
+### Deployment (S3 provisioning)
+
+- A `deploy/` Terraform module provisions the AWS resources the S3 run path needs, mirroring the
+  repo's Terraform convention (`agent/deploy/`, `ak-deployment/`): standard files
+  `main.tf`, `variables.tf`, `outputs.tf` (and an optional `backend.tf` for remote state that can
+  be deleted for local state, as in `agent/deploy/backend.tf`).
+- It creates **two S3 buckets** and their access policies:
+  - the **bundle (OKF wiki) bucket** — the durable home of the OKF bundle; the demo needs
+    **read-write** on it (`s3:GetObject`, `s3:PutObject`, `s3:ListBucket`).
+  - the **source bucket** — the folder the Curator syncs *from*; the demo needs **read-only** on
+    it (`s3:GetObject`, `s3:ListBucket`, never `s3:PutObject` / `s3:DeleteObject`), the
+    defence-in-depth grant the Agents section relies on.
+- Bucket names, prefixes, and region are Terraform **variables**; `outputs.tf` emits the created
+  bucket names/prefixes so they can be fed straight into the demo's `S3Storage` constructor
+  params. The two IAM policies (RW bundle, RO source) are the concrete form of the read-write /
+  read-only split the design describes — the tool subset is the in-process permission model, and
+  these policies are the same split enforced at the AWS boundary.
+- `deploy/` **only** provisions buckets and policies. It does not create IAM *users* or wire
+  credentials — the operator attaches the emitted policies to whatever principal runs the demo
+  (see Non-goals). The application code never creates buckets: `S3Storage` assumes the buckets
+  exist (it takes explicit bucket/prefix/region and never provisions), so provisioning stays
+  entirely in `deploy/`.
 
 ### Storage abstraction
 
@@ -306,6 +330,10 @@ graph LR
   suffice for the exploration).
 - No scheduler/cron infrastructure for the Curator (diagram shows it; the example triggers sync
   on demand).
+- No IAM user/credential provisioning in `deploy/` — it creates the two buckets and their access
+  policies only; attaching those policies to the principal that runs the demo (and supplying its
+  credentials) is left to the operator. No remote Terraform state backend is required (the
+  optional `backend.tf` can be deleted for local state).
 - No "reconcile / enrich" duties for the Curator (the diagram's link-fixing / bulk index
   regeneration beyond the per-write `index.md` update). Sync-only for the first cut.
 - No preservation of curated `index.md` content across writes — `write_concept` regenerates a
@@ -330,6 +358,10 @@ graph LR
   bundle root). See Use case 1.
 - **Sync conflict policy**: source wins. See Use case 1.
 - **Reconcile / enrich**: out of scope for the first cut. See Non-goals.
+- **S3 provisioning**: a `deploy/` Terraform module creates the two buckets (RW bundle, RO
+  source) and their IAM policies, rather than leaving them as README-only prerequisites or
+  auto-creating them in `S3Storage`. Keeps provisioning out of the app code and matches the
+  repo's Terraform convention. See Deployment.
 
 ## Open questions
 
