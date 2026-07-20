@@ -61,11 +61,18 @@ Sources:
 - Lives at `examples/cli/okf/openai/` (concept → runtime, mirroring the
   `examples/cli/knowledgebase/openai/<backend>/` precedent and leaving room for other runtimes),
   following the existing CLI example layout: `demo.py`, `demo_test.py`, `okf/` (the OKF
-  implementation package), `README.md`, `pyproject.toml`, `build.sh`, `uv.lock`.
-- Depends on `agentkernel[cli,openai]` plus `boto3` and `pyyaml`; **no changes to the ak-py
-  library** (no new config sections, extras, factories, or exports).
-- README documents: the OKF format, required AWS credentials/bucket setup, how to seed the
-  source folder, and a scripted walkthrough of the three flows (sync → ask → update).
+  implementation package), `sample_bundle/` (a small committed OKF bundle — see below),
+  `README.md`, `pyproject.toml`, `build.sh`, `uv.lock`.
+- Depends on `agentkernel[cli,openai]` plus `boto3` and `pyyaml` at runtime, and
+  `agentkernel[test]` as a dev dependency (the `Test` harness, as in `examples/cli/openai`);
+  **no changes to the ak-py library** (no new config sections, extras, factories, or exports).
+- A committed **`sample_bundle/`** (the `sales/{index.md, log.md, tables/orders.md, …}` tree)
+  ships with the example so the Consumer flow and the offline tests run without first doing an
+  S3 sync, and doubles as living documentation of the format.
+- README documents: the OKF format, a **local filesystem run path** (no AWS — point the bundle
+  at a local directory, see Storage abstraction), required AWS credentials/bucket setup for the
+  S3 path, how to seed the source folder, and a scripted walkthrough of the three flows
+  (sync → ask → update).
 
 ### Storage abstraction
 
@@ -74,13 +81,19 @@ Sources:
   - `write(path, content) -> None`
   - `list(prefix) -> list[str]` — recursive listing of document paths under a prefix
   - `exists(path) -> bool`
+- Deliberately **no metadata/mtime surface** — the interface stays blob-only. Consequences the
+  rest of the design relies on:
+  - sync freshness is decided by **content comparison**, not timestamps (see Use case 1), and
+  - a document's `timestamp` is derived wall-clock at write time (there is no source mtime to read).
 - Paths are bundle-relative POSIX paths (`tables/orders.md`); the storage maps them to its
   backend addressing.
 - Storage classes take **explicit constructor parameters** (bucket, prefix, region) — they never
   read global config (mirrors the shared-driver rule in core).
-- Two implementations in the example:
-  - `S3Storage` (boto3) — the primary backend; bundle root = `s3://<bucket>/<prefix>/`
-  - `FileSystemStorage` — local directory; used by `demo_test.py` and offline runs
+- Two implementations in the example, both first-class:
+  - `S3Storage` (boto3) — the cloud/production-like backend; bundle root = `s3://<bucket>/<prefix>/`
+  - `FileSystemStorage` — a local directory; the **no-AWS run path** documented in the README as
+    well as the backend used by `demo_test.py` and offline runs. Choosing the backend is the only
+    difference between running the example locally and against S3.
 - The **sync source folder** is read through the same `OKFStorage` interface (a second instance
   pointed at the source bucket/prefix) — no separate source-reader abstraction.
 
@@ -89,13 +102,19 @@ Sources:
 - In-memory KV cache (`dict[path, content]`) in front of storage, per the Design page:
   - reads are read-through: hit → return cached; miss → fetch from storage, store, return
   - writes update/invalidate the cached entry for that path
+- The cache fronts the **bundle** `OKFStorage` instance only. The **source** instance
+  (`list_source_files` / `read_source_file`) is read directly, uncached — matching the component
+  diagram (`Curator → source`, not through the cache) — since source reads happen once per sync.
 - Process-local and unbounded for the example; no TTL, no cross-process invalidation. Bundles are
   assumed small enough to hold in memory, so an unbounded cache is acceptable for the exploration.
 
 ### Agent-facing tools
 
-- Plain Python functions over one shared `OKFBundle` object (storage + cache + validation),
-  bound per agent via `OpenAIToolBuilder.bind([...])`.
+- Plain Python functions over one shared `OKFBundle` object (bundle storage + source storage +
+  cache + validation), bound per agent via `OpenAIToolBuilder.bind([...])`.
+  - The tools are thin closures over that single `OKFBundle`; the only thing that differs between
+    the Consumer, Producer, and Curator is **which subset** of tools each agent is bound — the
+    tool subset *is* the permission model (see Agents).
 - **Read tools**:
   - `list_concept(path)` — returns the directory's `index.md` content; when the directory has
     no `index.md` (optional in a minimally-opinionated bundle), returns a generated listing of
@@ -106,6 +125,9 @@ Sources:
     - `path` is a directory: recursively search every document under it
     - substring match (case-insensitive) against raw document text, no embeddings/ranking;
       returns matching documents' paths + the matching line(s) for context
+    - returns at most **N matching documents** (default 20) and notes when results were
+      truncated, so a broad keyword can't flood the agent's context (mirrors the library
+      `KnowledgeBase.read(limit=…)` behavior)
   - `get_related(path)` — parses markdown links in the document; returns linked bundle paths
 - **Link resolution** (shared by `get_related` and the write guardrail's link check):
   - **absolute** links (`/tables/orders.md`) resolve from the **bundle root**
@@ -114,9 +136,18 @@ Sources:
     **absolute-from-root** form as the canonical style so authored and validated links agree
 - **Write tools**:
   - `write_concept(path, content)` — create or replace a document, gated by write guardrails
-    (below); on success persists to storage and updates the cache
+    (below); on success persists to storage and updates the cache, then **regenerates the
+    affected directory's `index.md`** (see the invariant note)
 - **Special tools**:
   - `append_log(log_details)` — appends an entry under today's date section in `log.md`
+- **`index.md` is a tool-enforced invariant, `log.md` is a best-effort audit trail:**
+  - `index.md` drives progressive-disclosure navigation, so `write_concept` regenerates the
+    touched directory's `index.md` **in the write path itself** on every create/replace — the
+    index staying correct is never left to an agent's prompt.
+  - `log.md` is a human-facing history, not a navigation invariant; it is maintained through the
+    explicit `append_log` tool (per-write entries from the Producer, a per-run summary from the
+    Curator). A missed log entry degrades the audit trail but doesn't break the bundle, so this
+    stays prompt/flow-driven rather than automatic.
 - Tool errors (invalid path, missing document, failed validation) return descriptive error
   strings to the agent rather than raising — the agent can self-correct.
 
@@ -130,7 +161,8 @@ Sources:
   - the `type` field is absent (the spec's only required field)
   - standard optional fields are present but malformed: `tags` not a list, `timestamp` not
     ISO-8601, `resource` not a URL
-  - relative links in the body point outside the bundle or to non-`.md` targets
+  - links in the body (absolute-from-root **or** relative, both resolved per the shared link
+    resolution above) point outside the bundle or to non-`.md` targets
 - Missing optional fields (`title`, `description`, `timestamp`) produce a warning in the tool
   response, not a rejection — the agents' prompts instruct them to always populate these, but
   the format itself stays minimally opinionated.
@@ -146,9 +178,9 @@ Sources:
   - **Consumer** (read-only): `list_concept`, `read_concept`, `search_concept`, `get_related`.
     Q&A over the bundle; prompt instructs it to start discovery at the root `index.md`.
   - **Producer** (read + write): Consumer tools + `write_concept`, `append_log`.
-    Applies user-requested updates; prompt requires it to (1) validate-by-reading first,
-    (2) update the affected directory's `index.md` when adding/renaming documents,
-    (3) `append_log` after every successful write.
+    Applies user-requested updates; prompt requires it to (1) validate-by-reading first and
+    (2) `append_log` after every successful write. Updating the affected `index.md` is **not** a
+    prompt duty — `write_concept` does it automatically (see the invariant note above).
   - **Curator** (read + write + source access): Producer tools + `list_source_files()` /
     `read_source_file(path)`, thin wrappers over a **second `OKFStorage` instance** pointed at the
     source prefix (so "no separate source-reader abstraction" holds). Executes the sync flow on demand.
@@ -162,12 +194,21 @@ Sources:
   - list source `.md` files; for each, read content
   - transform into an OKF document: preserve/derive frontmatter (derive `title` from filename or
     first heading, set `timestamp`, default `type: Document` when absent)
-  - `write_concept` into the bundle under a `synced/`-style target path mirroring the source layout
-  - update the affected `index.md` files, `append_log` a per-run summary of created/updated docs
-- Idempotency: compare the **source-derived body only**, excluding the volatile derived
-  `timestamp`. A document is rewritten only when its source body differs from the bundle copy; on
-  an unchanged body the existing bundle `timestamp` is **preserved** (not restamped). Unchanged
-  files are skipped and the log entry says "skipped (unchanged)".
+  - `write_concept` into the bundle under a dedicated `synced/` subtree mirroring the source
+    layout (`write_concept` regenerates each touched `index.md` automatically)
+  - `append_log` a single per-run summary of created / updated / skipped docs
+- Idempotency (content-based, since `OKFStorage` exposes no mtime): compare the
+  **source-derived body only**, excluding the volatile derived `timestamp`. A document is
+  rewritten only when its source body differs from the bundle copy; on an unchanged body the
+  existing bundle `timestamp` is **preserved** (not restamped). Unchanged files are skipped and
+  the log entry says "skipped (unchanged)".
+  - Cost note: because freshness is content-based, each sync reads every already-synced bundle
+    document once to compare (and warms the cache for them). Acceptable under the "small bundle"
+    assumption above.
+- Conflict policy: **source wins**. If a synced document was later hand-edited via the Producer
+  and the source also changed, the bundle copy is overwritten and the overwrite is logged.
+  Sync only ever touches the `synced/` subtree, so hand-authored documents elsewhere in the
+  bundle are never affected.
 
 ### Use case 2 — ask questions (Consumer)
 
@@ -186,16 +227,19 @@ Sources:
 - **Unit tests (offline, no external deps)** — `FileSystemStorage` against a temp-directory
   bundle; no AWS and no model key:
   - format round-trip: write a valid document → read back identical content + parsed metadata
-  - guardrails: missing frontmatter / missing required field / out-of-bundle link → rejected
-    with reason
+  - guardrails: missing frontmatter / missing required field / out-of-bundle link (absolute
+    and relative) → rejected with reason
+  - `index.md` invariant: `write_concept` of a new document regenerates its directory's
+    `index.md` to include the new entry (asserted directly, not via agent prompt)
   - cache: second read served without a storage call; write refreshes the cached entry
-  - sync: seed a source dir → sync → bundle contains OKF docs, `index.md` and `log.md` updated;
-    re-sync with no source change writes nothing new (idempotency: unchanged bodies skipped,
-    `timestamp` preserved)
+  - sync: seed a source dir → sync → bundle contains OKF docs, `index.md` regenerated and
+    `log.md` summarized; re-sync with no source change writes nothing new (idempotency:
+    unchanged bodies skipped, `timestamp` preserved)
 - **Agent smoke test (requires a live model key)** — uses the `Test("demo.py")` harness (as in
-  `examples/cli/openai/demo_test.py`), which starts the real agents: Consumer answers a question
-  grounded in a seeded bundle. This is the one test that is not offline — it needs an OpenAI API
-  key and is skipped when none is present (matching how the other CLI examples behave in CI).
+  `examples/cli/openai/demo_test.py`), which starts the real agents: the Consumer answers a
+  question grounded in the committed `sample_bundle/` (no S3 sync needed). This is the one test
+  that is not offline — it needs an OpenAI API key and is skipped when none is present (matching
+  how the other CLI examples behave in CI).
 
 ## Component overview
 
@@ -214,7 +258,7 @@ graph LR
     KC[Knowledge cache<br/>in-memory KV]
     S[(OKFStorage ABC)]
     S3[(S3Storage<br/>bundle)]
-    FS[(FileSystemStorage<br/>tests)]
+    FS[(FileSystemStorage<br/>local + tests)]
     SRC[(S3 source folder<br/>via OKFStorage)]
 
     C --> R
@@ -239,27 +283,30 @@ graph LR
   suffice for the exploration).
 - No scheduler/cron infrastructure for the Curator (diagram shows it; the example triggers sync
   on demand).
+- No "reconcile / enrich" duties for the Curator (the diagram's link-fixing / bulk index
+  regeneration beyond the per-write `index.md` update). Sync-only for the first cut.
+- No stricter-than-spec validation profile: the example enforces OKF v0.1 exactly (only `type`
+  required); missing optional fields warn, they do not reject.
 - No vector/semantic search — `search_concept` is a path-scoped keyword (substring) search over
   raw document text, not ranked or embedding-based.
 - No content-safety guardrail provider integration for writes.
 - No distributed or persistent knowledge cache (in-memory per process only).
 - No REST/MCP/A2A exposure — CLI only.
 
+## Decisions (previously open, now settled)
+
+- **Placement**: `examples/cli/okf/openai/` (concept → runtime, per the
+  `examples/cli/knowledgebase/openai/<backend>/` precedent).
+- **Framework / interface**: OpenAI Agents SDK, interactive CLI (matching `examples/cli/openai`).
+- **Validation strictness**: follow OKF v0.1 exactly — only `type` required, missing optional
+  fields warn (a stricter house profile would undercut "this is what OKF is"). See Non-goals.
+- **Sync target layout**: a dedicated `synced/` subtree mirroring the source layout (not the
+  bundle root). See Use case 1.
+- **Sync conflict policy**: source wins. See Use case 1.
+- **Reconcile / enrich**: out of scope for the first cut. See Non-goals.
+
 ## Open questions
 
-- Placement is decided: `examples/cli/okf/openai/` (concept → runtime, per the
-  `examples/cli/knowledgebase/openai/<backend>/` precedent). Framework/interface defaults still to
-  confirm: OpenAI Agents SDK and interactive CLI.
-- Validation strictness: the design follows OKF v0.1 (only `type` required, missing
-  `title`/`description`/`timestamp` warn). Should this bundle enforce a stricter house profile
-  (reject on missing optional fields) instead?
-- Sync conflict policy: when a synced document was later hand-edited via the Producer and the
-  source file also changed, the proposal is **source wins** (bundle copy overwritten, logged).
-  Acceptable, or should edited docs be skipped/flagged?
-- Sync target layout: mirror the source folder structure under a dedicated subtree
-  (e.g. `synced/...`) vs. writing into the bundle root — proposal is a dedicated subtree.
-- Should the Curator also do the diagram's "reconcile / enrich" duties (link fixing, index
-  regeneration) in this exploration, or is sync-only enough for the first cut?
 - If the exploration succeeds, the follow-up decision is whether OKF is promoted into the
   library (as a `knowledgebase` sibling package with config/extras/tests) — out of scope here,
   but the storage ABC is shaped so that promotion doesn't require redesign.
