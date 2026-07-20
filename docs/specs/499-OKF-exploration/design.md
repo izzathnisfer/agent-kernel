@@ -137,13 +137,22 @@ Sources:
 - **Write tools**:
   - `write_concept(path, content)` — create or replace a document, gated by write guardrails
     (below); on success persists to storage and updates the cache, then **regenerates the
-    affected directory's `index.md`** (see the invariant note)
+    affected directory's `index.md`** as a flat mechanical listing (see the invariant note)
 - **Special tools**:
   - `append_log(log_details)` — appends an entry under today's date section in `log.md`
 - **`index.md` is a tool-enforced invariant, `log.md` is a best-effort audit trail:**
   - `index.md` drives progressive-disclosure navigation, so `write_concept` regenerates the
     touched directory's `index.md` **in the write path itself** on every create/replace — the
     index staying correct is never left to an agent's prompt.
+  - The regenerated index is a **flat mechanical listing** — one entry per document directly
+    under the directory (`[title](/path.md) — type`, title/description pulled from frontmatter),
+    not a merge that preserves hand-authored ordering, grouping, or prose. **This is a deliberate
+    tradeoff:** the format section frames `index.md` as a *curated* listing, but in a
+    synced/producer-driven bundle any curation of a directory's index survives only until the
+    next `write_concept` into that directory, which overwrites it with the generated form.
+    The exploration chooses navigation correctness (the index always reflects the directory's
+    real contents) over curation; preserving curated indexes across writes is out of scope
+    (see Non-goals).
   - `log.md` is a human-facing history, not a navigation invariant; it is maintained through the
     explicit `append_log` tool (per-write entries from the Producer, a per-run summary from the
     Curator). A missed log entry degrades the audit trail but doesn't break the bundle, so this
@@ -198,10 +207,12 @@ Sources:
     layout (`write_concept` regenerates each touched `index.md` automatically)
   - `append_log` a single per-run summary of created / updated / skipped docs
 - Idempotency (content-based, since `OKFStorage` exposes no mtime): compare the
-  **source-derived body only**, excluding the volatile derived `timestamp`. A document is
-  rewritten only when its source body differs from the bundle copy; on an unchanged body the
-  existing bundle `timestamp` is **preserved** (not restamped). Unchanged files are skipped and
-  the log entry says "skipped (unchanged)".
+  **full source-derived document — frontmatter *and* body — excluding only the volatile derived
+  `timestamp`**. A document is rewritten whenever any source-authored content differs from the
+  bundle copy, so a metadata-only source edit (a new `tag`, a changed `type` or `resource`)
+  re-syncs rather than being silently skipped; only the derived `timestamp` is ignored in the
+  comparison. On an unchanged document the existing bundle `timestamp` is **preserved** (not
+  restamped). Unchanged files are skipped and the log entry says "skipped (unchanged)".
   - Cost note: because freshness is content-based, each sync reads every already-synced bundle
     document once to compare (and warms the cache for them). Acceptable under the "small bundle"
     assumption above.
@@ -285,6 +296,9 @@ graph LR
   on demand).
 - No "reconcile / enrich" duties for the Curator (the diagram's link-fixing / bulk index
   regeneration beyond the per-write `index.md` update). Sync-only for the first cut.
+- No preservation of curated `index.md` content across writes — `write_concept` regenerates a
+  flat mechanical listing, so hand-authored ordering, grouping, and prose in a directory's index
+  do not survive the next write to that directory (see the `index.md` invariant note).
 - No stricter-than-spec validation profile: the example enforces OKF v0.1 exactly (only `type`
   required); missing optional fields warn, they do not reject.
 - No vector/semantic search — `search_concept` is a path-scoped keyword (substring) search over
