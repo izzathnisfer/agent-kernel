@@ -271,7 +271,7 @@ class AgentWhatsAppRequestHandler(RESTRequestHandler):
             return
 
         # Add text as the first request
-        requests.insert(0, AgentRequestText(text=text))
+        requests.insert(0, AgentRequestText(prompt=text))
 
         # Use from_number as session_id to maintain conversation context; a number an
         # agent already initiated a conversation with resolves to that session (overridable).

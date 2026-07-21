@@ -426,7 +426,7 @@ class AgentGmailRequestHandler(SessionIdResolver):
                 return None
 
             # Build request list: text first, then attachments
-            requests = [AgentRequestText(text=email_content)]
+            requests = [AgentRequestText(prompt=email_content)]
             requests.extend(attachments)
 
             # Log request summary
