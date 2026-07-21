@@ -113,6 +113,62 @@ Uncomment the `thread:` block in `config.yaml` to also record initiated
 conversations as AK conversation threads owned by the recipient (readable via
 `GET /api/v1/threads?user_id=...`).
 
+## Continuous integration
+
+This example is part of the **weekly integration test** suite
+(`.github/integration-test-config.yaml`, `aws-containerized` entry pointing at
+this directory), run by `.github/workflows/integration-test-weekly.yaml` —
+Sundays on schedule, or on demand via the Actions tab
+("Weekly Integration Tests" → "Run workflow"). Each run deploys this example
+fresh (against the shared VPC from the `examples/aws-serverless/openai` base
+deployment), runs its tests, then destroys the stack.
+
+Two test files run, for different things:
+
+- **`app_test.py`** — local unit tests (fakes for SQS/Slack), always run,
+  no deployed infrastructure needed.
+- **`app_deployment_test.py`** — a live smoke test against the actually
+  *deployed* ECS REST service: signs a real Slack `url_verification` request
+  and posts it to the `/slack/events` gateway route (replace trailing `/chat`
+  on `agent_invoke_url`), asserting the challenge is echoed back. This is the
+  check that would have caught a broken deployment (e.g. a missing
+  `gateway_endpoints` route, or a packaging failure in the container image) —
+  a local unit test can't see that, since it imports the same working source
+  tree the test runner already has. Skipped automatically unless
+  `AK_TEST_ENDPOINT` and `SLACK_SIGNING_SECRET` are set (which only the CI
+  workflow does), so a plain local `uv run pytest` is unaffected.
+
+### Running it yourself
+
+The CI workflow is just `.github/scripts/run_single_test.py` driven by
+`.github/integration-test-config.yaml` — you can run the exact same
+deploy → test → destroy cycle locally (with your own AWS credentials and a
+`TF_VAR_vpc_id`/`TF_VAR_private_subnet_ids` from an already-deployed
+`examples/aws-serverless/openai`):
+
+```bash
+export OPENAI_API_KEY=<...> TF_VAR_openai_api_key=<...>
+export TF_VAR_slack_bot_token=<...> TF_VAR_slack_signing_secret=<...>
+export TF_VAR_vpc_id=<...> TF_VAR_private_subnet_ids='["subnet-xxx","subnet-yyy"]'
+
+# from the repo root
+python .github/scripts/run_single_test.py \
+  --type aws-containerized --path examples/aws-containerized/slack-initiation --action deploy
+
+python .github/scripts/run_single_test.py \
+  --type aws-containerized --path examples/aws-containerized/slack-initiation --action test
+
+python .github/scripts/run_single_test.py \
+  --type aws-containerized --path examples/aws-containerized/slack-initiation --action destroy
+```
+
+`--action deploy` runs `terraform init` + `./deploy.sh local`; `--action test`
+reads the `agent_invoke_url` Terraform output, waits for the endpoint to come
+up, sets `AK_TEST_ENDPOINT`, and runs `uv run pytest` in this directory (both
+test files above); `--action destroy` tears everything down. To trigger the
+full CI run instead of running locally: GitHub → Actions →
+**Weekly Integration Tests** → **Run workflow**.
+
 ## Troubleshooting
 
 See the [containerized deployment README](../../../ak-deployment/ak-aws/containerized/README.md)
