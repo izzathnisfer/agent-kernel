@@ -1,0 +1,44 @@
+logging:
+  ak:
+    level: DEBUG
+
+# Slack integration settings
+slack:
+  agent: general
+
+# Session ID Mapping — presence of this block enables agent-initiated
+# conversations (the initiate_conversation system tool + reply resolution).
+# The store backend follows session.type.
+mapping_table:
+  prefix: "ak:session-map:"
+  ttl: 0
+
+session:
+  type: redis
+  redis:
+    prefix: "ak:scalable-openai:example:"
+    url: "redis://ak-openai-serverless-dev-examples-redis.zinik6.0001.apse2.cache.amazonaws.com:6379"
+
+execution:
+  mode: rest_sync
+  queues:
+    input:
+      url: "" # injected by Terraform via AK_EXECUTION__QUEUES__INPUT__URL
+      max_receive_count: 3
+    output:
+      url: "" # injected by Terraform via AK_EXECUTION__QUEUES__OUTPUT__URL
+      max_receive_count: 3
+  response_store:
+    type: redis
+    redis:
+      prefix: "ak:scalable-openai:response:"
+      url: "redis://ak-openai-serverless-dev-examples-redis.zinik6.0001.apse2.cache.amazonaws.com:6379"
+    retry_count: 5
+    delay: 5
+
+# Optional: uncomment to also record initiated conversations as AK threads
+# (readable over GET /api/v1/threads). The thread is owned by the recipient.
+# thread:
+#   type: redis
+#   redis:
+#     url: ""

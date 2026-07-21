@@ -105,6 +105,18 @@ Two rules to remember:
    `InitiationManager.get().get_messaging_integration_thread_id(session_id)` — a hit means the
    session was agent-initiated and the reply must be threaded under that platform thread id.
 
+Delivering an *ordinary* reply also needs the platform's routing context (e.g. a Slack channel
+id) that the outbound send requires but that `ChatService`'s response body has no room for. The
+request handler that receives the inbound message can attach it as a custom queue-message
+attribute when it enqueues (`SQSHandler.send_message_to_input_queue(...,
+custom_message_attributes=[...])`); an Agent Runner subclass overriding
+`_get_record_attributes`/`_send_to_output_queue` carries it from the Input Queue message to the
+Output Queue message; your `process_message` override reads it back via
+`SQSHandler.get_message_custom_attributes(record)`. See the runnable examples below for the full
+pattern end to end — none of it requires changes to Agent Kernel itself, since every step is a
+plain subclass of an existing extension point. The same recipe applies to any messaging
+integration, not just Slack — only the SDK used for parsing/signing/sending changes.
+
 ### Single-process REST deployments
 
 Implement `InitiationSender` on one of your handlers — `RESTAPI.run()` detects it and wires the
@@ -117,7 +129,14 @@ class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):
         return response["ts"]  # the messaging_integration_thread_id
 ```
 
-See `examples/api/slack-initiation/` for a runnable example.
+### Runnable examples
+
+- `examples/api/slack-initiation/` — single-process REST deployment.
+- `examples/aws-serverless/slack-initiation/` — AWS Lambda serverless deployment (three Lambdas:
+  request handler, agent runner, response handler), demonstrating the queue-deployment pattern
+  above.
+- `examples/aws-containerized/slack-initiation/` — AWS ECS containerized deployment, the same
+  pattern adapted to the two-service ECS shape.
 
 ## Reply resolution
 
@@ -131,6 +150,13 @@ identity fallback (unmapped ids behave exactly as before):
 - `POST /api/v1/chat` in queue deployments — note that a mapped `session_id` is **rewritten**, and
   the resolved id is returned in the response; poll with the returned `session_id`;
 - override `resolve_session_id(messaging_integration_thread_id)` on any handler to customize the logic.
+
+## Deployment scope
+
+Applicable to any deployment with a messaging integration wired in: single-process REST, ECS
+containerized, and AWS Lambda serverless (see the runnable examples above). **Not applicable to
+CLI** — it's a synchronous local REPL with no messaging platform and no reply-later model, so
+there's no delivery surface for a proactively sent message to arrive on.
 
 ## Deployment notes
 

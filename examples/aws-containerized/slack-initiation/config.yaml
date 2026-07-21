@@ -1,0 +1,46 @@
+logging:
+  ak:
+    level: DEBUG
+
+# Slack integration settings
+slack:
+  agent: general
+
+# Session ID Mapping — presence of this block enables agent-initiated
+# conversations (the initiate_conversation system tool + reply resolution).
+# The store backend follows session.type. table_name is injected by Terraform
+# via AK_MAPPING_TABLE__TABLE_NAME on the REST service only — the module has
+# no auto-injection for this one (unlike session/response-store), so
+# deploy/main.tf sets it explicitly; the agent runner never touches this table.
+mapping_table:
+  prefix: "ak:session-map:"
+  ttl: 0
+
+session:
+  type: dynamodb
+  dynamodb:
+    table_name: "" # injected by Terraform via AK_SESSION__DYNAMODB__TABLE_NAME
+
+execution:
+  mode: rest_sync
+  queues:
+    input:
+      url: "" # injected by Terraform via AK_EXECUTION__QUEUES__INPUT__URL
+      max_receive_count: 4
+    output:
+      url: "" # injected by Terraform via AK_EXECUTION__QUEUES__OUTPUT__URL
+      max_receive_count: 4
+  response_store:
+    type: dynamodb
+    retry_count: 10
+    delay: 3
+    dynamodb:
+      table_name: "" # injected by Terraform via AK_EXECUTION__RESPONSE_STORE__DYNAMODB__TABLE_NAME
+      ttl: 300
+
+# Optional: uncomment to also record initiated conversations as AK threads
+# (readable over GET /api/v1/threads). The thread is owned by the recipient.
+# thread:
+#   type: dynamodb
+#   dynamodb:
+#     table_name: "ak-slack-init-ecs-dev-thread_store"

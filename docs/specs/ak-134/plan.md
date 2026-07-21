@@ -57,6 +57,13 @@ Builds [spec.md](spec.md) in order; every iteration leaves the branch working an
 - **Files:** new `examples/api/slack-initiation/` (server, custom output consumer subclass, config.yaml with `mapping_table` + `thread`, README)
 - **Steps:** follow §Consumer changes user-contract steps 1–4 in the subclass; show the agent triggering `initiate_conversation`.
 - **Verify:** example `build.sh` runs; manual smoke per its README.
+- **Done — queue-deployment follow-up:** the REST example above was built first; the queue-deployment
+  half (the `process_message` override contract on ECS/Lambda) was deferred and later completed as
+  `examples/aws-serverless/slack-initiation/` (three Lambdas) and `examples/aws-containerized/slack-initiation/`
+  (two ECS services) — both demonstrate the same two-agent scenario over the queue architecture, with
+  channel/thread_ts routing context carried through custom SQS attributes (Agent Runner subclasses
+  overriding `_get_record_attributes`/`_send_to_output_queue`). No `agentkernel` library changes were
+  needed for either — every piece is a plain subclass of an existing extension point.
 
 ## Iteration 8: Terraform
 

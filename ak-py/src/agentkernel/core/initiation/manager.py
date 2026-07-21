@@ -1,5 +1,5 @@
 """
-InitiationManager — service façade for agent-initiated conversations (AK-134).
+InitiationManager — service façade for agent-initiated conversations
 
 Owns the Session ID Mapping lifecycle: resolving inbound platform thread ids to
 session ids (Request Handler direction), binding new mappings and initializing

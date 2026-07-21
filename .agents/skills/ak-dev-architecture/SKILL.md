@@ -307,7 +307,7 @@ ak-py/src/agentkernel/
 │   ├── logger.py            # Logging setup
 │   ├── util/                # Shared utilities
 │   │   └── driver/          # Shared DB connection drivers (Redis, Valkey, DynamoDB, Cosmos DB, Firestore)
-│   ├── initiation/          # Agent-initiated conversations (AK-134)
+│   ├── initiation/          # Agent-initiated conversations
 │   │   ├── manager.py        # InitiationManager, InitiationSender, SessionIdResolver
 │   │   ├── model.py          # InitiationMessage, INITIATION_MESSAGE_TYPE
 │   │   ├── tools.py          # InitiateConversationTool (SystemTool)

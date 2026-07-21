@@ -1,5 +1,5 @@
 """
-Session ID Mapping store base for agent-initiated conversations (AK-134).
+Session ID Mapping store base for agent-initiated conversations.
 
 The mapping associates the session id created by the Agent Runner with the
 messaging platform's thread identifier (``thread_ts`` for Slack, chat id for

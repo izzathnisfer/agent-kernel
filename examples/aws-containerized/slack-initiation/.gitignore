@@ -1,0 +1,10 @@
+.terraform
+requirements.txt
+dist
+dist.zip
+*.tfstate
+*.tfstate.backup
+
+deploy/backend.tf
+dist-agent-runner
+dist-rest-service

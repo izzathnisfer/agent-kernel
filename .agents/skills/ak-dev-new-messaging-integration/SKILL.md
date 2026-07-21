@@ -113,7 +113,7 @@ class Agent<Platform>RequestHandler(RESTRequestHandler):
 
         # 3. Create service, select agent, run
         # Resolve the platform-derived conversation id through the Session ID Mapping
-        # (agent-initiated conversations, AK-134): a thread an agent proactively started
+        # (agent-initiated conversations): a thread an agent proactively started
         # resolves to its initiated session; otherwise the id passes through unchanged.
         # RESTRequestHandler provides resolve_session_id() via the SessionIdResolver mixin.
         service = AgentService()

@@ -1,5 +1,5 @@
 """
-Agent-initiated conversations (AK-134).
+Agent-initiated conversations.
 
 Provides the Session ID Mapping store that associates the session created by
 the Agent Runner with the messaging platform's thread identifier, the
