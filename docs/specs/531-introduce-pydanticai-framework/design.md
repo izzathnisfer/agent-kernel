@@ -167,9 +167,10 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
 
 ### Tracing
 
-- Must add `pydanticai() -> Runner` to `BaseTrace` (`trace/base.py:6-47`) and `Trace`
-  (`trace/trace.py:8-94`) — mechanical, matching the existing five frameworks' identical
-  two-method pattern.
+- Must add `pydanticai() -> Runner` through the existing per-framework trace factory pattern —
+  mechanical, matching the existing five frameworks. Because the method is `@abstractmethod` on
+  `BaseTrace`, it must be implemented in every concrete `BaseTrace` subclass (`Trace`, `LangFuse`,
+  `OpenLLMetry`), not only `BaseTrace` itself; spec.md enumerates the exact files.
 - Must add `trace/langfuse/pydanticai.py` and `trace/openllmetry/pydanticai.py`, following the
   established pattern (`trace/langfuse/openai.py:12-41`): instrument once in `__init__`, wrap
   `run()` in AK's span for session_id/tags/input-output — the instrumentation step itself is
@@ -179,18 +180,29 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
   OpenInference package):
   - Register `OpenInferenceSpanProcessor()` on the active OpenTelemetry `TracerProvider` — a span
     processor, not an `.instrument()`-style instrumentor object.
-  - Enable Pydantic AI's own native instrumentation via `Agent.instrument_all()` (a global call,
-    made once — matches the OpenAI runner's pattern of not requiring the user to change how they
-    construct their own native agent), not per-agent `instrument=InstrumentationSettings(...)`,
-    since AK never constructs the user's native `Agent` object (see "Model and provider
-    selection").
+  - Enable Pydantic AI's own native instrumentation via the `Agent.instrument_all()` static method
+    (a global, process-wide toggle, called once — matches the OpenAI runner's pattern of not
+    requiring the user to change how they construct their own native agent), not the per-instance
+    `agent.instrument = InstrumentationSettings(...)` property (there is no `instrument=`
+    constructor keyword), since AK never constructs the user's native `Agent` object (see "Model
+    and provider selection").
 
 ### Packaging (`ak-py/pyproject.toml`)
 
 - Must add a `pydanticai` optional-dependency group:
-  - `pydantic-ai~=2.13.0` (patch-only within 2.13.x, i.e. `>=2.13.0,<2.14.0`, matching the
+  - `pydantic-ai-slim~=2.13.0` (patch-only within 2.13.x, i.e. `>=2.13.0,<2.14.0`, matching the
     LangGraph group's tightness) — confirmed, given Pydantic AI's fast release cadence; the
     ceiling moves forward deliberately as later versions are vetted, not automatically.
+  - **`pydantic-ai-slim`, not the full `pydantic-ai` meta-package** (correction from the isolated-venv
+    research this design was first written against): the repo resolves *all* extras into one shared
+    `ak-py/uv.lock`, so every extra must co-resolve with every other. The full `pydantic-ai==2.13.0`
+    always pulls `pydantic-ai-slim[…,mcp,…]` → `fastmcp-slim` → `py-key-value-aio>=0.4.4`, which is
+    unsatisfiable alongside AK's existing `mcp` extra (`fastmcp>=2.14.2,<3.0.0` → `py-key-value-aio<0.4.0`).
+    `pydantic-ai-slim` is the genuinely provider-agnostic core (no bundled providers, no `fastmcp`),
+    so the lock resolves cleanly — and it fits this design's "model/provider choice is entirely the
+    user's responsibility" principle better than the full package, which bundles a fixed provider set.
+    Consequence: `agentkernel[pydanticai]` installs no model provider; the user adds their own
+    (`pydantic-ai-slim[openai]`, `[anthropic]`, …), documented in the framework page and example.
   - `openinference-instrumentation-pydantic-ai>=0.1.17` — confirmed to exist (Arize-ai, PyPI, last
     released 2026-06-30), mirroring the `crewai`/`adk` groups' inclusion of their own
     instrumentation packages (see Tracing).
@@ -212,7 +224,9 @@ throughout, per `.agents/skills/ak-dev-new-framework-integration`.
 - Must add `examples/cli/pydanticai/demo.py`, mirroring `examples/cli/openai/demo.py`'s
   triage/math/weather shape, adapted to delegation-via-tool in place of `handoffs=[...]`.
 - Must add `docs/docs/frameworks/pydantic-ai.md` + a `docs/sidebars.js` entry, following the
-  `openai.md` template.
+  `openai.md` template, and add Pydantic AI to the framework enumerations in
+  `docs/docs/frameworks/overview.md` and the `ak-py/README.md` framework/session-key lists; spec.md
+  enumerates the exact surfaces.
 
 ## Non-goals
 
