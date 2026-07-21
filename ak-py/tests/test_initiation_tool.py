@@ -16,8 +16,8 @@ class DummyRunner(Runner):
         self._reply_prefix = reply_prefix
 
     async def run(self, agent, session, requests):
-        prompt = requests[0].text if isinstance(requests[0], AgentRequestText) else ""
-        return AgentReplyText(text=f"{self._reply_prefix}:{prompt}")
+        prompt = requests[0].prompt if isinstance(requests[0], AgentRequestText) else ""
+        return AgentReplyText(response=f"{self._reply_prefix}:{prompt}")
 
     async def stream(self, agent, session, requests):
         raise NotImplementedError()

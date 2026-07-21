@@ -73,7 +73,7 @@ def _initiate_conversation(target: str, prompt: str, user_id: str = "", agent: s
 
         def _run() -> None:
             try:
-                outcome["reply"] = asyncio.run(runtime.run(selected, session, [AgentRequestText(text=prompt)]))
+                outcome["reply"] = asyncio.run(runtime.run(selected, session, [AgentRequestText(prompt=prompt)]))
             except BaseException as e:
                 outcome["error"] = e
 
