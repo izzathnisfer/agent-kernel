@@ -216,9 +216,11 @@ uv run pytest test_okf.py  # offline unit tests only
 - `test_okf.py` — offline: format round-trip, write guardrails, the `index.md`
   invariant, cache behavior, storage `last_modified`, and timestamp-based sync
   idempotency (all on `FileSystemStorage`).
-- `demo_test.py` — a live-model smoke test: the Consumer answers a question
-  grounded in `sample_bundle/`. Skipped automatically when `OPENAI_API_KEY` is
-  unset.
+- `demo_test.py` — a live-model end-to-end test of the full three-role flow: the
+  Curator syncs `sample_source/` into a freshly cleaned `sample_bundle/`, the
+  Consumer answers a question grounded in the synced content, and the Producer
+  writes a new concept that the Consumer then reads back. Skipped automatically
+  when `OPENAI_API_KEY` is unset.
 
 ## Design notes and limitations
 
