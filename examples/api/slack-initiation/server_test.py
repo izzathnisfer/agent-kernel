@@ -145,7 +145,7 @@ def test_get_requester_id_reads_slack_user_from_body():
     from server import get_requester_id
 
     requests = [
-        AgentRequestText(text="tell <@U0RECIPIENT> that I'll be late"),
+        AgentRequestText(prompt="tell <@U0RECIPIENT> that I'll be late"),
         AgentRequestAny(name="body", content={"user": "U0REQUESTER", "channel": "C1"}),
     ]
     context = ToolContext(runtime=None, agent=None, session=None, requests=requests)
@@ -162,7 +162,7 @@ def test_get_requester_id_returns_empty_without_body():
 
     from server import get_requester_id
 
-    context = ToolContext(runtime=None, agent=None, session=None, requests=[AgentRequestText(text="hi")])
+    context = ToolContext(runtime=None, agent=None, session=None, requests=[AgentRequestText(prompt="hi")])
     context.set()
     try:
         assert get_requester_id() == ""
