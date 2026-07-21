@@ -16,6 +16,9 @@ import pytest
 os.environ["SLACK_SIGNING_SECRET"] = "test-signing-secret"
 os.environ["SLACK_BOT_TOKEN"] = "xoxb-test-token"
 
+from agentkernel.core.initiation import InitiationManager  # noqa: E402
+from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore  # noqa: E402
+
 # Import the example modules once, at collection time, before any test's monkeypatched
 # AKConfig is in effect — see lambda_test.py's identical note for why this matters
 # (agentkernel.aws eagerly reads execution.queues.*.max_receive_count/no_of_consumers
@@ -24,8 +27,6 @@ os.environ["SLACK_BOT_TOKEN"] = "xoxb-test-token"
 import app_agent_runner  # noqa: E402,F401
 import slack_output_consumer  # noqa: E402,F401
 import slack_request_handler  # noqa: E402,F401
-from agentkernel.core.initiation import InitiationManager  # noqa: E402
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore  # noqa: E402
 
 
 class FakeMappingTableCfg:
@@ -168,6 +169,7 @@ class TestSlackECSRequestHandler:
         from agentkernel.core import AgentRequestAny, ToolContext
         from agentkernel.core.chat_service import RequestBuilder
         from agentkernel.core.model import BaseRunRequest
+
         from app_agent_runner import get_requester_id
 
         calls = []
