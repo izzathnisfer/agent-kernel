@@ -13,9 +13,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "agentkernel[test]>=0.6.1",
-    # ragas (pulled in by the test extra) imports a module that
-    # langchain-community removed in 0.4.2; pin to the last working release.
-    "langchain-community<0.4.2",
     "black==26.5.1",
     "isort>=5.0.0",
     "mypy>=1.0.0",
