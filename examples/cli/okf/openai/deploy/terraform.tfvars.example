@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and edit. Bucket names must be globally unique.
+region             = "us-east-1"
+bundle_bucket_name = "my-okf-bundle-bucket"
+bundle_prefix      = "sales"
+source_bucket_name = "my-okf-source-bucket"
+source_prefix      = "incoming"

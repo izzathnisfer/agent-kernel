@@ -101,15 +101,19 @@ Sources:
 
 ### Storage abstraction
 
-- `OKFStorage` ABC with a minimal blob-store surface:
+- `OKFStorage` ABC with a mostly-blob surface plus one metadata probe:
   - `read(path) -> str` — raises a not-found error for missing paths
   - `write(path, content) -> None`
   - `list(prefix) -> list[str]` — recursive listing of document paths under a prefix
   - `exists(path) -> bool`
-- Deliberately **no metadata/mtime surface** — the interface stays blob-only. Consequences the
-  rest of the design relies on:
-  - sync freshness is decided by **content comparison**, not timestamps (see Use case 1), and
-  - a document's `timestamp` is derived wall-clock at write time (there is no source mtime to read).
+  - `last_modified(path) -> datetime | None` — a path's last-modified time without reading its
+    content (`FileSystemStorage` uses file mtime; `S3Storage` uses the object's `LastModified`)
+- The surface stays **content-only except for `last_modified`** — the single metadata probe sync
+  needs. Consequences the rest of the design relies on:
+  - sync freshness is decided by the source file's **last-modified time**, recorded on the synced
+    document as `source_timestamp` (see Use case 1), and
+  - a document's `timestamp` frontmatter is the wall-clock **write** time, kept separate from the
+    source mtime that drives freshness.
 - Paths are bundle-relative POSIX paths (`tables/orders.md`); the storage maps them to its
   backend addressing.
 - Storage classes take **explicit constructor parameters** (bucket, prefix, region) — they never
@@ -175,7 +179,7 @@ Sources:
     under the directory (`[title](/path.md) — type`, title/description pulled from frontmatter),
     not a merge that preserves hand-authored ordering, grouping, or prose. **This is a deliberate
     tradeoff:** the format section frames `index.md` as a *curated* listing, but in a
-    synced/producer-driven bundle any curation of a directory's index survives only until the
+    producer/curator-driven bundle any curation of a directory's index survives only until the
     next `write_concept` into that directory, which overwrites it with the generated form.
     The exploration chooses navigation correctness (the index always reflects the directory's
     real contents) over curation; preserving curated indexes across writes is out of scope
@@ -232,29 +236,28 @@ Sources:
 - Interface: interactive `CLI.main()` (as in `examples/cli/openai/demo.py`); the user switches
   agents with the CLI's agent selection.
 
-### Use case 1 — sync source S3 folder into the bundle (Curator)
+### Use case 1 — sync source folder into the bundle (Curator)
 
-- Triggered on demand from the CLI (e.g. "sync the source folder"), not by a scheduler.
+- A deterministic `sync_source()` tool the Curator invokes; triggered on demand from the CLI
+  (e.g. "sync the source folder"), not by a scheduler.
 - Flow (Curator Flow page, without the scheduler):
-  - list source `.md` files; for each, read content
+  - list source `.md` files; for each, read content and its `last_modified` time
   - transform into an OKF document: preserve/derive frontmatter (derive `title` from filename or
-    first heading, set `timestamp`, default `type: Document` when absent)
+    first heading, default `type: Document` when absent), record the source's last-modified time as
+    `source_timestamp`, and stamp the write `timestamp`
   - `write_concept` into the bundle under a dedicated `synced/` subtree mirroring the source
     layout (`write_concept` regenerates each touched `index.md` automatically)
   - `append_log` a single per-run summary of created / updated / skipped docs
-- Idempotency (content-based, since `OKFStorage` exposes no mtime): compare the
-  **full source-derived document — frontmatter *and* body — excluding only the volatile derived
-  `timestamp`**. A document is rewritten whenever any source-authored content differs from the
-  bundle copy, so a metadata-only source edit (a new `tag`, a changed `type` or `resource`)
-  re-syncs rather than being silently skipped; only the derived `timestamp` is ignored in the
-  comparison. On an unchanged document the existing bundle `timestamp` is **preserved** (not
-  restamped). Unchanged files are skipped and the log entry says "skipped (unchanged)".
-  - Cost note: because freshness is content-based, each sync reads every already-synced bundle
-    document once to compare (and warms the cache for them). Acceptable under the "small bundle"
-    assumption above.
-- Conflict policy: **source wins**. If a synced document was later hand-edited via the Producer
-  and the source also changed, the bundle copy is overwritten and the overwrite is logged.
-  Sync only ever touches the `synced/` subtree, so hand-authored documents elsewhere in the
+- Idempotency (**timestamp-based**): the synced document stores the source file's last-modified
+  time as `source_timestamp`. On a re-run a file is skipped when its current last-modified time
+  equals the recorded `source_timestamp`; any change to that time re-syncs the document. The
+  volatile write `timestamp` is not part of the comparison. When `last_modified` is unavailable
+  (`None`), the file is always re-synced.
+  - Cost note: each sync reads every already-synced bundle document once to compare `source_timestamp`
+    (and warms the cache for them). Acceptable under the "small bundle" assumption above.
+- Conflict policy: **source wins**. If a synced document was later hand-edited via the Producer and
+  the source's last-modified time then moves, the bundle copy is overwritten and the overwrite is
+  logged. Sync only ever touches the `synced/` subtree, so hand-authored documents elsewhere in the
   bundle are never affected.
 
 ### Use case 2 — ask questions (Consumer)
@@ -279,9 +282,11 @@ Sources:
   - `index.md` invariant: `write_concept` of a new document regenerates its directory's
     `index.md` to include the new entry (asserted directly, not via agent prompt)
   - cache: second read served without a storage call; write refreshes the cached entry
-  - sync: seed a source dir → sync → bundle contains OKF docs, `index.md` regenerated and
-    `log.md` summarized; re-sync with no source change writes nothing new (idempotency:
-    unchanged bodies skipped, `timestamp` preserved)
+  - storage `last_modified` reports file mtime and `None` for a missing path; source tools are
+    read-only (reading the source creates no bundle document, no source write/delete tool exists)
+  - sync: seed a source dir with pinned mtimes → sync creates OKF docs under `synced/`, `index.md`
+    regenerated and `log.md` summarized; re-sync with unchanged source mtimes writes nothing new
+    (timestamp idempotency), and bumping one source file's mtime re-syncs just that file
 - **Agent smoke test (requires a live model key)** — uses the `Test("demo.py")` harness (as in
   `examples/cli/openai/demo_test.py`), which starts the real agents: the Consumer answers a
   question grounded in the committed `sample_bundle/` (no S3 sync needed). This is the one test
@@ -356,6 +361,8 @@ graph LR
   fields warn (a stricter house profile would undercut "this is what OKF is"). See Non-goals.
 - **Sync target layout**: a dedicated `synced/` subtree mirroring the source layout (not the
   bundle root). See Use case 1.
+- **Sync idempotency**: timestamp-based — the synced document records the source's last-modified
+  time (`source_timestamp`) and a re-sync skips files whose source mtime is unchanged. See Use case 1.
 - **Sync conflict policy**: source wins. See Use case 1.
 - **Reconcile / enrich**: out of scope for the first cut. See Non-goals.
 - **S3 provisioning**: a `deploy/` Terraform module creates the two buckets (RW bundle, RO

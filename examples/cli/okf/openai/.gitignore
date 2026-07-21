@@ -1,0 +1,19 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+report.html
+# Local Terraform state / plugin cache (deploy/)
+deploy/.terraform/
+deploy/*.tfstate
+deploy/*.tfstate.*
+deploy/*.tfplan
+# Local bundle scratch dirs used when trying the demo outside sample_bundle/
+scratch_bundle/
+scratch_source/
+sample_source/*
+sample_bundle

@@ -36,6 +36,7 @@ Command-line interface examples for local development and testing:
 - **`multi/`** - Multi-agent examples combining different frameworks
 - **`openai/`** - OpenAI Agent SDK integration examples
 - **`knowledgebase/openai/`** - OpenAI Agents knowledge base demos split into `chromadb/`, `neo4j/`, `starburst/`, and `multi/`
+- **`okf/openai/`** - Open Knowledge Format (OKF) example: markdown knowledge bundles navigated like a file system, with Consumer/Producer/Curator agents, pluggable local-filesystem or S3 storage, and a `deploy/` Terraform module for S3 provisioning
 
 ### 📁 Containerized Examples (`/examples/containerized`)
 

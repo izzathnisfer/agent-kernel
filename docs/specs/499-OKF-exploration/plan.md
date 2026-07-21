@@ -71,16 +71,19 @@ below point into `design.md`.
 
 ## Iteration 5: Sync flow (Curator, Use case 1)
 
-- **Goal:** On-demand, content-based idempotent sync of the source folder into the `synced/` subtree.
-- **Files:** `okf/sync.py` (a function/tool the Curator invokes).
+- **Goal:** On-demand, timestamp-based idempotent sync of the source folder into the `synced/` subtree.
+- **Files:** `okf/sync.py` (a function/tool the Curator invokes); adds `OKFStorage.last_modified`.
 - **Steps:**
-  1. List source `.md`; for each, transform to an OKF doc (derive `title`, set `timestamp`, default
-     `type: Document`); `write_concept` under `synced/` mirroring source layout.
-  2. Idempotency by full source-derived content comparison **excluding only the derived `timestamp`**;
-     preserve existing `timestamp` on unchanged docs; skip unchanged (design → Idempotency).
-  3. Conflict policy source-wins; `append_log` one per-run created/updated/skipped summary.
-- **Verify:** unit test — seed source dir → sync creates OKF docs + regenerated `index.md` + `log.md`
-  summary; re-sync with no source change writes nothing (unchanged skipped, `timestamp` preserved).
+  1. Add `last_modified(path)` to `OKFStorage` (file mtime / S3 `LastModified`), surfaced on the
+     bundle as `source_last_modified`.
+  2. List source `.md`; for each, transform to an OKF doc (derive `title`, default `type: Document`,
+     record the source mtime as `source_timestamp`, stamp the write `timestamp`); `write_concept`
+     under `synced/` mirroring source layout.
+  3. Idempotency by comparing the current source mtime to the recorded `source_timestamp`; skip
+     unchanged; conflict policy source-wins; `append_log` one per-run created/updated/skipped summary.
+- **Verify:** unit test — seed a source dir with pinned mtimes → sync creates OKF docs + regenerated
+  `index.md` + `log.md` summary; re-sync with unchanged mtimes writes nothing (idempotency); bumping
+  one file's mtime re-syncs just that file. Plus a `last_modified` unit test.
 
 ## Iteration 6: Agents, CLI wiring, and `sample_bundle/`
 
@@ -104,8 +107,9 @@ below point into `design.md`.
 - **Files:** `examples/cli/okf/openai/demo_test.py` (agent smoke test) and the offline unit test
   module(s) accumulated in Iterations 2–5.
 - **Steps:**
-  1. Consolidate offline unit tests (format round-trip, guardrails, `index.md` invariant, cache, sync
-     idempotency) — all on `FileSystemStorage`, no AWS, no model key (design → Testing).
+  1. Consolidate offline unit tests (format round-trip, guardrails, `index.md` invariant, cache,
+     `last_modified`, timestamp-based sync idempotency) — all on `FileSystemStorage`, no AWS, no
+     model key (design → Testing).
   2. `demo_test.py` using the `Test("demo.py")` harness (pattern from
      `examples/cli/openai/demo_test.py`): Consumer answers a `sample_bundle/`-grounded question; skipped
      when no OpenAI key is present.
