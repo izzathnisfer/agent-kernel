@@ -19,8 +19,10 @@ against S3, chosen with the ``OKF_BACKEND`` environment variable:
   The buckets are provisioned by the ``deploy/`` Terraform module; ``S3Storage``
   assumes they already exist.
 
-Note: running the producer or curator flows mutates the bundle directory. When
-using the committed ``sample_bundle/``, reset it with ``git checkout sample_bundle``.
+Note: the default ``sample_bundle/`` is git-ignored scratch — it is empty on a
+fresh checkout and populated by the curator sync. Running the producer or curator
+flows mutates it; reset it any time with ``rm -rf sample_bundle`` (the next sync
+repopulates it).
 """
 
 import logging
@@ -122,14 +124,29 @@ curator = Agent(
     handoff_description="Manages the bundle and syncs markdown from the read-only source folder.",
     instructions=(
         "You are the curator of an Open Knowledge Format (OKF) bundle. You have the producer's "
-        "read/write tools plus READ-ONLY access to a source folder.\n\n"
-        "When the user asks to sync (e.g. 'sync the source folder'), call sync_source(): it reads "
-        "every markdown file from the source, transforms each into an OKF document under the "
-        "synced/ subtree, and writes new or changed documents. Freshness is timestamp-based — a "
-        "file whose source last-modified time is unchanged since the previous sync is skipped — and "
-        "it logs a per-run summary. Use list_source_files / read_source_file to inspect the source "
-        "before or after a sync. You can never write to the source — only read it. For direct "
-        "bundle edits, follow the same write_concept + append_log workflow as the producer."
+        "read/write tools plus READ-ONLY access to a source folder — you can never write to the "
+        "source, only read it.\n\n"
+        "When the user asks you to import or organize the source folder, do NOT just mirror "
+        "filenames — build a well-structured, navigable knowledge bundle:\n"
+        "1. Call list_source_files(), then read each file with read_source_file().\n"
+        "2. Analyze the content and split it into meaningful concepts, filing each under a "
+        "top-level category subfolder that reflects WHAT it is:\n"
+        "   - characters/    — people and character profiles\n"
+        "   - places/        — locations and settings\n"
+        "   - incidents/     — events, cases, and crimes\n"
+        "   - things/        — significant objects and artifacts\n"
+        "   - relationships/ — notable connections between characters, places, or incidents\n"
+        "   - themes/        — recurring ideas and motifs\n"
+        "3. Write each concept with write_concept(path, content) as a full OKF document: YAML "
+        "frontmatter (type, title, description, an ISO-8601 timestamp, and relevant tags) followed "
+        "by a markdown body. Cross-link related concepts with absolute-from-root links like "
+        "/characters/irene_adler.md so the bundle forms a graph. index.md is regenerated for you.\n"
+        "4. When the import is done, call append_log with a short summary of what you created.\n\n"
+        "For a quick VERBATIM import instead (no reorganizing), call sync_source(): it mirrors "
+        "every source file into the synced/ subtree, timestamp-based and idempotent (files whose "
+        "source last-modified time is unchanged are skipped). Use list_source_files / "
+        "read_source_file to inspect the source at any time, and the same write_concept + "
+        "append_log workflow as the producer for direct bundle edits."
     ),
     tools=OKFTools.select_tools(bundle, OKFTools.CURATOR_TOOLS),
 )

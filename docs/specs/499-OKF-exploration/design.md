@@ -61,15 +61,17 @@ Sources:
 - Lives at `examples/cli/okf/openai/` (concept → runtime, mirroring the
   `examples/cli/knowledgebase/openai/<backend>/` precedent and leaving room for other runtimes),
   following the existing CLI example layout: `demo.py`, `demo_test.py`, `okf/` (the OKF
-  implementation package), `sample_bundle/` (a small committed OKF bundle — see below),
+  implementation package), `sample_source/` (committed sample markdown the Curator syncs — see below),
   `deploy/` (Terraform that provisions the S3 buckets — see Deployment), `README.md`,
   `pyproject.toml`, `build.sh`, `uv.lock`.
 - Depends on `agentkernel[cli,openai]` plus `boto3` and `pyyaml` at runtime, and
   `agentkernel[test]` as a dev dependency (the `Test` harness, as in `examples/cli/openai`);
   **no changes to the ak-py library** (no new config sections, extras, factories, or exports).
-- A committed **`sample_bundle/`** (the `sales/{index.md, log.md, tables/orders.md, …}` tree)
-  ships with the example so the Consumer flow and the offline tests run without first doing an
-  S3 sync, and doubles as living documentation of the format.
+- The committed sample data is **`sample_source/`** (a small set of plain-markdown documents).
+  The OKF **bundle** it syncs into (`sample_bundle/`) is *generated* by the Curator sync and is
+  **not committed** (git-ignored): a fresh checkout starts with an empty bundle and is populated
+  by running the sync. The offline tests build their own bundles in temp directories and never
+  depend on a committed one.
 - README documents: the OKF format, a **local filesystem run path** (no AWS — point the bundle
   at a local directory, see Storage abstraction), the S3 path (provision the two buckets and
   their IAM policies with the `deploy/` Terraform — see Deployment — then point the demo at
@@ -223,7 +225,13 @@ Sources:
     prompt duty — `write_concept` does it automatically (see the invariant note above).
     **No source access** — the Producer only ever touches the bundle.
   - **Curator** (read + write + read-only source): Producer tools + the source tools
-    `list_source_files()` / `read_source_file(path)`. Executes the sync flow on demand.
+    `list_source_files()` / `read_source_file(path)`. Executes the sync flow on demand. Beyond the
+    deterministic `sync_source()` mirror, the Curator's *prompt* also drives a **categorized
+    import**: it reads the source and authors concepts into meaningful category subtrees (e.g.
+    `characters/`, `places/`, `incidents/`, `things/`, `relationships/`, `themes/`) via
+    `write_concept`, cross-linking related concepts. This uses only tools it already holds, so the
+    tool/permission contract is unchanged — the categorization is a prompt/demo choice, not new
+    Curator tooling.
 - **Only the Curator has source access, and it is read-only.** The source is exposed *only*
   through `list_source_files()` / `read_source_file(path)` — thin wrappers over a **second
   `OKFStorage` instance** pointed at the source bucket/prefix (so "no separate source-reader
@@ -288,10 +296,13 @@ Sources:
     regenerated and `log.md` summarized; re-sync with unchanged source mtimes writes nothing new
     (timestamp idempotency), and bumping one source file's mtime re-syncs just that file
 - **Agent smoke test (requires a live model key)** — uses the `Test("demo.py")` harness (as in
-  `examples/cli/openai/demo_test.py`), which starts the real agents: the Consumer answers a
-  question grounded in the committed `sample_bundle/` (no S3 sync needed). This is the one test
-  that is not offline — it needs an OpenAI API key and is skipped when none is present (matching
-  how the other CLI examples behave in CI).
+  `examples/cli/openai/demo_test.py`), which starts the real agents and drives the full three-role
+  flow over the committed `sample_source/`: the Curator syncs the source into a freshly cleaned
+  `sample_bundle/`, the Consumer answers a question grounded in the synced content, and the
+  Producer writes a new concept the Consumer then reads back (proving a write is visible
+  end-to-end across the shared in-process bundle). This is the one test that is not offline — it
+  needs an OpenAI API key and is skipped when none is present (matching how the other CLI examples
+  behave in CI).
 
 ## Component overview
 
@@ -339,8 +350,10 @@ graph LR
   policies only; attaching those policies to the principal that runs the demo (and supplying its
   credentials) is left to the operator. No remote Terraform state backend is required (the
   optional `backend.tf` can be deleted for local state).
-- No "reconcile / enrich" duties for the Curator (the diagram's link-fixing / bulk index
-  regeneration beyond the per-write `index.md` update). Sync-only for the first cut.
+- No *automated* "reconcile / enrich" duties for the Curator (the diagram's link-fixing / bulk
+  index regeneration beyond the per-write `index.md` update) as dedicated tooling. The
+  deterministic `sync_source()` stays a raw mirror; the richer categorized import is prompt-driven
+  via `write_concept` (see Agents), not new Curator tooling.
 - No preservation of curated `index.md` content across writes — `write_concept` regenerates a
   flat mechanical listing, so hand-authored ordering, grouping, and prose in a directory's index
   do not survive the next write to that directory (see the `index.md` invariant note).

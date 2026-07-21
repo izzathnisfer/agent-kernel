@@ -61,15 +61,16 @@ async def test_curator_syncs_source(test_client):
     # Single-line message: the Test harness pairs one send() with one CLI turn,
     # and the CLI reads stdin one line at a time (skipping blank lines), so a
     # multi-line prompt would desync request/response for the rest of the run.
-    await test_client.send(
-        "Sync the source folder into the bundle. As you process each document, analyze its "
-        "content and organize it into appropriate category subfolders: characters/ (people and "
-        "character profiles), places/ (locations and settings), incidents/ (events, cases, and "
-        "crimes), objects/ (significant items and artifacts), and themes/ (recurring concepts "
-        "and motifs). Tag each document with relevant cross-references to related categories."
-    )
+    #
+    # Ask for the VERBATIM mirror (sync_source) rather than the curator's
+    # categorized import, so this setup step stays deterministic — sync_source()
+    # mirrors the source layout under synced/ and its correctness is unit-tested
+    # offline in test_okf.py. Assert against that output, not the model's phrasing.
+    await test_client.send("Do a verbatim import of the source folder by calling sync_source() — no reorganizing.")
     response = (test_client.last_agent_response or "").lower()
-    assert "created" in response or "synced" in response or "sync" in response
+    assert "sync" in response
+    assert (BUNDLE_DIR / "synced").is_dir()
+    assert any((BUNDLE_DIR / "synced").rglob("*.md"))
 
 
 @pytest.mark.order(2)

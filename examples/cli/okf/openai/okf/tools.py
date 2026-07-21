@@ -255,7 +255,7 @@ class OKFTools:
             return f"Error: document '{path}' could not be parsed: {exc}"
         meta_lines = [f"{key}: {value}" for key, value in doc.metadata.items()]
         parsed = "\n".join(meta_lines) if meta_lines else "(none)"
-        return f"# {target}\n\nParsed metadata:\n{parsed}\n\n---\n\n{content}"
+        return f"# {target}\n\nParsed metadata:\n{parsed}\n\n---\n\n{doc.body.strip()}"
 
     @staticmethod
     def op_search_concept(bundle: OKFBundle, path: str, keyword: str, limit: int = DEFAULT_SEARCH_LIMIT) -> str:
