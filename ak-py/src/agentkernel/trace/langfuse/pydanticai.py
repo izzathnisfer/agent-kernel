@@ -21,18 +21,7 @@ class LangFusePydanticAIRunner(PydanticAIRunner):
         super().__init__()
         self._client = client
         self._log = logging.getLogger("ak.trace.langfuse.pydanticai")
-
-        # Unlike the other frameworks (which have no OTel support of their own and depend entirely on
-        # an OpenInference `.instrument()` patch), Pydantic AI emits OTel spans natively. Turn that on
-        # process-wide via the `Agent.instrument_all()` static toggle — AK never constructs the user's
-        # own Agent, so a per-instance `instrument=` setting would never reach it.
         Agent.instrument_all()
-
-        # `instrument_all()` alone already produces OTel GenAI-semantic-convention spans that Langfuse
-        # (OTel-based since v3) ingests. The OpenInferenceSpanProcessor reshapes those spans into the
-        # OpenInference schema — supplementary here (useful for OpenInference consumers like Arize
-        # Phoenix), bundled to match the crewai/adk convention, not the sole tracing source it is for
-        # the other frameworks. LangFuse.init() has already installed the SDK TracerProvider by now.
         tracer_provider = trace_api.get_tracer_provider()
         if hasattr(tracer_provider, "add_span_processor"):
             tracer_provider.add_span_processor(OpenInferenceSpanProcessor())
