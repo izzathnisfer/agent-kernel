@@ -137,6 +137,9 @@ openllmetry = [
 redis = [
     { name = "redis" },
 ]
+sandbox-docker = [
+    { name = "docker" },
+]
 slack = [
     { name = "httpx" },
     { name = "slack-bolt" },
@@ -202,6 +205,7 @@ requires-dist = [
     { name = "crewai", marker = "extra == 'crewai'", specifier = ">=1.15.0" },
     { name = "datasets", marker = "extra == 'test'", specifier = ">=2.14.0" },
     { name = "deprecated", specifier = ">=1.2.18" },
+    { name = "docker", marker = "extra == 'sandbox-docker'", specifier = ">=7.0.0" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.118.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.14.2,<3.0.0" },
     { name = "google-adk", marker = "extra == 'adk'", specifier = ">=1.14.1" },
@@ -259,7 +263,7 @@ requires-dist = [
     { name = "valkey", marker = "extra == 'valkey'", specifier = ">=6.0.0" },
     { name = "walledai", marker = "extra == 'walledai'", specifier = ">=4.9.3" },
 ]
-provides-extras = ["auth", "langfuse", "openllmetry", "crewai", "langgraph", "smolagents", "cli", "aws", "azure", "redis", "valkey", "thread", "neo4j", "chromadb", "trino", "openai", "adk", "walledai", "api", "slack", "whatsapp", "messenger", "instagram", "telegram", "teams", "gmail", "gcp", "test", "a2a", "mcp", "multimodal"]
+provides-extras = ["auth", "langfuse", "openllmetry", "crewai", "langgraph", "smolagents", "cli", "aws", "azure", "redis", "valkey", "thread", "neo4j", "chromadb", "trino", "openai", "adk", "walledai", "api", "slack", "whatsapp", "messenger", "instagram", "telegram", "teams", "gmail", "gcp", "test", "a2a", "mcp", "multimodal", "sandbox-docker"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -350,9 +354,9 @@ name = "aiologic"
 version = "0.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "sniffio", marker = "python_full_version < '3.13'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
-    { name = "wrapt", marker = "python_full_version < '3.13'" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+    { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/53/a7/809482759f40079f4c4328c7318bf569ae25d457f5017aad30a1b9aafedc/aiologic-0.17.0.tar.gz", hash = "sha256:65aa058e858c94cd208badb188e7f00b54dcabb3ba85b34f794db98074d108b9", size = 251625, upload-time = "2026-06-14T12:24:35.367Z" }
 wheels = [
@@ -522,7 +526,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "werkzeug", marker = "python_full_version < '3.13'" },
+    { name = "werkzeug" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1d/be/5535830e0658e9668093941b3c33b0ea03eceadbf6bd6b7870aa37ef071a/azure_functions-1.24.0.tar.gz", hash = "sha256:18ea1607c7a7268b7a1e1bd0cc28c5cc57a9db6baaacddb39ba0e9f865728187", size = 134495, upload-time = "2025-10-06T19:08:08.612Z" }
 wheels = [
@@ -539,7 +543,7 @@ resolution-markers = [
     "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "werkzeug", marker = "python_full_version >= '3.13'" },
+    { name = "werkzeug" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a5/49/5af2f12a4ac49c5549a4a943f7b78650c98a41c776f8360ca506db246f91/azure_functions-2.1.0.tar.gz", hash = "sha256:f0d95bf53569ff32a7258a0ea7d727d1a174183c79e8240760d90876b3d32acd", size = 145464, upload-time = "2026-04-13T16:14:49.299Z" }
 wheels = [
@@ -1190,8 +1194,8 @@ name = "culsans"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiologic", marker = "python_full_version < '3.13'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "aiologic" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d9/e3/49afa1bc180e0d28008ec6bcdf82a4072d1c7a41032b5b759b60814ca4b0/culsans-0.11.0.tar.gz", hash = "sha256:0b43d0d05dce6106293d114c86e3fb4bfc63088cfe8ff08ed3fe36891447fe33", size = 107546, upload-time = "2025-12-31T23:15:38.196Z" }
 wheels = [
@@ -1341,6 +1345,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz", hash = "sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f", size = 368251, upload-time = "2025-09-07T18:58:00.022Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/5a/18ad964b0086c6e62e2e7500f7edc89e3faa45033c71c1893d34eed2b2de/dnspython-2.8.0-py3-none-any.whl", hash = "sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af", size = 331094, upload-time = "2025-09-07T18:57:58.071Z" },
+]
+
+[[package]]
+name = "docker"
+version = "7.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/7f/731ff914b0255d3d065f45fd4e626d4b8c95dbcbaada049f337a6ac16410/docker-7.2.0.tar.gz", hash = "sha256:cebb93773d334f778e023a7ee352a8d6e13ab1bd3b863a4d4a59dec897df43ac", size = 118731, upload-time = "2026-07-09T14:53:46.39Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/23/529140fe1aab80fc6992f93a706deec709140a6397439139a054e1515c45/docker-7.2.0-py3-none-any.whl", hash = "sha256:a3f45fdeb9165e2d25d9a1d02ddf3bc70fb572cf5ebbf9b58558c22caf29b71f", size = 148775, upload-time = "2026-07-09T14:53:45.224Z" },
 ]
 
 [[package]]
@@ -5915,8 +5933,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "jeepney", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

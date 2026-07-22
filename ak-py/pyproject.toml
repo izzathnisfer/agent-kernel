@@ -152,6 +152,11 @@ multimodal = [
     "litellm>=1.74.9",
     "python-multipart>=0.0.12",
 ]
+sandbox-docker = [
+    "docker>=7.0.0",
+]
+# The e2b, daytona, and kubernetes sandbox extras land with their providers in post-merge
+# iterations 9-10 (version floors confirmed against current SDKs at that point).
 
 [project.scripts]
 ak = "agentkernel.cli.ak:main"

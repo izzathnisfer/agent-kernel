@@ -130,6 +130,7 @@ const sidebars = {
         'advanced/multimodal',
         'advanced/threads',
         'advanced/conversation-initiation',
+        'advanced/sandbox',
         'advanced/knowledge-bases',
         'advanced/queue-mode-guide',
         {
