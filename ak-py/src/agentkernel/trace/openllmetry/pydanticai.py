@@ -18,12 +18,6 @@ class OpenLLMetryPydanticAIRunner(PydanticAIRunner):
         super().__init__()
         self._log = logging.getLogger("ak.trace.openllmetry.pydanticai")
 
-        # Diverges from every sibling OpenLLMetry runner, which self-instrument nothing and rely
-        # entirely on Traceloop.init()'s bundled auto-instrumentors. Whether traceloop-sdk bundles a
-        # Pydantic AI auto-instrumentor is unconfirmed, so we self-instrument: Pydantic AI's native
-        # OTel emission only needs an active TracerProvider (Traceloop.init() installs one globally) —
-        # not a framework-specific patch. instrument_all() is an idempotent class-variable toggle, so
-        # this is harmless even if Traceloop's bundle turns out to cover Pydantic AI too.
         Agent.instrument_all()
 
     async def run(self, agent: Any, session: Session, requests: list[AgentRequest]) -> AgentReply:
