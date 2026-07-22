@@ -121,6 +121,47 @@ def test_external_links_allowed(bundle):
 
 
 # --------------------------------------------------------------------------- #
+# Path traversal containment
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_path", ["../escaped.md", "../../secrets.md", "tables/../../escaped.md"])
+def test_write_concept_rejects_escaping_path(bundle, tmp_path, bad_path):
+    msg = OKFTools.op_write_concept(bundle, bad_path, VALID_DOC)
+    assert "escapes the bundle root" in msg
+    # Nothing was written outside (or inside) the bundle root.
+    assert not (tmp_path / "escaped.md").exists()
+    assert not (tmp_path / "secrets.md").exists()
+
+
+@pytest.mark.parametrize("bad_path", ["../secret.txt", "../../etc/passwd", "notes/../../escaped.md"])
+def test_read_concept_rejects_escaping_path(bundle, bad_path):
+    msg = OKFTools.op_read_concept(bundle, bad_path)
+    assert "escapes the bundle root" in msg
+
+
+def test_read_ops_reject_escaping_path(bundle):
+    for op in (OKFTools.op_list_concept, OKFTools.op_get_related):
+        assert "escapes the bundle root" in op(bundle, "../..")
+    assert "escapes the bundle root" in OKFTools.op_search_concept(bundle, "../..", "x")
+
+
+def test_read_source_file_rejects_escaping_path(bundle_with_source):
+    msg = OKFTools.op_read_source_file(bundle_with_source, "../../secret.txt")
+    assert "escapes the bundle root" in msg
+
+
+def test_storage_normalize_rejects_escaping_path(tmp_path):
+    # Defence in depth: even if a tool guard were bypassed, storage refuses.
+    storage = FileSystemStorage(str(tmp_path / "bundle"))
+    with pytest.raises(ValueError, match="escapes the bundle root"):
+        storage.write("../escaped.md", "data")
+    with pytest.raises(ValueError, match="escapes the bundle root"):
+        storage.read("../../secret.txt")
+    assert not (tmp_path / "escaped.md").exists()
+
+
+# --------------------------------------------------------------------------- #
 # index.md invariant
 # --------------------------------------------------------------------------- #
 

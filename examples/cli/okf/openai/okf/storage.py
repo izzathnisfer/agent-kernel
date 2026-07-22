@@ -79,10 +79,18 @@ class OKFStorage(ABC):
 
 
 def _normalize(path: str) -> str:
-    """Normalize a bundle-relative path to POSIX form with no leading slash."""
+    """Normalize a bundle-relative path to POSIX form with no leading slash.
+
+    Raises :class:`ValueError` if the path escapes the bundle root via ``..``.
+    The agent-facing tools already reject such paths with a descriptive error;
+    this is defence in depth so a bypass never reads or writes outside the root,
+    mirroring how the IAM policies back up the tool-subset permission model.
+    """
     normalized = posixpath.normpath(path.strip().lstrip("/"))
     if normalized in (".", ""):
         return ""
+    if normalized == ".." or normalized.startswith("../"):
+        raise ValueError(f"path '{path}' escapes the bundle root")
     return normalized
 
 

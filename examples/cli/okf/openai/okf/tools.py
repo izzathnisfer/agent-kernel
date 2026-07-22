@@ -64,6 +64,20 @@ class OKFTools:
         return "" if normalized in (".", "") else normalized
 
     @staticmethod
+    def _escape_error(path: str) -> str | None:
+        """Return an error string if ``path`` escapes the bundle root, else ``None``.
+
+        Agent-supplied paths are free-form (they originate in user prompts), so a
+        ``..`` segment that normalizes to a path outside the bundle root is
+        rejected here before it ever reaches storage — the tool's own ``path``
+        argument gets the same containment the write guardrails apply to links.
+        """
+        if OKFFormat.escapes_bundle(OKFTools._norm(path)):
+            logger.warning("path %r escapes the bundle root — rejected", path)
+            return f"Error: path '{path}' escapes the bundle root."
+        return None
+
+    @staticmethod
     def _dir_of(path: str) -> str:
         """Return the bundle-relative directory containing ``path`` (``""`` = root)."""
         return posixpath.dirname(OKFTools._norm(path))
@@ -175,6 +189,9 @@ class OKFTools:
         regenerated so the new document is reachable by navigation.
         """
         target = OKFTools._norm(path)
+        if OKFFormat.escapes_bundle(target):
+            logger.warning("write rejected: path %r escapes the bundle root", path)
+            return ValidationResult(valid=False, errors=[f"path '{path}' escapes the bundle root"])
         if not target.endswith(".md"):
             logger.warning("write rejected: path %r is not a '.md' document", path)
             return ValidationResult(valid=False, errors=[f"path '{path}' must be a '.md' document"])
@@ -231,6 +248,8 @@ class OKFTools:
     @staticmethod
     def op_list_concept(bundle: OKFBundle, path: str) -> str:
         logger.debug("tool list_concept(%r)", path)
+        if (err := OKFTools._escape_error(path)) is not None:
+            return err
         directory = OKFTools._norm(path)
         index_path = OKFTools._index_path(directory)
         if bundle.exists(index_path):
@@ -244,6 +263,8 @@ class OKFTools:
     @staticmethod
     def op_read_concept(bundle: OKFBundle, path: str) -> str:
         logger.debug("tool read_concept(%r)", path)
+        if (err := OKFTools._escape_error(path)) is not None:
+            return err
         target = OKFTools._norm(path)
         try:
             content = bundle.read(target)
@@ -262,6 +283,8 @@ class OKFTools:
         logger.debug("tool search_concept(path=%r, keyword=%r)", path, keyword)
         if not keyword.strip():
             return "Error: search keyword must not be empty."
+        if (err := OKFTools._escape_error(path)) is not None:
+            return err
         target = OKFTools._norm(path)
         if bundle.exists(target) and target.endswith(".md"):
             candidates = [target]
@@ -299,6 +322,8 @@ class OKFTools:
     @staticmethod
     def op_get_related(bundle: OKFBundle, path: str) -> str:
         logger.debug("tool get_related(%r)", path)
+        if (err := OKFTools._escape_error(path)) is not None:
+            return err
         target = OKFTools._norm(path)
         try:
             content = bundle.read(target)
@@ -352,6 +377,8 @@ class OKFTools:
         logger.debug("tool read_source_file(%r)", path)
         if not bundle.has_source:
             return "Error: no sync source is configured for this bundle."
+        if (err := OKFTools._escape_error(path)) is not None:
+            return err
         try:
             return bundle.read_source(OKFTools._norm(path))
         except NotFoundError:
