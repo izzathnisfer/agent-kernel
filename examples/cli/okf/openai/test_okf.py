@@ -162,6 +162,27 @@ def test_storage_normalize_rejects_escaping_path(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Tools return error strings, never raise
+# --------------------------------------------------------------------------- #
+
+
+def test_get_related_returns_error_on_unparseable_document(bundle):
+    # A document written straight to storage with no frontmatter is unparseable.
+    bundle.write("broken.md", "# no frontmatter here")
+    msg = OKFTools.op_get_related(bundle, "broken.md")
+    assert msg.startswith("Error:")
+    assert "could not be parsed" in msg
+
+
+def test_append_log_returns_error_on_unparseable_log(bundle):
+    # A hand-placed, invalid log.md must not crash the tool.
+    bundle.write(OKFTools.LOG_PATH, "not: [valid: frontmatter")
+    msg = OKFTools.op_append_log(bundle, "some change")
+    assert msg.startswith("Error:")
+    assert "log.md could not be parsed" in msg
+
+
+# --------------------------------------------------------------------------- #
 # index.md invariant
 # --------------------------------------------------------------------------- #
 

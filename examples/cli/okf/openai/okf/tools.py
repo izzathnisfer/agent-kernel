@@ -329,7 +329,10 @@ class OKFTools:
             content = bundle.read(target)
         except NotFoundError:
             return f"Error: no document found at '{path}'."
-        doc = OKFFormat.parse_document(content)
+        try:
+            doc = OKFFormat.parse_document(content)
+        except ValueError as exc:
+            return f"Error: document '{path}' could not be parsed: {exc}"
         related: list[str] = []
         seen: set[str] = set()
         for raw in OKFFormat.extract_links(doc.body):
@@ -359,7 +362,10 @@ class OKFTools:
     def op_append_log(bundle: OKFBundle, log_details: str) -> str:
         if not log_details.strip():
             return "Error: log entry must not be empty."
-        OKFTools.append_log(bundle, log_details)
+        try:
+            OKFTools.append_log(bundle, log_details)
+        except ValueError as exc:
+            return f"Error: existing log.md could not be parsed: {exc}"
         return "Appended an entry to log.md under today's date."
 
     @staticmethod

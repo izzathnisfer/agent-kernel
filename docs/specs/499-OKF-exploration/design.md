@@ -144,10 +144,16 @@ Sources:
 ### Agent-facing tools
 
 - Plain Python functions over one shared `OKFBundle` object (bundle storage + source storage +
-  cache + validation), bound per agent via `OpenAIToolBuilder.bind([...])`.
+  cache + validation), each wrapped with the OpenAI Agents SDK's `function_tool` and bound per
+  agent by passing the selected subset to the `Agent`'s `tools=` argument.
   - The tools are thin closures over that single `OKFBundle`; the only thing that differs between
     the Consumer, Producer, and Curator is **which subset** of tools each agent is bound — the
     tool subset *is* the permission model (see Agents).
+  - **Wrapping with `function_tool` directly is deliberate** (not `OpenAIToolBuilder.bind`): the
+    OKF tools are closures over a single `OKFBundle`, and this example's point is the
+    *tool-subset-as-permission-model* pattern, for which the SDK's own decorator is the most
+    direct surface. `OpenAIToolBuilder.bind` wraps with `function_tool` internally, so the two are
+    functionally equivalent here.
 - **Read tools**:
   - `list_concept(path)` — returns the directory's `index.md` content; when the directory has
     no `index.md` (optional in a minimally-opinionated bundle), returns a generated listing of
@@ -169,14 +175,22 @@ Sources:
     **absolute-from-root** form as the canonical style so authored and validated links agree
 - **Write tools**:
   - `write_concept(path, content)` — create or replace a document, gated by write guardrails
-    (below); on success persists to storage and updates the cache, then **regenerates the
-    affected directory's `index.md`** as a flat mechanical listing (see the invariant note)
+    (below); on success persists to storage and updates the cache, then **regenerates the touched
+    directory's `index.md` and every ancestor index up to the bundle root** as flat mechanical
+    listings (see the invariant note)
 - **Special tools**:
   - `append_log(log_details)` — appends an entry under today's date section in `log.md`
 - **`index.md` is a tool-enforced invariant, `log.md` is a best-effort audit trail:**
   - `index.md` drives progressive-disclosure navigation, so `write_concept` regenerates the
-    touched directory's `index.md` **in the write path itself** on every create/replace — the
-    index staying correct is never left to an agent's prompt.
+    touched directory's `index.md` **and cascades up to every ancestor index through the bundle
+    root, in the write path itself** on every create/replace — the index staying correct is never
+    left to an agent's prompt. The cascade (rather than the touched directory alone) is what keeps
+    a freshly written subtree reachable from the root: writing `sales/tables/orders.md` into an
+    empty bundle also creates `sales/tables/index.md`, `sales/index.md`, and the root `index.md`.
+  - **Cost of the cascade:** each write re-reads every sibling document in each ancestor directory
+    (to pull its `title`/`type` for the listing). This is bounded by directory fan-out and
+    mitigated by the bundle cache (siblings are almost always already cached), an acceptable
+    per-write cost for the reachability guarantee at this example's scale.
   - The regenerated index is a **flat mechanical listing** — one entry per document directly
     under the directory (`[title](/path.md) — type`, title/description pulled from frontmatter),
     not a merge that preserves hand-authored ordering, grouping, or prose. **This is a deliberate
