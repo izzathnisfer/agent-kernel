@@ -9,8 +9,8 @@ and namespace settings (table/collection name, key prefix, TTL) from the
 
 import logging
 
-from ...builder import SessionStoreBuilder
 from ...config import AKConfig
+from ...util.factory import require_extra
 from .base import SessionIdMappingStore
 
 
@@ -32,37 +32,37 @@ class SessionIdMappingStoreBuilder:
 
         :return: The SessionIdMappingStore implementation matching ``session.type``,
             falling back to the in-memory store for unknown types.
-        :raises ImportError: If session.type is valkey and the ``valkey`` extra is
-            not installed.
+        :raises ImportError: If the backend's extra (e.g. ``valkey`` for session.type:
+            valkey) is not installed.
         """
-        store_type = SessionStoreBuilder.Types.from_str(AKConfig.get().session.type)
-        SessionIdMappingStoreBuilder._log.info(f"Building {store_type} session id mapping store")
-        if store_type == SessionStoreBuilder.Types.REDIS:
-            from .redis import RedisSessionIdMappingStore
+        store_type = AKConfig.get().session.type.lower()
+        SessionIdMappingStoreBuilder._log.info(f"Building '{store_type}' session id mapping store")
+        if store_type == "redis":
+            with require_extra("redis", "session.type: redis"):
+                from .redis import RedisSessionIdMappingStore
 
             return RedisSessionIdMappingStore()
-        elif store_type == SessionStoreBuilder.Types.VALKEY:
-            try:
+        if store_type == "valkey":
+            with require_extra("valkey", "session.type: valkey"):
                 from .valkey import ValkeySessionIdMappingStore
-            except ImportError as e:
-                raise ImportError(
-                    "The 'valkey' package is required for session.type: valkey. Install it with: pip install agentkernel[valkey]"
-                ) from e
 
             return ValkeySessionIdMappingStore()
-        elif store_type == SessionStoreBuilder.Types.DYNAMODB:
-            from .dynamodb import DynamoDBSessionIdMappingStore
+        if store_type == "dynamodb":
+            with require_extra("aws", "session.type: dynamodb"):
+                from .dynamodb import DynamoDBSessionIdMappingStore
 
             return DynamoDBSessionIdMappingStore()
-        elif store_type == SessionStoreBuilder.Types.COSMOSDB:
-            from .cosmosdb import CosmosDBSessionIdMappingStore
+        if store_type == "cosmosdb":
+            with require_extra("azure", "session.type: cosmosdb"):
+                from .cosmosdb import CosmosDBSessionIdMappingStore
 
             return CosmosDBSessionIdMappingStore()
-        elif store_type == SessionStoreBuilder.Types.FIRESTORE:
-            from .firestore import FirestoreSessionIdMappingStore
+        if store_type == "firestore":
+            with require_extra("gcp", "session.type: firestore"):
+                from .firestore import FirestoreSessionIdMappingStore
 
             return FirestoreSessionIdMappingStore()
-        else:
-            from .in_memory import InMemorySessionIdMappingStore
 
-            return InMemorySessionIdMappingStore()
+        from .in_memory import InMemorySessionIdMappingStore
+
+        return InMemorySessionIdMappingStore()
