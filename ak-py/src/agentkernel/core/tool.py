@@ -190,7 +190,7 @@ class SystemToolFactory:
             from .multimodal import AnalyzeAttachmentsTool
 
             tools.append(AnalyzeAttachmentsTool())
-            
+
         mapping_table_config = getattr(AKConfig.get(), "mapping_table", None)
         if mapping_table_config:
             from .initiation import InitiateConversationTool
