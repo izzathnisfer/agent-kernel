@@ -20,7 +20,7 @@ graph TB
     D --> G[Trace Events]
     E --> G
     F --> G
-    G --> H[Langfuse/OpenLLMetry]
+    G --> H[Langfuse/OpenLLMetry/Logfire]
     
     style G fill:#2e8555,stroke:#fff,stroke-width:2px,color:#fff
     style H fill:#ff6b35,stroke:#fff,stroke-width:2px,color:#fff
@@ -32,6 +32,7 @@ Agent Kernel supports the following observability platforms:
 
 - **Langfuse** - Open-source LLM engineering platform for tracing, evaluating, and monitoring AI applications
 - **OpenLLMetry (Traceloop)** - OpenTelemetry-based observability for LLM applications with support for multiple backends
+- **Pydantic Logfire** - Pydantic's OpenTelemetry-based platform with first-class Pydantic AI instrumentation and a console fallback that needs no account
 
 ## Getting Started with Langfuse
 
@@ -254,6 +255,21 @@ After running your agents with OpenLLMetry tracing enabled:
 - **Custom Metrics**: Add custom spans and metrics
 - **Real-time Monitoring**: Live trace streaming and alerts
 
+### In Pydantic Logfire
+
+**With a credential** (`logfire auth` or `LOGFIRE_TOKEN`), open your Logfire project dashboard and
+navigate to **Live** or **Explore**. Each turn is one trace with the `Agent Kernel <Framework>` span
+at the root and the model/tool spans nested beneath it.
+
+**Without a credential**, spans are printed to the console as the agent runs, so you can inspect the
+same trace tree inline — no dashboard required.
+
+**Logfire Features:**
+- **First-class Pydantic AI spans**: Model requests, tool calls, and output validation, natively
+- **SQL over traces**: Query and filter spans with SQL in the dashboard
+- **OpenTelemetry-native**: Send to Logfire or any OTLP-compatible backend
+- **Console fallback**: Read the trace tree locally with zero signup
+
 
 ## Troubleshooting
 
@@ -291,6 +307,23 @@ This should return `True` if credentials are valid.
 python -c "from traceloop.sdk import Traceloop; Traceloop.init(app_name='test'); print('Success')"
 ```
 
+### Logfire Issues
+
+**Traces Not Appearing in the Dashboard:**
+
+1. **Check Credential**: Run `logfire auth`, or verify `LOGFIRE_TOKEN` is set to a project **write**
+   token. With no credential, spans go to the console only — that is expected, not a failure.
+2. **Verify Configuration**: Ensure `trace.enabled` is `true` and `trace.type` is `logfire`
+3. **Check Installation**: Confirm `agentkernel[logfire]` is installed
+4. **Review Logs**: Look for the `ak.trace.logfire` configuration message in your application logs
+
+**Verify your setup:**
+
+```bash
+# Prints spans to the console even without a token
+python -c "import logfire; logfire.configure(send_to_logfire='if-token-present'); logfire.info('ok')"
+```
+
 ### Performance Impact
 
 Tracing adds minimal overhead:
@@ -314,6 +347,7 @@ When tracing is enabled:
 - All prompts and completions are sent to your chosen tracing platform
 - **Langfuse**: Data sent to Langfuse cloud or self-hosted instance
 - **OpenLLMetry**: Data sent to Traceloop or configured OpenTelemetry backend
+- **Logfire**: Data sent to the Logfire cloud when a token is present; otherwise it stays local and is printed to the console
 - Ensure compliance with your data privacy requirements
 - Consider self-hosting for sensitive data
 
@@ -373,6 +407,96 @@ export TRACELOOP_BASE_URL=http://your-otel-collector:4318
 ```
 
 See [OpenLLMetry documentation](https://www.traceloop.com/docs/openllmetry/integrations) for more backend options.
+
+## Getting Started with Pydantic Logfire
+
+[Pydantic Logfire](https://logfire.pydantic.dev) is Pydantic's observability platform, built on
+OpenTelemetry. Two things make it distinct in Agent Kernel:
+
+- **First-class Pydantic AI instrumentation.** Agent Kernel calls `logfire.instrument_pydantic_ai()`
+  (and `logfire.instrument_openai_agents()` for the OpenAI Agents SDK), so model requests, tool
+  calls, and structured-output validations appear as properly nested spans with each framework's
+  native semantics — no third-party span processor in between. Because Logfire installs itself as
+  the global OpenTelemetry tracer provider, the OpenInference instrumentors bundled with the CrewAI
+  and Google ADK extras, LiteLLM (LangGraph), and Smolagents' native OTel output all flow into it.
+- **Auto-detected destination.** With `send_to_logfire="if-token-present"`, Logfire streams spans to
+  the hosted dashboard when a credential is available and otherwise prints them to the console — so
+  tracing runs with zero signup for a quick local evaluation.
+
+### Installation
+
+Install Agent Kernel with Logfire support:
+
+```bash
+pip install agentkernel[logfire]
+```
+
+Or if you need multiple framework integrations:
+
+```bash
+# Pydantic AI with Logfire (first-class instrumentation)
+pip install agentkernel[pydanticai,logfire]
+
+# OpenAI with Logfire
+pip install agentkernel[openai,logfire]
+
+# CrewAI with Logfire
+pip install agentkernel[crewai,logfire]
+```
+
+### Configuration
+
+#### Method 1: Configuration File
+
+Create or update `config.yaml`:
+
+```yaml
+trace:
+  enabled: true
+  type: logfire
+```
+
+#### Method 2: Environment Variables
+
+```bash
+export AK_TRACE__ENABLED=true
+export AK_TRACE__TYPE=logfire
+```
+
+### Logfire Credentials
+
+The destination is auto-detected — no credential is required to run. To stream to the hosted
+dashboard, authenticate once (writes a local credential the SDK detects):
+
+```bash
+logfire auth
+```
+
+…or export a project **write token**:
+
+```bash
+export LOGFIRE_TOKEN=your-write-token
+```
+
+With no credential present, spans are printed to the console instead. Optional:
+`LOGFIRE_SERVICE_NAME` overrides the service name (default `AgentKernel`); Logfire's own environment
+variables (e.g. `LOGFIRE_CONSOLE=false`) tune console output.
+
+### Getting Logfire Credentials
+
+1. Sign up for a free account at [https://logfire.pydantic.dev](https://logfire.pydantic.dev)
+2. Create a new project
+3. Run `logfire auth` locally, or create a **Write token** under **Settings → Write tokens** and
+   export it as `LOGFIRE_TOKEN`
+
+### Logfire Features
+
+Logfire provides:
+- **First-class Pydantic AI support**: Native, richly nested instrumentation for Pydantic AI agents
+- **OpenTelemetry-based**: Reuses framework OpenInference/OTel instrumentors and exports OTLP
+- **Console fallback**: Inspect the trace tree locally without an account
+- **SQL-queryable traces**: Query spans with SQL in the Logfire dashboard
+- **Auto-instrumentation**: Optional instrumentation for HTTPX, OpenAI, Anthropic, LiteLLM, and more
 
 
 ## Integrate with Your Own Traceability Platform
@@ -448,15 +572,17 @@ Upcoming observability features:
 
 - [Langfuse Documentation](https://langfuse.com/docs)
 - [Traceloop/OpenLLMetry Documentation](https://www.traceloop.com/docs)
+- [Pydantic Logfire Documentation](https://logfire.pydantic.dev/docs/)
 - [Configuration Guide](../core-concepts/configuration.md)
 
 ## Summary
 
 - Enable observability with simple configuration
-- **Two Platform Options**: Choose between Langfuse and OpenLLMetry
+- **Three Platform Options**: Choose between Langfuse, OpenLLMetry, and Pydantic Logfire
 - **Langfuse**: Specialized LLM observability platform with rich analytics
 - **OpenLLMetry**: OpenTelemetry-based solution with multi-backend support
+- **Pydantic Logfire**: OpenTelemetry-based, with first-class Pydantic AI instrumentation and a no-signup console fallback
 - Comprehensive trace data including LLM calls, tools, and performance
 - Minimal performance impact
 - Self-hosting and custom backend options for data privacy
-- Production-ready for all framework integrations (OpenAI, LangGraph, CrewAI, Google ADK)
+- Production-ready for all framework integrations (OpenAI, LangGraph, CrewAI, Google ADK, Smolagents, Pydantic AI)

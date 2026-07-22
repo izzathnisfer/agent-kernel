@@ -1,0 +1,7 @@
+.venv
+dist
+requirements.txt
+# uv.lock is intentionally ignored until the `pydanticai`/`logfire` extras are published to PyPI:
+# pre-publish it can only pin agentkernel to a local dist/source, which breaks PyPI-based lint.
+# Remove this line once the extras ship so the release tooling can commit a proper lock.
+uv.lock

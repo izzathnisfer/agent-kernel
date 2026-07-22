@@ -1,0 +1,9 @@
+# Turn on Agent Kernel tracing and route it to Pydantic Logfire. This is the only difference from
+# the plain examples/cli/pydanticai demo — the agent code is identical.
+#
+# Destination is auto-detected by the provider (send_to_logfire="if-token-present"):
+#   * LOGFIRE_TOKEN set (or `logfire auth` done) -> spans stream to the Logfire cloud dashboard
+#   * otherwise                                   -> spans are printed to the console (zero signup)
+trace:
+  enabled: true
+  type: logfire
