@@ -17,9 +17,10 @@ mapping_table:
   ttl: 0
 
 session:
-  type: dynamodb
-  dynamodb:
-    table_name: "" # injected by Terraform via AK_SESSION__DYNAMODB__TABLE_NAME
+  type: redis
+  redis:
+    prefix: "ak:slack-init-ecs:session:"
+    url: "redis://ak-openai-serverless-dev-examples-redis.zinik6.0001.apse2.cache.amazonaws.com:6379"
 
 execution:
   mode: rest_sync

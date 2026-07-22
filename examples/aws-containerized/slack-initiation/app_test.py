@@ -148,6 +148,24 @@ class TestSlackECSRequestHandler:
         assert calls[0]["message_body"]["session_id"] == "3333.4444"
 
     @pytest.mark.asyncio
+    async def test_thread_replies_without_client_msg_id_get_distinct_request_ids(self, handler, monkeypatch):
+        """request_id doubles as SQS's message_deduplication_id — falling back to
+        thread_ts (shared by every reply in the thread) would collide two thread
+        replies inside SQS's dedup window and silently drop the second one."""
+        calls = []
+        monkeypatch.setattr(
+            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+        )
+
+        await handler.handle(slack_message(ts="2222.0001", thread_ts="1111.2222"), say=None)
+        await handler.handle(slack_message(ts="2222.0002", thread_ts="1111.2222"), say=None)
+
+        assert len(calls) == 2
+        assert calls[0]["request_id"] != calls[1]["request_id"]
+        assert calls[0]["request_id"] == "2222.0001"
+        assert calls[1]["request_id"] == "2222.0002"
+
+    @pytest.mark.asyncio
     async def test_channel_and_thread_ts_attached_as_custom_attributes(self, handler, monkeypatch):
         calls = []
         monkeypatch.setattr(

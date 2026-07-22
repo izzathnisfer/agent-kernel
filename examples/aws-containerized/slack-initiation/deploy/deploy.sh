@@ -14,7 +14,7 @@ create_deployment_packages() {
         uv pip install -r requirements.txt --target=dist-rest-service/data
     else
         uv pip install -r requirements.txt --target=dist-rest-service/data --find-links ../../../ak-py/dist
-        uv pip install --force-reinstall --target=dist-rest-service/data --find-links ../../../ak-py/dist agentkernel[api,aws,slack,test]
+        uv pip install --force-reinstall --target=dist-rest-service/data --find-links ../../../ak-py/dist agentkernel[api,aws,redis,slack,test]
     fi
     cp config.yaml app_rest_service.py slack_request_handler.py slack_output_consumer.py dist-rest-service/data/
 
@@ -25,7 +25,7 @@ create_deployment_packages() {
         uv pip install -r requirements.txt --target=dist-agent-runner/data
     else
         uv pip install -r requirements.txt --target=dist-agent-runner/data --find-links ../../../ak-py/dist
-        uv pip install --force-reinstall --target=dist-agent-runner/data --find-links ../../../ak-py/dist agentkernel[api,aws,openai,test]
+        uv pip install --force-reinstall --target=dist-agent-runner/data --find-links ../../../ak-py/dist agentkernel[api,aws,openai,redis,test]
     fi
     cp config.yaml app_agent_runner.py dist-agent-runner/data/
 

@@ -92,7 +92,10 @@ class SlackECSRequestHandler(RESTRequestHandler):
             self._log.error("Input queue URL is not configured")
             return
 
-        request_id = body.get("client_msg_id") or thread_ts
+        # ts (not thread_ts) as the fallback: thread_ts is shared by every reply in
+        # the same thread, so using it as message_deduplication_id would collide two
+        # thread replies inside SQS's 5-minute dedup window and silently drop one.
+        request_id = body.get("client_msg_id") or body["ts"]
 
         # The raw Slack event rides along as an extra "body" field: ChatService
         # turns unknown body fields into AgentRequestAny entries on the agent's

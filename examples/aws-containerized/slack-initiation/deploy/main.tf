@@ -53,7 +53,8 @@ module "containerized_agents" {
   }
 
   # ---- Agent Memory (Session Store) ----
-  create_dynamodb_memory_table = true
+  # Uses the existing shared Redis cluster (see config.yaml) — no create_redis_cluster
+  # / create_dynamodb_memory_table flag needed since we're not provisioning a new store.
 
   # ---- Agent-Initiated Conversations ----
   # Creates the Session ID Mapping DynamoDB table + IAM grant for the REST service.
