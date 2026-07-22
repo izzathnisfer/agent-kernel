@@ -1,4 +1,4 @@
-  # Provisions the two S3 buckets the OKF S3 run path needs, plus the two IAM
+# Provisions the two S3 buckets the OKF S3 run path needs, plus the two IAM
 # managed policies that encode the read-write / read-only split:
 #
 #   * bundle (OKF wiki) bucket — read-write  (GetObject / PutObject / ListBucket)
