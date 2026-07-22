@@ -22,7 +22,7 @@ rationale and a worked example.
 from typing import Optional
 
 from agentkernel.api import RESTAPI
-from agentkernel.core import AgentRequestAny, PostHook, ToolContext
+from agentkernel.core import AgentRequestAny, ToolContext
 from agentkernel.core.initiation import InitiationSender
 from agentkernel.openai import OpenAIModule, OpenAIToolBuilder
 from agentkernel.slack import AgentSlackRequestHandler
@@ -79,27 +79,7 @@ notifier_agent = OpenAIAgent(
 )
 
 
-class PrintSessionContextHook(PostHook):
-    """
-    Demo aid: prints the new session's retained turn count and roles right after
-    notifier composes the outbound message, showing the seeding exchange landed
-    in the new session's history (see the README's "Try it" section). Prints
-    roles only, not message content, to stay a one-line log rather than a dump.
-    """
-
-    async def on_run(self, session, requests, agent, agent_reply):
-        items = await session.get("openai").get_items()
-        roles = [item.get("role", "?") for item in items]
-        print(
-            f"[SESSION-CONTEXT-DEMO] initiated session context | session_id={session.id} | turns={len(items)} | roles={roles}"
-        )
-        return agent_reply
-
-    def name(self) -> str:
-        return "print-session-context"
-
-
-OpenAIModule([general_agent, notifier_agent]).post_hook(notifier_agent, [PrintSessionContextHook()])
+OpenAIModule([general_agent, notifier_agent])
 
 
 class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):

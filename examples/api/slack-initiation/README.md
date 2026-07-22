@@ -74,13 +74,9 @@ Monroe's inbox, correctly attributed instead of first person:
 
 > Hi! Just a heads up — <@U0JAMES> will be late, held up in traffic.
 
-Watch the server's stdout at this point: `PrintSessionContextHook` logs a line
-like `[SESSION-CONTEXT-DEMO] initiated session context | session_id=... |
-turns=2 | roles=['user', 'assistant']` — this is the composed prompt/reply
-exchange that just landed in the new session's framework history, which is
-exactly what makes the context-retention behavior below work.
-
-When Monroe replies **in a thread** under that DM (Slack's "Reply in thread"),
+That composed prompt/reply exchange already landed in the new session's
+framework history, which is what makes the context-retention behavior below
+work: when Monroe replies **in a thread** under that DM (Slack's "Reply in thread"),
 the reply resolves through the Session ID Mapping to the initiated session —
 and because the seeding prompt named James explicitly, the context is retained
 correctly, not misattributed to whoever replies next. Threading is required:
