@@ -21,6 +21,9 @@ resource "aws_dynamodb_table" "response_store" {
 }
 
 # ---------- DynamoDB Session ID Mapping (agent-initiated conversations) ----------
+# The mapping store follows session.type at the application level, so this table is only
+# used when the session store itself is DynamoDB (create_dynamodb_memory_table = true).
+# Set conversation_initiation accordingly for other session backends (Redis, Valkey, ...).
 
 resource "aws_dynamodb_table" "session_id_mapping" {
   count = var.conversation_initiation ? 1 : 0

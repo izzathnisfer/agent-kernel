@@ -262,18 +262,24 @@ class _ThreadStoreConfig(BaseModel):
     cosmosdb: Optional[_ThreadCosmosDBConfig] = None
 
 
-class _MappingTableConfig(BaseModel):
-    """Configuration for the Session ID Mapping table used by agent-initiated conversations.
-    Presence of this block enables the feature. The store backend follows session.type;
-    connection settings are read from the corresponding session.<backend> block."""
+class _ConversationInitiationConfig(BaseModel):
+    """Configuration for agent-initiated conversations (the Session ID Mapping store and
+    the ``initiate_conversation`` system tool)."""
 
-    table_name: str = Field(
-        default="ak-session-id-mapping",
-        description="Table name for the mapping store (DynamoDB / Cosmos DB). Table should have a partition key named 'map_key' (S)",
+    enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable agent-initiated conversations. None (default) auto-enables in queue-mode "
+        "deployments (an execution.queues input URL is configured) since that is the only case where a "
+        "queue dispatcher is registered at startup, and stays disabled for single-process REST. Set "
+        "explicitly to opt a REST deployment in, or to force-disable in queue mode.",
     )
-    collection_name: str = Field(default="ak-session-id-mapping", description="Firestore collection name for the mapping store")
-    prefix: str = Field(default="ak:session-map:", description="Key prefix for the mapping store (Redis / Valkey)")
-    ttl: int = Field(default=0, description="Mapping TTL in seconds (0 disables; not supported on Cosmos DB)")
+    store: Optional[str] = Field(
+        default=None,
+        description="Dotted path to a SessionIdMappingStore subclass (bring-your-own). When unset, the "
+        "mapping store follows session.type and shares its connection settings; its table/collection "
+        "name or key prefix is derived from the session store's own by suffixing '-id-mapping' "
+        "(table/collection) or 'id-mapping:' (key prefix), and it reuses the session store's TTL.",
+    )
 
 
 class _TraceConfig(BaseModel):
@@ -595,9 +601,9 @@ class AKConfig(YamlBaseSettingsModified):
         default=None,
         description="Conversation Thread Support configurations. Feature is enabled only when this block is present.",
     )
-    mapping_table: Optional[_MappingTableConfig] = Field(
-        default=None,
-        description="Session ID Mapping table for agent-initiated conversations. Feature is enabled only when this block is present.",
+    conversation_initiation: _ConversationInitiationConfig = Field(
+        description="Agent-initiated conversation configurations",
+        default_factory=_ConversationInitiationConfig,
     )
 
     trace: _TraceConfig = Field(description="Tracing related configurations", default_factory=_TraceConfig)
@@ -610,6 +616,19 @@ class AKConfig(YamlBaseSettingsModified):
     _instance: ClassVar[Optional["AKConfig"]] = None
     # Reentrant because configure_from_config() calls AKConfig.get() again
     _instance_lock: ClassVar[RLock] = RLock()
+
+    @property
+    def conversation_initiation_enabled(self) -> bool:
+        """
+        Whether agent-initiated conversations are enabled: an explicit ``conversation_initiation.enabled``
+        wins; otherwise the feature auto-enables in queue-mode deployments (an
+        ``execution.queues`` input URL is configured), since only queue deployments register a
+        dispatcher at startup. Single-process REST stays disabled unless opted in explicitly.
+        """
+        if self.conversation_initiation.enabled is not None:
+            return self.conversation_initiation.enabled
+        queues = self.execution.queues
+        return bool(queues and queues.input and queues.input.url)
 
     @classmethod
     def get(cls) -> "AKConfig":

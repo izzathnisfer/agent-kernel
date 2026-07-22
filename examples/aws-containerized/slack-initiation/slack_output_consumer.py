@@ -79,7 +79,9 @@ class SlackECSOutputConsumer(ECSOutputConsumer):
                 # recipient's reply can't resolve back to this session.
                 manager.complete(initiation, thread_ts)
             else:
-                logger.error("InitiationManager unavailable (mapping_table not configured) — mapping was not bound")
+                logger.error(
+                    "InitiationManager unavailable (agent-initiated conversations not enabled) — mapping was not bound"
+                )
             return
 
         # Ordinary reply: store as usual (debug/poll parity), then deliver to Slack.

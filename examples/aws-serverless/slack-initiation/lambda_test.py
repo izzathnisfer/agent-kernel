@@ -59,14 +59,7 @@ def message_event(
     return {"type": "event_callback", "event_id": f"ev-{ts}", "event": event}
 
 
-class FakeMappingTableCfg:
-    table_name = "test-mapping"
-    collection_name = "test-mapping"
-    prefix = "ak:test-map:"
-    ttl = 0
-
-
-def make_fake_cfg(mapping_table=FakeMappingTableCfg):
+def make_fake_cfg(conversation_initiation_enabled=True):
     class FakeCfg:
         class session:
             type = "in_memory"
@@ -85,7 +78,11 @@ def make_fake_cfg(mapping_table=FakeMappingTableCfg):
                 class output:
                     url = "https://sqs.test/output"
 
-    FakeCfg.mapping_table = mapping_table
+        class conversation_initiation:
+            enabled = conversation_initiation_enabled
+            store = None
+
+    FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
     FakeCfg.thread = None
     return FakeCfg
 

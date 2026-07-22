@@ -5,6 +5,10 @@ Layout: one document per mapping direction (document ID = record key) with the
 mapped id stored as bytes under a single ``value`` field. When a TTL is
 configured, the driver sets an ``expiry_time`` field a Firestore TTL policy can
 use to auto-delete expired documents.
+
+The collection name is derived by suffixing the session store's collection name
+with ``-id-mapping``; ``project_id``, ``database_id``, and TTL follow
+``session.firestore``.
 """
 
 import logging
@@ -12,7 +16,7 @@ from typing import Optional
 
 from ...config import AKConfig
 from ...util.driver.firestore import FirestoreDriver
-from .base import SessionIdMappingStore, session_record_key, thread_record_key
+from .base import SessionIdMappingStore
 
 VALUE_FIELD = "value"
 
@@ -21,23 +25,21 @@ class FirestoreSessionIdMappingStore(SessionIdMappingStore):
     """
     Firestore-backed implementation of the SessionIdMappingStore interface.
 
-    The collection name and TTL come from ``mapping_table``; ``project_id`` and
-    ``database_id`` come from ``session.firestore`` when present, otherwise the
-    Application Default Credentials / default database are used.
+    The collection name is derived from the session store's collection name;
+    ``project_id``, ``database_id``, and TTL come from ``session.firestore``.
     """
 
     def __init__(self):
         self._log = logging.getLogger("ak.initiation.mapping.firestore")
-        cfg = AKConfig.get()
-        mapping_cfg = cfg.mapping_table
-        if mapping_cfg is None:
-            raise ValueError("mapping_table config block is required to use FirestoreSessionIdMappingStore")
-        conn = cfg.session.firestore
+        conn = AKConfig.get().session.firestore
+        if conn is None:
+            raise ValueError("session.firestore config block is required to use FirestoreSessionIdMappingStore")
+        collection_name = f"{conn.collection_name}-id-mapping"
         self._driver = FirestoreDriver(
-            collection_name=mapping_cfg.collection_name,
-            project_id=conn.project_id if conn else None,
-            database_id=conn.database_id if conn else None,
-            ttl=int(mapping_cfg.ttl),
+            collection_name=collection_name,
+            project_id=conn.project_id,
+            database_id=conn.database_id,
+            ttl=int(conn.ttl),
         )
 
     def _get_value(self, record_key: str) -> Optional[str]:
@@ -57,7 +59,7 @@ class FirestoreSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         :return: The mapped session id, or None if no mapping exists.
         """
-        return self._get_value(thread_record_key(messaging_integration_thread_id))
+        return self._get_value(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id))
 
     def get_messaging_integration_thread_id(self, session_id: str) -> Optional[str]:
         """
@@ -66,7 +68,7 @@ class FirestoreSessionIdMappingStore(SessionIdMappingStore):
         :param session_id: The Agent Kernel session id.
         :return: The mapped messaging platform thread id, or None if no mapping exists.
         """
-        return self._get_value(session_record_key(session_id))
+        return self._get_value(SessionIdMappingStore.session_record_key(session_id))
 
     def save(self, session_id: str, messaging_integration_thread_id: str) -> None:
         """
@@ -76,8 +78,8 @@ class FirestoreSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         """
         self._log.debug(f"Saving mapping {session_id} <-> {messaging_integration_thread_id}")
-        self._driver.put(thread_record_key(messaging_integration_thread_id), VALUE_FIELD, session_id.encode("utf-8"))
-        self._driver.put(session_record_key(session_id), VALUE_FIELD, messaging_integration_thread_id.encode("utf-8"))
+        self._driver.put(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id), VALUE_FIELD, session_id.encode("utf-8"))
+        self._driver.put(SessionIdMappingStore.session_record_key(session_id), VALUE_FIELD, messaging_integration_thread_id.encode("utf-8"))
 
     def clear(self) -> None:
         """

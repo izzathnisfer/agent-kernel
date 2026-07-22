@@ -17,8 +17,3 @@ output "agent_runner_service_name" {
   description = "ECS Agent Runner service name"
   value       = module.containerized_agents.agent_runner_service_name
 }
-
-output "session_id_mapping_table_name" {
-  description = "DynamoDB Session ID Mapping table name (agent-initiated conversations)"
-  value       = module.containerized_agents.session_id_mapping_table_name
-}

@@ -2,6 +2,13 @@
 
 Builds [spec.md](spec.md) in order; every iteration leaves the branch working and testable. Section references (§) point into spec.md.
 
+**Post-review revision:** iterations below describe the original implementation (PR #362), which used a
+`mapping_table:` config block as the feature gate. Following review feedback, that block was replaced with
+`AKConfig.conversation_initiation_enabled` (auto-enabled in queue mode, explicit `conversation_initiation.enabled` opt-in for REST) and
+namespace/TTL derivation from the session store's own settings — see the current [spec.md](spec.md) §Feature
+gate and §Config changes for the as-built config shape. The iterations below are left as the historical
+implementation record and are not updated line-by-line for the new config field names.
+
 ## Iteration 1: Config block + Session ID Mapping store
 
 - **Goal:** `mapping_table:` config parses and `SessionIdMappingStoreBuilder.build()` returns the backend matching `session.type`; feature still inert everywhere else.

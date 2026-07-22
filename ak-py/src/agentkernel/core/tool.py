@@ -191,8 +191,7 @@ class SystemToolFactory:
 
             tools.append(AnalyzeAttachmentsTool())
 
-        mapping_table_config = getattr(AKConfig.get(), "mapping_table", None)
-        if mapping_table_config:
+        if AKConfig.get().conversation_initiation_enabled:
             from .initiation import InitiateConversationTool
 
             tools.append(InitiateConversationTool())

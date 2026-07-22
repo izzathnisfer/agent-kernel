@@ -10,23 +10,16 @@ from agentkernel.core.thread.manager import ConversationThreadManager
 from agentkernel.core.thread.naming import ThreadNamingStrategy
 from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
 from agentkernel.deployment.aws.containerized.akoutputconsumer import ECSOutputConsumer
-from agentkernel.deployment.aws.core.initiation_dispatch import register_initiation_queue_dispatcher
+from agentkernel.deployment.aws.core.initiation_dispatch import InitiationQueueDispatcher
 from agentkernel.deployment.aws.core.sqs_handler import SQSHandler
 from agentkernel.deployment.aws.serverless.akresponsehandler import ResponseHandler
-
-
-class FakeMappingTableCfg:
-    table_name = "test-mapping"
-    collection_name = "test-mapping"
-    prefix = "ak:test-map:"
-    ttl = 0
 
 
 class FakeThreadCfg:
     type = "memory"
 
 
-def make_fake_cfg(mapping_table=FakeMappingTableCfg, thread=None, mode=ExecutionMode.REST_SYNC):
+def make_fake_cfg(conversation_initiation_enabled=True, thread=None, mode=ExecutionMode.REST_SYNC):
     class FakeCfg:
         class session:
             type = "in_memory"
@@ -37,8 +30,12 @@ def make_fake_cfg(mapping_table=FakeMappingTableCfg, thread=None, mode=Execution
                 class output:
                     max_receive_count = 3
 
+        class conversation_initiation:
+            enabled = conversation_initiation_enabled
+            store = None
+
     FakeCfg.execution.mode = mode
-    FakeCfg.mapping_table = mapping_table
+    FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
     FakeCfg.thread = thread
     return FakeCfg
 
@@ -225,7 +222,7 @@ class TestQueueDispatcher:
             sent.update(kwargs)
 
         monkeypatch.setattr(SQSHandler, "send_message_to_output_queue", staticmethod(fake_send))
-        register_initiation_queue_dispatcher()
+        InitiationQueueDispatcher.register()
 
         initiation = make_initiation()
         InitiationManager.get().dispatch(initiation)

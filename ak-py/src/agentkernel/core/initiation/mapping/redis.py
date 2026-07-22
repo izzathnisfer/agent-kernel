@@ -9,17 +9,14 @@ class RedisSessionIdMappingStore(_RedisLikeSessionIdMappingStore):
     """
     Redis-backed implementation of the SessionIdMappingStore interface.
 
-    Connection settings come from ``session.redis``; the key prefix and TTL come
-    from ``mapping_table``.
+    Connection settings and TTL come from ``session.redis``; the key prefix is
+    derived by suffixing the session store's prefix with ``id-mapping:``.
     """
 
     def __init__(self):
-        cfg = AKConfig.get()
-        mapping_cfg = cfg.mapping_table
-        if mapping_cfg is None:
-            raise ValueError("mapping_table config block is required to use RedisSessionIdMappingStore")
-        conn = cfg.session.redis
+        conn = AKConfig.get().session.redis
         if conn is None:
             raise ValueError("session.redis config block is required to use RedisSessionIdMappingStore")
-        driver = RedisDriver(url=conn.url, prefix=mapping_cfg.prefix, ttl=int(mapping_cfg.ttl), decode_responses=True)
+        prefix = f"{conn.prefix}id-mapping:"
+        driver = RedisDriver(url=conn.url, prefix=prefix, ttl=int(conn.ttl), decode_responses=True)
         super().__init__(driver, "ak.initiation.mapping.redis")

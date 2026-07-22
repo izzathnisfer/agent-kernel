@@ -18,30 +18,7 @@ which re-saves when the forward lookup misses).
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
-
-THREAD_RECORD_PREFIX = "thread#"
-SESSION_RECORD_PREFIX = "session#"
-
-
-def thread_record_key(messaging_integration_thread_id: str) -> str:
-    """
-    Composes the record key for the forward (thread id -> session id) direction.
-
-    :param messaging_integration_thread_id: The messaging platform's thread identifier.
-    :return: The record key.
-    """
-    return f"{THREAD_RECORD_PREFIX}{messaging_integration_thread_id}"
-
-
-def session_record_key(session_id: str) -> str:
-    """
-    Composes the record key for the reverse (session id -> thread id) direction.
-
-    :param session_id: The Agent Kernel session id.
-    :return: The record key.
-    """
-    return f"{SESSION_RECORD_PREFIX}{session_id}"
+from typing import ClassVar, Optional
 
 
 class SessionIdMappingStore(ABC):
@@ -50,6 +27,29 @@ class SessionIdMappingStore(ABC):
     allows storage and bidirectional retrieval of the
     ``session_id <-> messaging_integration_thread_id`` association.
     """
+
+    THREAD_RECORD_PREFIX: ClassVar[str] = "thread#"
+    SESSION_RECORD_PREFIX: ClassVar[str] = "session#"
+
+    @staticmethod
+    def thread_record_key(messaging_integration_thread_id: str) -> str:
+        """
+        Composes the record key for the forward (thread id -> session id) direction.
+
+        :param messaging_integration_thread_id: The messaging platform's thread identifier.
+        :return: The record key.
+        """
+        return f"{SessionIdMappingStore.THREAD_RECORD_PREFIX}{messaging_integration_thread_id}"
+
+    @staticmethod
+    def session_record_key(session_id: str) -> str:
+        """
+        Composes the record key for the reverse (session id -> thread id) direction.
+
+        :param session_id: The Agent Kernel session id.
+        :return: The record key.
+        """
+        return f"{SessionIdMappingStore.SESSION_RECORD_PREFIX}{session_id}"
 
     @abstractmethod
     def get_session_id(self, messaging_integration_thread_id: str) -> Optional[str]:

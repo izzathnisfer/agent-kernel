@@ -33,28 +33,37 @@ and the platform send happens only in the Response Handler role.
 
 ## Enabling
 
-Add the `mapping_table:` block — its presence enables the feature. The mapping store backend
-**follows your `session.type`** (connection settings are reused from `session.<backend>`); the
-block carries only namespace settings:
+Queue-mode deployments (ECS containerized, Lambda serverless) **auto-enable** the feature — no
+config needed beyond `execution.queues`. Single-process REST deployments need an explicit opt-in:
+
+```yaml
+conversation_initiation:
+  enabled: true   # required for single-process REST; queue-mode auto-enables
+  # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own (dotted path)
+```
+
+The mapping store backend **follows your `session.type`** and reuses its connection settings; its
+namespace (table/collection name or key prefix) is derived from the session store's own by
+suffixing `-id-mapping` (table/collection) or `id-mapping:` (key prefix), and it reuses the session
+store's TTL — no separate namespace config needed:
 
 ```yaml
 session:
   type: redis
   redis:
     url: "redis://localhost:6379"
-
-mapping_table:
-  prefix: "ak:session-map:"        # Redis / Valkey key prefix
-  table_name: ak-session-id-mapping # DynamoDB / Cosmos DB table (partition key 'map_key' (S))
-  collection_name: ak-session-id-mapping # Firestore collection
-  ttl: 0                            # seconds; 0 disables (not supported on Cosmos DB)
+    prefix: "ak:sessions:"   # mapping keys land under "ak:sessions:id-mapping:"
 ```
 
-With the block present:
+With the feature enabled:
 
 - the `initiate_conversation` system tool is registered on **all agents**;
 - inbound platform messages resolve their thread id through the mapping before selecting a session;
 - response handlers recognize initiation messages (`message_type=INITIATION` queue attribute).
+
+Set `conversation_initiation.enabled: false` to force-disable in queue mode, or bring your own mapping store
+entirely via `conversation_initiation.store` (a dotted path to a `SessionIdMappingStore` subclass) — bypassing
+the `session.type` derivation.
 
 ## The `initiate_conversation` tool
 
@@ -160,9 +169,12 @@ there's no delivery surface for a proactively sent message to arrive on.
 
 ## Deployment notes
 
-- **ECS containerized Terraform**: set `conversation_initiation = true` to create the
-  `-session-id-mapping` DynamoDB table (hash key `map_key`, TTL attribute `expiry_time`) with IAM
-  grants for the REST/IO service. The Agent Runner gets no grant — it never touches the table.
+- **ECS containerized Terraform**: the mapping store follows `session.type`, so set
+  `conversation_initiation = true` only when the session store itself is DynamoDB
+  (`create_dynamodb_memory_table = true`) — it provisions the `-session-id-mapping` DynamoDB table
+  (hash key `map_key`, TTL attribute `expiry_time`) with IAM grants for the REST/IO service. The
+  Agent Runner gets no grant — it never touches the table. Other session backends (Redis, Valkey,
+  ...) need no extra resource; the mapping rides the same store.
 - A reply arriving in the instant between the platform send and the mapping bind resolves to a
   platform-derived session (accepted limitation); the initiated session's history is complete
   before the send, so subsequent replies have full context.

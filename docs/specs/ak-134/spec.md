@@ -1,12 +1,12 @@
 # AK-134: Agent-initiated conversations — Implementation Spec
 
-This spec details the implementation of the approved [design.md](design.md): a new `core/initiation/` package (mapping store, manager, system tool), a resolve hook on the request-handler surfaces, initiation delivery through the response handlers' existing `process_message` override point (no new send method), and a `mapping_table` config block plus Terraform table. The design idea: the tool creates the session platform-blind inside the Agent Runner, runs the owning agent with the caller's prompt so the outbound message and its context land in the new session's framework history naturally, and dispatches an `InitiationMessage`; the Response Handler sends it, learns the `messaging_integration_thread_id`, and binds the mapping that the Request Handler later resolves replies through.
+This spec details the implementation of the approved [design.md](design.md): a new `core/initiation/` package (mapping store, manager, system tool), a resolve hook on the request-handler surfaces, initiation delivery through the response handlers' existing `process_message` override point (no new send method), and a `conversation_initiation:` config block plus Terraform table (provisioned only for a DynamoDB-backed session store). The design idea: the tool creates the session platform-blind inside the Agent Runner, runs the owning agent with the caller's prompt so the outbound message and its context land in the new session's framework history naturally, and dispatches an `InitiationMessage`; the Response Handler sends it, learns the `messaging_integration_thread_id`, and binds the mapping that the Request Handler later resolves replies through.
 
 ## Design
 
 ### Feature gate
 
-1. The entire feature is enabled by the **presence of the `mapping_table:` block** in config (mirrors the `thread:` pattern — `_ThreadStoreConfig` docstring, `ak-py/src/agentkernel/core/config.py`). When absent: `InitiationManager.get()` returns `None`, the tool is not registered, resolve hooks return the platform-derived id unchanged, and the response-handler initiation branch is never taken.
+1. The entire feature is gated by **`AKConfig.conversation_initiation_enabled`** (an always-present `conversation_initiation:` config block): an explicit `conversation_initiation.enabled` wins; otherwise auto-enabled in queue-mode deployments (`execution.queues.input.url` configured), since only those register a dispatcher at startup — timing-safe because system tools attach at Agent init, before dispatcher registration. Single-process REST needs the explicit `conversation_initiation.enabled: true` opt-in. When disabled: `InitiationManager.get()` returns `None`, the tool is not registered, resolve hooks return the platform-derived id unchanged, and the response-handler initiation branch is never taken.
 2. The core never imports from `deployment/`, `integration/`, or `api/` — dispatchers and senders are *registered into* the core by those layers (same direction as `RESTAPI.run(handlers=...)`).
 
 ### New package: `core/initiation/`
@@ -61,7 +61,7 @@ class InitiationSender(ABC):
 
 class InitiationManager:
     """Process-wide singleton façade (mirrors ConversationThreadManager.get() / RLock pattern,
-    ak-py/src/agentkernel/core/thread/manager.py:78). None when mapping_table is absent."""
+    ak-py/src/agentkernel/core/thread/manager.py:78). None when conversation_initiation_enabled is False."""
     @classmethod
     def get(cls) -> "InitiationManager | None": ...
     @classmethod
@@ -92,7 +92,7 @@ class InitiationManager:
 ```
 
 3. **Governing rule — one choke point per direction:** every resolve goes through `InitiationManager.resolve_session_id()` and every bind through `complete()`/`bind()`, in all deployment shapes. The queue and single-process paths differ only in *who* performs the platform send (the user's `process_message` override vs. a registered `InitiationSender`).
-4. **Governing rule — mapping store follows the session store:** `SessionIdMappingStoreBuilder.build()` switches on `AKConfig.get().session.type` exactly as `SessionStoreBuilder.build()` does (`ak-py/src/agentkernel/core/builder.py:132-162`), including the `valkey` ImportError message pattern (`builder.py:139-144`). Connection settings come from the existing `session.<backend>` config (`_SessionStoreConfig`, url/credentials); only namespace settings (table/collection name, prefix, TTL) come from `mapping_table`.
+4. **Governing rule — mapping store follows the session store:** `SessionIdMappingStoreBuilder.build()` switches on `AKConfig.get().session.type` exactly as `SessionStoreBuilder.build()` does (`ak-py/src/agentkernel/core/builder.py:132-162`), including the unknown-type `AKConfigError` and the `valkey` ImportError message pattern (`builder.py:139-144`) — unless `conversation_initiation.store` names a bring-your-own dotted path (`resolve_dotted(path, base=SessionIdMappingStore)()`), which takes precedence. Connection settings come from the existing `session.<backend>` config (`_SessionStoreConfig`, url/credentials); namespace (table/collection name or key prefix) is derived by suffixing the session store's own (`-id-mapping` / `id-mapping:`), and TTL is reused from it — no separate namespace config.
 
 ### Mapping store data model
 
@@ -106,15 +106,15 @@ Both lookup directions must be O(1) on key-value backends, so `save()` writes **
 The backends **reuse the shared drivers in `core/util/driver/`** — the same ones every session store and thread store already instantiates with explicit constructor params (config reading stays in the stores, per the drivers' contract):
 
 - **in_memory**: `ClassVar[dict]` (pattern: `InMemoryAttachmentStore`); no driver.
-- **redis / valkey**: `RedisDriver` (`ak-py/src/agentkernel/core/util/driver/redis.py:8`) / `ValkeyDriver` (`driver/valkey.py:8`) — lazy connect, ping-reconnect, and retry lifecycle inherited from `_RedisLikeDriver` (`driver/redis_like.py:32`). Instantiated as the session stores do (e.g. `session/valkey.py:26`) but splitting the sources: `url` from `session.redis`/`session.valkey`, `prefix`/`ttl` from `mapping_table`. Records via `driver.set(key, value)` / `driver.get(key)`; save-if-absent is check-then-act in `InitiationManager.bind()`, uniform across backends (`set(..., nx=True)` remains available should an atomic variant ever be needed).
-- **dynamodb**: `DynamoDBDriver(table_name=mapping_table.table_name, partition_key="map_key", ttl=mapping_table.ttl)` (`driver/dynamodb.py:23`) — `sort_key` stays `None`, which the driver supports (key built from the partition key alone, `driver/dynamodb.py:79-81`), fitting the hash-only table; TTL > 0 attaches the `expiry_time` attribute on put, matching the Terraform TTL attribute.
-- **firestore**: `FirestoreDriver` (`driver/firestore.py:12`) with `collection_name` from `mapping_table`, `project_id`/`database_id` from `session.firestore`; one document per record key.
-- **cosmosdb**: `CosmosDBDriver(connection_string=session.cosmosdb.connection_string, table_name=mapping_table.table_name)` (`driver/cosmosdb.py:23`); no TTL (matches `CosmosDBThreadStore`'s no-TTL support).
+- **redis / valkey**: `RedisDriver` (`ak-py/src/agentkernel/core/util/driver/redis.py:8`) / `ValkeyDriver` (`driver/valkey.py:8`) — lazy connect, ping-reconnect, and retry lifecycle inherited from `_RedisLikeDriver` (`driver/redis_like.py:32`). Instantiated as the session stores do (e.g. `session/valkey.py:26`), reusing `session.redis`/`session.valkey` wholesale: `url`/`ttl` as-is, `prefix` suffixed with `id-mapping:`. Records via `driver.set(key, value)` / `driver.get(key)`; save-if-absent is check-then-act in `InitiationManager.bind()`, uniform across backends (`set(..., nx=True)` remains available should an atomic variant ever be needed).
+- **dynamodb**: `DynamoDBDriver(table_name=f"{session.dynamodb.table_name}-id-mapping", partition_key="map_key", ttl=session.dynamodb.ttl)` (`driver/dynamodb.py:23`) — `sort_key` stays `None`, which the driver supports (key built from the partition key alone, `driver/dynamodb.py:79-81`), fitting the hash-only table; TTL > 0 attaches the `expiry_time` attribute on put, matching the Terraform TTL attribute.
+- **firestore**: `FirestoreDriver` (`driver/firestore.py:12`) with `collection_name=f"{session.firestore.collection_name}-id-mapping"`, `project_id`/`database_id`/`ttl` from `session.firestore` as-is; one document per record key.
+- **cosmosdb**: `CosmosDBDriver(connection_string=session.cosmosdb.connection_string, table_name=f"{session.cosmosdb.table_name}-id-mapping")` (`driver/cosmosdb.py:23`); no TTL (matches `CosmosDBThreadStore`'s no-TTL support).
 - `save()` is last-writer-wins and idempotent; no transactional coupling between the two records (a torn write is repaired by the next `bind()`, which re-saves when `get_session_id` misses).
 
 ### Initiation tool (`tools.py`)
 
-Registered by `SystemToolFactory.get_all()` (`ak-py/src/agentkernel/core/tool.py:165-179`) when `AKConfig.get().mapping_table` is present, alongside the existing multimodal gate; the description joins the system-prompt suffix via `Agent._setup_system_prompt()` (`ak-py/src/agentkernel/core/base.py:336-353`).
+Registered by `SystemToolFactory.get_all()` (`ak-py/src/agentkernel/core/tool.py:165-179`) when `AKConfig.get().conversation_initiation_enabled` is true, alongside the existing multimodal gate; the description joins the system-prompt suffix via `Agent._setup_system_prompt()` (`ak-py/src/agentkernel/core/base.py:336-353`).
 
 ```python
 def _initiate_conversation(target: str, prompt: str,
@@ -182,27 +182,31 @@ class SessionIdResolver:
 New classes in `ak-py/src/agentkernel/core/config.py`, and a new optional root field after `thread` (`config.py:393`):
 
 ```python
-class _MappingTableConfig(BaseModel):
-    """Configuration for the Session ID Mapping table. Presence of this block enables
-    agent-initiated conversations. The store backend follows session.type."""
+class _ConversationInitiationConfig(BaseModel):
+    """Configuration for agent-initiated conversations (the Session ID Mapping store and
+    the initiate_conversation system tool)."""
 
-    table_name: str = Field(default="ak-session-id-mapping", description="Table name (DynamoDB / Cosmos DB)")
-    collection_name: str = Field(default="ak-session-id-mapping", description="Collection name (Firestore)")
-    prefix: str = Field(default="ak:session-map:", description="Key prefix (Redis / Valkey)")
-    ttl: int = Field(default=0, description="Mapping TTL in seconds (0 disables; not supported on Cosmos DB)")
+    enabled: Optional[bool] = Field(
+        default=None,
+        description="None (default) auto-enables in queue mode; explicit true/false overrides.",
+    )
+    store: Optional[str] = Field(
+        default=None,
+        description="Dotted path to a SessionIdMappingStore subclass (bring-your-own).",
+    )
 
 class AKConfig(...):
-    mapping_table: Optional[_MappingTableConfig] = Field(
-        default=None,
-        description="Session ID Mapping table for agent-initiated conversations. Feature is enabled only when this block is present.",
+    conversation_initiation: _ConversationInitiationConfig = Field(
+        description="Agent-initiated conversation configurations",
+        default_factory=_ConversationInitiationConfig,
     )
 ```
 
-- No existing field, type, default, or description changes. Existing YAML files and `AK_*` env vars are unaffected; the new block is reachable as `AK_MAPPING_TABLE__TTL` etc. through the existing env mechanism.
+- No existing field, type, default, or description changes to other blocks. Existing YAML files and `AK_*` env vars are unaffected; the new block is reachable as `AK_CONVERSATION_INITIATION__ENABLED` etc. through the existing env mechanism. `AKConfig.conversation_initiation_enabled` is a plain Python property (not a pydantic field) computing the effective enabled state — see §Feature gate.
 
 ### Terraform changes
 
-- `ak-deployment/ak-aws/containerized/dynamodb.tf`: new `aws_dynamodb_table "session_id_mapping"` mirroring `response_store` (`dynamodb.tf:3-21`): `name = "${local.prefix}-session-id-mapping"`, `billing_mode = "PAY_PER_REQUEST"`, `hash_key = "map_key"` (S), TTL attribute `expiry_time`, gated by a new `var.conversation_initiation` flag (default `false`).
+- `ak-deployment/ak-aws/containerized/dynamodb.tf`: new `aws_dynamodb_table "session_id_mapping"` mirroring `response_store` (`dynamodb.tf:3-21`): `name = "${local.prefix}-session-id-mapping"`, `billing_mode = "PAY_PER_REQUEST"`, `hash_key = "map_key"` (S), TTL attribute `expiry_time`, gated by a new `var.conversation_initiation` flag (default `false`) — set only when the session store itself is DynamoDB (`create_dynamodb_memory_table = true`); other session backends need no extra resource since the mapping store rides the same one.
 - `ak-deployment/ak-aws/containerized/iam.tf`: a separate count-gated `aws_iam_policy.rest_service_session_id_mapping_policy` (+ attachment) scoped to the mapping table ARN, granted to the REST/IO service task role only — the request-handler resolve and the response-handler bind both run there; the agent-runner role gets no grant (the runner needs no mapping-table access, per the design's Agent Runner blindness rule).
 - The serverless module currently defines no DynamoDB tables (verified: `grep aws_dynamodb_table ak-deployment/ak-aws` matches only `containerized/`), so no serverless Terraform change; serverless users provision the table with their session-store tables as today.
 
@@ -210,13 +214,13 @@ class AKConfig(...):
 
 All intentional; everything not listed is a non-change.
 
-1. **`POST /api/v1/chat` (queue deployments) may rewrite `session_id`.** When `mapping_table` is enabled and the supplied `session_id` matches a mapped `messaging_integration_thread_id`, the run executes under the mapped session and the response's `session_id` is the mapped one. Callers must poll `GET /api/v1/chat/{session_id}` with the returned id (the existing session-match check at `queue_request_handler.py:161` makes polling with the original thread id return 404 — this is the documented contract, not a bug).
+1. **`POST /api/v1/chat` (queue deployments) may rewrite `session_id`.** When agent-initiated conversations are enabled and the supplied `session_id` matches a mapped `messaging_integration_thread_id`, the run executes under the mapped session and the response's `session_id` is the mapped one. Callers must poll `GET /api/v1/chat/{session_id}` with the returned id (the existing session-match check at `queue_request_handler.py:161` makes polling with the original thread id return 404 — this is the documented contract, not a bug).
 2. **Integration handlers perform one mapping lookup per inbound message** when the feature is enabled (hot path; O(1) key-value get; on store error the lookup falls back to the platform-derived id, so message handling never blocks on the mapping backend).
 3. **Stock response handlers gain a guard branch on `message_type=INITIATION`**: such messages are never written to the response store nor broadcast — they are logged (WARNING) and dropped unless a user's `process_message` override delivers them and calls `complete()`.
-4. **`initiate_conversation` joins the system tools** on all agents (and the system-prompt suffix grows by its description) in any process where `mapping_table` is configured.
+4. **`initiate_conversation` joins the system tools** on all agents (and the system-prompt suffix grows by its description) in any process where `AKConfig.conversation_initiation_enabled` is true.
 5. **`RESTRequestHandler` gains a concrete base method** (`resolve_session_id`), changing it from a pure ABC to an ABC with one default method — no existing subclass overrides anything by that name (verified: no matches in `ak-py/src`).
 
-**Non-changes:** session store data layout and `Session` serialization; thread store layout; `BaseChatRequest`/`BaseRunRequest` schemas; all existing config fields; `ChatService` behavior; the system pre-hook chain (`Runtime._get_system_pre_hooks()` is untouched — prompt-only initiation needs no injection hook); reactive conversations on every platform when `mapping_table` is absent (all guards and branches inert); public exports of `agentkernel.core` (new symbols are added under `agentkernel.core.initiation`, nothing moves).
+**Non-changes:** session store data layout and `Session` serialization; thread store layout; `BaseChatRequest`/`BaseRunRequest` schemas; all existing config fields; `ChatService` behavior; the system pre-hook chain (`Runtime._get_system_pre_hooks()` is untouched — prompt-only initiation needs no injection hook); reactive conversations on every platform when the feature is disabled (all guards and branches inert); public exports of `agentkernel.core` (new symbols are added under `agentkernel.core.initiation`, nothing moves).
 
 ## Error handling
 
@@ -237,11 +241,12 @@ Concurrency: `InitiationManager` is a class-level singleton guarded by an `RLock
 
 New test files (`ak-py/tests/`):
 
-- `test_session_id_mapping.py` — `InMemorySessionIdMappingStore` bidirectional save/get/clear and save-if-absent idempotency; `SessionIdMappingStoreBuilder` follows `session.type` (monkeypatch `agentkernel.core.config.AKConfig.get` with a `FakeCfg` exposing `session.type` + `mapping_table`, per the established pattern); `InitiationManager.get()` returns `None` when `mapping_table` is absent and a manager when present (`InitiationManager.reset()` in an autouse fixture, mirroring thread-manager tests).
+- `test_session_id_mapping.py` — `InMemorySessionIdMappingStore` bidirectional save/get/clear and save-if-absent idempotency; `SessionIdMappingStoreBuilder` follows `session.type` and derives namespace/TTL from the session store's own (monkeypatch `agentkernel.core.config.AKConfig.get` with a `FakeCfg` exposing `session.type` + per-backend blocks + `conversation_initiation`, per the established pattern); unknown type raises `AKConfigError`; `test_store_builders.py` covers the `conversation_initiation.store` bring-your-own dotted path; `InitiationManager.get()` returns `None` when `conversation_initiation_enabled` is False and a manager when True (`InitiationManager.reset()` in an autouse fixture, mirroring thread-manager tests).
 - `test_initiation_tool.py` — using `DummyAgent`/`DummyRunner` and an in-memory runtime: the tool creates the session in the store, runs the agent (DummyRunner reply becomes the outbound message, session history persisted), and dispatches an `InitiationMessage` with `user_id` defaulting to `target`; missing dispatcher / missing target / missing prompt return error text without raising.
 - `test_initiation_response_handlers.py` — the riskiest consumers: for `ResponseHandler` (Lambda record shape) and `ECSOutputConsumer` (boto3 record shape), an `INITIATION`-attributed record hitting the **stock** handler is logged and dropped — no response-store write, no broadcast, no raise (same for `on_permanent_failure`); a **subclass** override following the documented contract (parse → fake send → `complete()`) binds the mapping (in-memory store via monkeypatched config) and creates the AK thread + first assistant message when `thread` config is present (`ConversationThreadManager.reset()` + `InitiationManager.reset()` between cases); `complete()` swallows a failing mapping store (logs, never raises); a `CHAT_RESPONSE`-attributed record still follows the existing store/broadcast path (patch targets unchanged from `test_akresponsehandler.py`: `ResponseDBHandler`, `BaseWSHandler`, `SQSHandler.get_message_custom_attributes` inputs).
 - `test_queue_request_handler_resolve.py` — `POST /api/v1/chat` rewrites a mapped `session_id` before enqueue and returns the resolved id (patch `get_queue_handler`/`get_response_store` fakes); identity fallback when unmapped or disabled.
+- `test_slack_session_resolution.py` / `test_integration_session_resolution.py` (post-review addition) — inbound session-id derivation driven end-to-end through each handler's own inbound-message method for every messaging integration except Teams (the one exception, tracked as a known gap): Slack, WhatsApp, Telegram, Messenger, Instagram, and both of Gmail's resolution points (`_process_email`, `_process_with_agent`).
 
-Existing test files: `test_akresponsehandler.py` must pass unchanged (the new branch triggers only on the new attribute); `test_config.py` gains an assertion that `mapping_table` defaults to `None`. No existing patch targets move.
+Existing test files: `test_akresponsehandler.py` must pass unchanged (the new branch triggers only on the new attribute); `test_config.py` gains assertions covering `conversation_initiation_enabled`'s auto-detect/explicit-override behavior. No existing patch targets move.
 
 Run: `cd ak-py && uv run pytest` (format check: `make lint-check`).

@@ -1,17 +1,20 @@
 """
 Session ID Mapping store for agent-initiated conversations.
 
-The store backend follows the configured session store type (``session.type``);
-connection settings are read from the corresponding ``session.<backend>`` block
-and namespace settings (table/collection name, key prefix, TTL) from the
-``mapping_table`` block.
+The store backend follows the configured session store type (``session.type``) and
+shares its connection settings; namespace (table/collection name, key prefix) is
+derived from the session store's own and TTL is reused from it — see each backend
+module for the exact derivation. Set ``conversation_initiation.store`` to a dotted path to bring
+your own ``SessionIdMappingStore`` subclass instead.
 """
 
 import logging
 
 from ...config import AKConfig
-from ...util.factory import require_extra
+from ...util.factory import AKConfigError, require_extra, resolve_dotted
 from .base import SessionIdMappingStore
+
+_BUILTIN_SESSION_ID_MAPPING_STORES = ["in_memory", "redis", "valkey", "dynamodb", "cosmosdb", "firestore"]
 
 
 class SessionIdMappingStoreBuilder:
@@ -19,7 +22,8 @@ class SessionIdMappingStoreBuilder:
     Builder class for creating SessionIdMappingStore instances based on configuration.
 
     The backend selection follows ``session.type`` exactly as SessionStoreBuilder
-    does — the mapping store always lives next to the session store.
+    does — the mapping store always lives next to the session store — unless
+    ``conversation_initiation.store`` names a bring-your-own ``SessionIdMappingStore`` subclass.
     """
 
     _log = logging.getLogger("ak.initiation.mapping")
@@ -27,16 +31,27 @@ class SessionIdMappingStoreBuilder:
     @staticmethod
     def build() -> SessionIdMappingStore:
         """
-        Build and return a SessionIdMappingStore instance for the configured
-        session store type.
+        Build and return a SessionIdMappingStore instance.
 
-        :return: The SessionIdMappingStore implementation matching ``session.type``,
-            falling back to the in-memory store for unknown types.
+        :return: A bring-your-own store when ``conversation_initiation.store`` is set, otherwise the
+            built-in SessionIdMappingStore implementation matching ``session.type``.
         :raises ImportError: If the backend's extra (e.g. ``valkey`` for session.type:
             valkey) is not installed.
+        :raises AKConfigError: If ``session.type`` is neither a built-in short name nor
+            resolvable via ``conversation_initiation.store``.
         """
-        store_type = AKConfig.get().session.type.lower()
+        config = AKConfig.get()
+        store_path = config.conversation_initiation.store
+        if store_path:
+            SessionIdMappingStoreBuilder._log.info(f"Building session id mapping store from dotted path '{store_path}'")
+            return resolve_dotted(store_path, base=SessionIdMappingStore)()
+
+        store_type = config.session.type.lower()
         SessionIdMappingStoreBuilder._log.info(f"Building '{store_type}' session id mapping store")
+        if store_type == "in_memory":
+            from .in_memory import InMemorySessionIdMappingStore
+
+            return InMemorySessionIdMappingStore()
         if store_type == "redis":
             with require_extra("redis", "session.type: redis"):
                 from .redis import RedisSessionIdMappingStore
@@ -63,6 +78,7 @@ class SessionIdMappingStoreBuilder:
 
             return FirestoreSessionIdMappingStore()
 
-        from .in_memory import InMemorySessionIdMappingStore
-
-        return InMemorySessionIdMappingStore()
+        raise AKConfigError(
+            f"unknown session store type '{store_type}' for the Session ID Mapping store; expected one of "
+            f"{_BUILTIN_SESSION_ID_MAPPING_STORES} or set conversation_initiation.store to a dotted path to a SessionIdMappingStore subclass"
+        )

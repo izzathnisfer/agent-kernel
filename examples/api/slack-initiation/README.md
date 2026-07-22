@@ -6,7 +6,8 @@ reply continues the same conversation instead of starting a context-less one.
 
 ## How it works
 
-- The `mapping_table:` block in `config.yaml` enables the feature: the
+- `conversation_initiation.enabled: true` in `config.yaml` enables the feature for this
+  single-process REST deployment (queue-mode deployments auto-enable): the
   `initiate_conversation` system tool is registered on all agents, and inbound
   Slack messages resolve their `thread_ts` through the Session ID Mapping.
 - `SlackInitiationHandler` (in `server.py`) plays both handler roles:

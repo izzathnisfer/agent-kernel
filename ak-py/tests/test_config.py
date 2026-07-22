@@ -25,8 +25,9 @@ def test_config_defaults_no_file(monkeypatch):
     # Defaults for nested redis should be None
     assert cfg.session.redis is None
 
-    # Session ID Mapping (agent-initiated conversations) is disabled by default
-    assert cfg.mapping_table is None
+    # Agent-initiated conversations are disabled by default outside queue mode
+    assert cfg.conversation_initiation.enabled is None
+    assert cfg.conversation_initiation_enabled is False
 
 
 @pytest.mark.usefixtures("tmp_path")
@@ -181,6 +182,28 @@ def test_guardrail_pii_default():
     cfg = AKConfig()
     assert cfg.guardrail.input.pii is True
     assert cfg.guardrail.output.pii is True
+
+
+class TestInitiationEnabled:
+    def test_disabled_by_default_outside_queue_mode(self):
+        cfg = AKConfig()
+        assert cfg.conversation_initiation_enabled is False
+
+    def test_auto_enabled_when_input_queue_configured(self):
+        cfg = AKConfig()
+        cfg.execution.queues.input.url = "https://sqs.example/input"
+        assert cfg.conversation_initiation_enabled is True
+
+    def test_explicit_false_overrides_queue_mode(self):
+        cfg = AKConfig()
+        cfg.execution.queues.input.url = "https://sqs.example/input"
+        cfg.conversation_initiation.enabled = False
+        assert cfg.conversation_initiation_enabled is False
+
+    def test_explicit_true_enables_single_process_rest(self):
+        cfg = AKConfig()
+        cfg.conversation_initiation.enabled = True
+        assert cfg.conversation_initiation_enabled is True
 
 
 def test_guardrail_pii_env_override(monkeypatch):

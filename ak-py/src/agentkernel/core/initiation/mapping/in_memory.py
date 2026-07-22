@@ -5,7 +5,7 @@ In-memory Session ID Mapping store for local development and testing.
 import logging
 from typing import ClassVar, Optional
 
-from .base import SessionIdMappingStore, session_record_key, thread_record_key
+from .base import SessionIdMappingStore
 
 
 class InMemorySessionIdMappingStore(SessionIdMappingStore):
@@ -27,7 +27,7 @@ class InMemorySessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         :return: The mapped session id, or None if no mapping exists.
         """
-        return self._records.get(thread_record_key(messaging_integration_thread_id))
+        return self._records.get(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id))
 
     def get_messaging_integration_thread_id(self, session_id: str) -> Optional[str]:
         """
@@ -36,7 +36,7 @@ class InMemorySessionIdMappingStore(SessionIdMappingStore):
         :param session_id: The Agent Kernel session id.
         :return: The mapped messaging platform thread id, or None if no mapping exists.
         """
-        return self._records.get(session_record_key(session_id))
+        return self._records.get(SessionIdMappingStore.session_record_key(session_id))
 
     def save(self, session_id: str, messaging_integration_thread_id: str) -> None:
         """
@@ -46,8 +46,8 @@ class InMemorySessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         """
         self._log.debug(f"Saving mapping {session_id} <-> {messaging_integration_thread_id}")
-        self._records[thread_record_key(messaging_integration_thread_id)] = session_id
-        self._records[session_record_key(session_id)] = messaging_integration_thread_id
+        self._records[SessionIdMappingStore.thread_record_key(messaging_integration_thread_id)] = session_id
+        self._records[SessionIdMappingStore.session_record_key(session_id)] = messaging_integration_thread_id
 
     def clear(self) -> None:
         """

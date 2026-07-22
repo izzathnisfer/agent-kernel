@@ -6,15 +6,11 @@ logging:
 slack:
   agent: general
 
-# Session ID Mapping — presence of this block enables agent-initiated
-# conversations (the initiate_conversation system tool + reply resolution).
-# The store backend follows session.type. table_name is injected by Terraform
-# via AK_MAPPING_TABLE__TABLE_NAME on the REST service only — the module has
-# no auto-injection for this one (unlike session/response-store), so
-# deploy/main.tf sets it explicitly; the agent runner never touches this table.
-mapping_table:
-  prefix: "ak:session-map:"
-  ttl: 0
+# Agent-initiated conversations (the initiate_conversation system tool + reply
+# resolution) auto-enable in queue mode (execution.queues.input.url below is
+# injected by Terraform). The mapping store follows session.type (redis here),
+# reusing session.redis's connection settings with a derived key prefix/TTL —
+# no separate Terraform-provisioned resource is needed for it.
 
 session:
   type: redis

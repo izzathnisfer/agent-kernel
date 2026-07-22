@@ -1,9 +1,9 @@
-"""Phase-2 tests: session / thread / multimodal storage factories on the shared pattern.
+"""Phase-2 tests: session / thread / multimodal / mapping storage factories on the shared pattern.
 
 Covers the behaviour change (unknown type now fails loud instead of silently falling back to
 an in-memory default) and the bring-your-own dotted-path hatch with each surface's
 construction contract (session store gets ``cache=``, thread store is no-arg, attachment store
-gets ``session_id``).
+gets ``session_id``, mapping store is no-arg via ``conversation_initiation.store``).
 """
 
 import types
@@ -13,6 +13,9 @@ import pytest
 
 from agentkernel.core.builder import SessionStoreBuilder
 from agentkernel.core.config import AKConfig
+from agentkernel.core.initiation.mapping import SessionIdMappingStoreBuilder
+from agentkernel.core.initiation.mapping.base import SessionIdMappingStore
+from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
 from agentkernel.core.multimodal.storage.base import AttachmentStore
 from agentkernel.core.multimodal.storage.in_memory import InMemoryAttachmentStore
 from agentkernel.core.multimodal.storage.storage_manager import AttachmentStorageManager
@@ -76,6 +79,19 @@ class _ByoAttachmentStore(AttachmentStore):
     def get(self, attachment_id): ...
 
     def delete(self, attachment_id): ...
+
+
+class _ByoSessionIdMappingStore(SessionIdMappingStore):
+    def __init__(self):
+        self.records = {}
+
+    def get_session_id(self, messaging_integration_thread_id): ...
+
+    def get_messaging_integration_thread_id(self, session_id): ...
+
+    def save(self, session_id, messaging_integration_thread_id): ...
+
+    def clear(self): ...
 
 
 # --- SessionStoreBuilder ---------------------------------------------------- #
@@ -179,3 +195,46 @@ def test_multimodal_byo_dotted_path_gets_session_id(monkeypatch):
         store = AttachmentStorageManager._build_driver("sess-1")
     assert isinstance(store, _ByoAttachmentStore)
     assert store.session_id == "sess-1"  # builder passed session_id per the multimodal contract
+
+
+# --- SessionIdMappingStoreBuilder ------------------------------------------- #
+
+
+def test_mapping_builder_default_in_memory():
+    with patch.object(AKConfig, "get") as mock_get:
+        cfg = Mock()
+        cfg.conversation_initiation.store = None
+        cfg.session.type = "in_memory"
+        mock_get.return_value = cfg
+        assert isinstance(SessionIdMappingStoreBuilder.build(), InMemorySessionIdMappingStore)
+
+
+def test_mapping_builder_unknown_type_fails_loud():
+    with patch.object(AKConfig, "get") as mock_get:
+        cfg = Mock()
+        cfg.conversation_initiation.store = None
+        cfg.session.type = "reids"  # typo -> no silent fallback
+        mock_get.return_value = cfg
+        with pytest.raises(AKConfigError):
+            SessionIdMappingStoreBuilder.build()
+
+
+def test_mapping_builder_byo_dotted_path(monkeypatch):
+    _patch_import(monkeypatch, "byo_pkg", types.SimpleNamespace(Store=_ByoSessionIdMappingStore))
+    with patch.object(AKConfig, "get") as mock_get:
+        cfg = Mock()
+        cfg.conversation_initiation.store = "byo_pkg.Store"
+        mock_get.return_value = cfg
+        store = SessionIdMappingStoreBuilder.build()
+    assert isinstance(store, _ByoSessionIdMappingStore)
+
+
+def test_mapping_builder_byo_dotted_path_takes_precedence_over_session_type():
+    """conversation_initiation.store wins even when session.type also names a built-in backend."""
+    with patch.object(AKConfig, "get") as mock_get:
+        cfg = Mock()
+        cfg.conversation_initiation.store = "agentkernel.core.initiation.mapping.in_memory.InMemorySessionIdMappingStore"
+        cfg.session.type = "redis"
+        mock_get.return_value = cfg
+        store = SessionIdMappingStoreBuilder.build()
+    assert isinstance(store, InMemorySessionIdMappingStore)

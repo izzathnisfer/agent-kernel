@@ -124,6 +124,7 @@ def _install_sandbox_cfg(monkeypatch, sandbox_cfg):
     class _Cfg:
         sandbox = sandbox_cfg
         multimodal = None  # read by SystemToolFactory.get_all() alongside the sandbox block
+        conversation_initiation_enabled = False  # read by SystemToolFactory.get_all() alongside the sandbox block
         guardrail = _GuardrailConfig()  # read by the input/output guardrail system hooks (disabled)
 
     monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: _Cfg))
@@ -857,6 +858,7 @@ def test_agents_list_filters_multimodal_independently(monkeypatch):
     class _Cfg:
         sandbox = _sandbox_cfg(agents=["coder"])
         multimodal = _MM
+        conversation_initiation_enabled = False
 
     monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: _Cfg))
     assert [t.name for t in SystemToolFactory.get_all("vision")] == ["analyze_attachments"]

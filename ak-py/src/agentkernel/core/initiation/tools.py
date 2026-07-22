@@ -1,11 +1,12 @@
 """
 Conversation-initiation system tool.
 
-Registered on all agents when the ``mapping_table`` config block is present.
-The tool creates a new session inside the Agent Runner, runs the owning agent
-with the caller's prompt so the outbound message and its context land in the
-new session's framework history naturally, and dispatches an InitiationMessage
-toward the Response Handler — the single send point.
+Registered on all agents when agent-initiated conversations are enabled (see
+``AKConfig.conversation_initiation_enabled``). The tool creates a new session inside the
+Agent Runner, runs the owning agent with the caller's prompt so the outbound
+message and its context land in the new session's framework history
+naturally, and dispatches an InitiationMessage toward the Response Handler —
+the single send point.
 """
 
 import asyncio
@@ -43,7 +44,10 @@ def _initiate_conversation(target: str, prompt: str, user_id: str = "", agent: s
 
         manager = InitiationManager.get()
         if manager is None:
-            return "Cannot initiate conversation: conversation initiation is not enabled (no 'mapping_table' configuration)"
+            return (
+                "Cannot initiate conversation: conversation initiation is not enabled "
+                "(set conversation_initiation.enabled: true, or deploy in queue mode)"
+            )
         # Intra-package dispatcher check: failing here avoids a wasted agent run
         # before dispatch() would raise the same condition.
         if InitiationManager._dispatcher is None:

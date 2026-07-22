@@ -8,12 +8,12 @@ library_version: "0.1.0"
 slack:
   agent_acknowledgement: "I'm processing your request"
 
-# Session ID Mapping — presence of this block enables agent-initiated
-# conversations (the initiate_conversation system tool + reply resolution).
-# The store backend follows session.type (in-memory here).
-mapping_table:
-  prefix: "ak:session-map:"
-  ttl: 0
+# Agent-initiated conversations (the initiate_conversation system tool + reply
+# resolution). Single-process REST deployments need the explicit opt-in below;
+# queue-mode deployments auto-enable. The mapping store follows session.type
+# (in-memory here).
+conversation_initiation:
+  enabled: true
 
 # Optional: uncomment to also record initiated conversations as AK threads
 # (readable over GET /api/v1/threads). The thread is owned by the recipient.

@@ -6,7 +6,7 @@ session ids (Request Handler direction), binding new mappings and initializing
 the AK conversation thread after a successful send (Response Handler direction),
 and dispatching InitiationMessages out of the Agent Runner. A single shared
 instance is used by all handlers; ``get()`` returns None when the feature is
-disabled (no ``mapping_table`` config block).
+disabled (see ``AKConfig.conversation_initiation_enabled``).
 """
 
 import logging
@@ -63,11 +63,11 @@ class InitiationManager:
     def get(cls) -> Optional["InitiationManager"]:
         """
         Return the shared InitiationManager instance, or None when agent-initiated
-        conversations are not configured (no 'mapping_table' block). Callers use
+        conversations are not enabled (see ``AKConfig.conversation_initiation_enabled``). Callers use
         the None check as the feature-enabled check.
         :return: The shared instance, or None if the feature is disabled.
         """
-        if AKConfig.get().mapping_table is None:
+        if not AKConfig.get().conversation_initiation_enabled:
             return None
         with cls._lock:
             if cls._instance is None:

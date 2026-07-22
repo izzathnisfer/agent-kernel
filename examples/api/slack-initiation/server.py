@@ -1,55 +1,22 @@
 """
 Agent-initiated conversations over Slack (single-process REST deployment).
 
-The handler below plays both request-handler and response-handler roles:
+SlackInitiationHandler below plays both request-handler and response-handler
+roles: inbound, it resolves each reply's thread_ts through the Session ID
+Mapping (an un-threaded reply starts a fresh session instead of guessing which
+prior conversation it continues); outbound, implementing InitiationSender
+makes it the send point RESTAPI.run() wires up automatically, binding the
+session_id <-> thread_ts mapping after each send.
 
-- Inbound: AgentSlackRequestHandler already resolves each reply's thread_ts
-  through the Session ID Mapping (RESTRequestHandler.resolve_session_id), so a
-  reply threaded under an agent-initiated message continues that session. An
-  un-threaded reply's own ts never matches a bound mapping, so it starts a new
-  session instead — deliberately: for a DM there's no way to tell which of
-  several possible prior conversations an un-threaded reply is answering, so
-  guessing (e.g. "assume the most recent") would sometimes attribute a reply to
-  the wrong conversation. Requiring an explicit thread is unambiguous, at the
-  cost of the recipient needing to use Slack's "reply in thread" for the agent
-  to remember what it told them.
-- Outbound: implementing InitiationSender makes this handler the send point for
-  initiation messages — RESTAPI.run() detects it and registers the in-process
-  dispatcher, which sends via send_initiation_message() and then binds the
-  session_id <-> thread_ts mapping (and the AK conversation thread, when
-  enabled) automatically.
-
-Try it: ask the agent in one Slack thread to "tell @someone that ..." — the
+Try it: ask the agent in a Slack channel to "tell @someone that ..." — the
 initiate_conversation system tool composes and sends a new message to that
 user, and their reply continues the new conversation with full context.
 
-initiate_conversation's `prompt` argument is both the context that seeds the
-new session and the instruction that produces the outbound message (there is
-no separate injection path — the prompt/reply exchange IS the new session's
-history, by design). That means the prompt has to be self-disambiguating: if
-it's a raw first-person forward of the requester's words ("Inform them that
-I'll be late"), nothing in the session says who "I" refers to, and once the
-recipient starts replying (also a "user" turn, same session), the model has no
-way to tell the original requester and the recipient apart. Asked "who said
-that?", it can just as easily answer "you did".
-
-Two agents avoid this by grounding identity explicitly instead of forwarding
-raw phrasing:
-- "general" faces the requester: it extracts the recipient's member id from
-  the Slack mention (mentions arrive as <@U...>), calls the get_requester_id
-  tool to learn who is actually asking (Slack doesn't self-mention, so this
-  can't be read from the message text), and composes a third-person prompt
-  that names the requester explicitly.
-- "notifier" faces the recipient: its reply to that prompt is delivered
-  verbatim as the outbound message, so its instructions make it write the
-  notification itself, in third person, attributed to the requester by name —
-  never as if it were speaking for them.
-
-When the recipient replies, the handler resolves the initiated session and the
-default agent ("general", the first registered) continues it. Because the
-seeding prompt named the requester explicitly, that identity is retained in
-the session and follow-ups like "who said that?" or "why?" resolve correctly
-instead of being misattributed to the recipient.
+Two agents ("general" facing the requester, "notifier" facing the recipient)
+ground identity explicitly in the composed prompt rather than forwarding raw
+first-person phrasing, which would leave the new session unable to tell
+requester and recipient apart — see README.md's "How it works" for the full
+rationale and a worked example.
 """
 
 from typing import Optional

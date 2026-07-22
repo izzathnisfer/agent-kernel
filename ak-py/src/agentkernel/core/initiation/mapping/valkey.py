@@ -9,17 +9,14 @@ class ValkeySessionIdMappingStore(_RedisLikeSessionIdMappingStore):
     """
     Valkey-backed implementation of the SessionIdMappingStore interface.
 
-    Connection settings come from ``session.valkey``; the key prefix and TTL come
-    from ``mapping_table``.
+    Connection settings and TTL come from ``session.valkey``; the key prefix is
+    derived by suffixing the session store's prefix with ``id-mapping:``.
     """
 
     def __init__(self):
-        cfg = AKConfig.get()
-        mapping_cfg = cfg.mapping_table
-        if mapping_cfg is None:
-            raise ValueError("mapping_table config block is required to use ValkeySessionIdMappingStore")
-        conn = cfg.session.valkey
+        conn = AKConfig.get().session.valkey
         if conn is None:
             raise ValueError("session.valkey config block is required to use ValkeySessionIdMappingStore")
-        driver = ValkeyDriver(url=conn.url, prefix=mapping_cfg.prefix, ttl=int(mapping_cfg.ttl), decode_responses=True)
+        prefix = f"{conn.prefix}id-mapping:"
+        driver = ValkeyDriver(url=conn.url, prefix=prefix, ttl=int(conn.ttl), decode_responses=True)
         super().__init__(driver, "ak.initiation.mapping.valkey")

@@ -2,25 +2,15 @@
 # Agent-Initiated Slack Conversations — Containerized Deployment
 # ---------------------------------------------------------------------------
 
-locals {
-  # Mirrors local.prefix inside the module (state.tf: "${product_alias}-${env_alias}-${module_name}")
-  # so we can inject the mapping table name ourselves. Needed because, unlike the
-  # session/response-store DynamoDB tables, this module does not auto-inject
-  # AK_MAPPING_TABLE__TABLE_NAME for conversation_initiation — only the REST
-  # service needs it (it's the only role that resolves/binds the mapping; the
-  # agent runner just dispatches, per the design's "Agent Runner gets no grant").
-  mapping_table_name = "${var.product_alias}-${var.env_alias}-${var.module_name}-session-id-mapping"
-}
-
 module "containerized_agents" {
   source  = "yaalalabs/ak-containerized/aws"
   version = "0.6.1"
 
   product_alias        = var.product_alias
-  env_alias             = var.env_alias
-  module_name           = var.module_name
-  region                = var.region
-  product_display_name  = "Slack Agent-Initiated Conversations Example"
+  env_alias            = var.env_alias
+  module_name          = var.module_name
+  region               = var.region
+  product_display_name = "Slack Agent-Initiated Conversations Example"
 
   vpc_id             = var.vpc_id
   private_subnet_ids = var.private_subnet_ids
@@ -45,10 +35,9 @@ module "containerized_agents" {
     health_check_endpoint = "/health"
     command               = ["python", "app_rest_service.py"]
     environment_variables = {
-      OPENAI_API_KEY        = var.openai_api_key
-      SLACK_BOT_TOKEN       = var.slack_bot_token
-      SLACK_SIGNING_SECRET  = var.slack_signing_secret
-      AK_MAPPING_TABLE__TABLE_NAME = local.mapping_table_name
+      OPENAI_API_KEY       = var.openai_api_key
+      SLACK_BOT_TOKEN      = var.slack_bot_token
+      SLACK_SIGNING_SECRET = var.slack_signing_secret
     }
   }
 
@@ -57,8 +46,10 @@ module "containerized_agents" {
   # / create_dynamodb_memory_table flag needed since we're not provisioning a new store.
 
   # ---- Agent-Initiated Conversations ----
-  # Creates the Session ID Mapping DynamoDB table + IAM grant for the REST service.
-  conversation_initiation = true
+  # The Session ID Mapping store follows session.type (Redis here) and rides the same
+  # cluster, so no extra AWS resource is needed — conversation_initiation only provisions
+  # a DynamoDB table, which is for a DynamoDB-backed session store.
+  conversation_initiation = false
 
   # ---- Queue Mode ----
   queue_mode     = true

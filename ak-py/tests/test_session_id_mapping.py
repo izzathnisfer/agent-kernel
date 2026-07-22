@@ -4,10 +4,11 @@ import pytest
 
 from agentkernel.core.initiation import InitiationManager, InitiationMessage, SessionIdResolver
 from agentkernel.core.initiation.mapping import SessionIdMappingStoreBuilder
-from agentkernel.core.initiation.mapping.base import session_record_key, thread_record_key
+from agentkernel.core.initiation.mapping.base import SessionIdMappingStore
 from agentkernel.core.initiation.mapping.dynamodb import PARTITION_KEY, VALUE_ATTRIBUTE, DynamoDBSessionIdMappingStore
 from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
 from agentkernel.core.initiation.mapping.redis import RedisSessionIdMappingStore
+from agentkernel.core.util.factory import AKConfigError
 
 
 @pytest.fixture(autouse=True)
@@ -19,14 +20,7 @@ def clear_in_memory_store():
     InitiationManager.reset()
 
 
-class FakeMappingTableCfg:
-    table_name = "test-mapping"
-    collection_name = "test-mapping"
-    prefix = "ak:test-map:"
-    ttl = 120
-
-
-def make_fake_cfg(session_type: str, mapping_table=FakeMappingTableCfg):
+def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = True, initiation_store: str = None, redis=True):
     class FakeCfg:
         class session:
             type = session_type
@@ -36,13 +30,31 @@ def make_fake_cfg(session_type: str, mapping_table=FakeMappingTableCfg):
                 ttl = 60
                 prefix = "ak:sessions:"
 
+            class dynamodb:
+                table_name = "ak-sessions"
+                ttl = 120
+
+            class cosmosdb:
+                connection_string = "AccountEndpoint=https://example;"
+                table_name = "aksessions"
+                ttl = 0
+
+            class firestore:
+                collection_name = "ak_sessions"
+                project_id = None
+                database_id = None
+                ttl = 300
+
             cache = None
             valkey = None
-            dynamodb = None
-            cosmosdb = None
-            firestore = None
 
-    FakeCfg.mapping_table = mapping_table
+        class conversation_initiation:
+            enabled = conversation_initiation_enabled
+            store = initiation_store
+
+    FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    if not redis:
+        FakeCfg.session.redis = None
     return FakeCfg
 
 
@@ -85,7 +97,7 @@ class TestInMemoryStore:
 class TestRecordKeys:
     def test_directions_never_collide(self):
         # A session id equal to a thread id must still produce distinct records.
-        assert thread_record_key("x") != session_record_key("x")
+        assert SessionIdMappingStore.thread_record_key("x") != SessionIdMappingStore.session_record_key("x")
 
 
 class TestBuilder:
@@ -93,26 +105,27 @@ class TestBuilder:
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory")))
         assert isinstance(SessionIdMappingStoreBuilder.build(), InMemorySessionIdMappingStore)
 
-    def test_invalid_type_falls_back_to_in_memory(self, monkeypatch):
+    def test_unknown_type_raises_config_error(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("not-a-backend")))
-        assert isinstance(SessionIdMappingStoreBuilder.build(), InMemorySessionIdMappingStore)
+        with pytest.raises(AKConfigError, match="unknown session store type"):
+            SessionIdMappingStoreBuilder.build()
 
     def test_follows_session_type_redis(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis")))
         store = SessionIdMappingStoreBuilder.build()
         assert isinstance(store, RedisSessionIdMappingStore)
 
-    def test_redis_store_splits_connection_and_namespace_config(self, monkeypatch):
-        # url comes from session.redis; prefix/ttl come from mapping_table.
+    def test_redis_store_derives_prefix_and_reuses_session_ttl(self, monkeypatch):
+        # url comes from session.redis; the mapping prefix suffixes the session prefix and TTL is reused.
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis")))
         store = SessionIdMappingStoreBuilder.build()
         assert store._driver._url == "redis://example:6379"
-        assert store._driver._prefix == "ak:test-map:"
-        assert store._driver.ttl == 120
+        assert store._driver._prefix == "ak:sessions:id-mapping:"
+        assert store._driver.ttl == 60
 
-    def test_redis_store_requires_mapping_table_block(self, monkeypatch):
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis", mapping_table=None)))
-        with pytest.raises(ValueError, match="mapping_table"):
+    def test_redis_store_requires_session_redis_block(self, monkeypatch):
+        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis", redis=False)))
+        with pytest.raises(ValueError, match="session.redis"):
             SessionIdMappingStoreBuilder.build()
 
 
@@ -124,25 +137,25 @@ class TestRedisStoreOperations:
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis")))
         store = RedisSessionIdMappingStore()
         store._driver = MagicMock()
-        store._driver.key.side_effect = lambda suffix: f"ak:test-map:{suffix}"
+        store._driver.key.side_effect = lambda suffix: f"ak:sessions:id-mapping:{suffix}"
         return store
 
     def test_save_writes_both_records(self, store):
         store.save("session-1", "thread-1")
         set_calls = {call.args for call in store._driver.set.call_args_list}
         assert set_calls == {
-            ("ak:test-map:thread#thread-1", "session-1"),
-            ("ak:test-map:session#session-1", "thread-1"),
+            ("ak:sessions:id-mapping:thread#thread-1", "session-1"),
+            ("ak:sessions:id-mapping:session#session-1", "thread-1"),
         }
 
     def test_lookups_read_the_right_records(self, store):
         store._driver.get.return_value = "session-1"
         assert store.get_session_id("thread-1") == "session-1"
-        store._driver.get.assert_called_with("ak:test-map:thread#thread-1")
+        store._driver.get.assert_called_with("ak:sessions:id-mapping:thread#thread-1")
 
         store._driver.get.return_value = "thread-1"
         assert store.get_messaging_integration_thread_id("session-1") == "thread-1"
-        store._driver.get.assert_called_with("ak:test-map:session#session-1")
+        store._driver.get.assert_called_with("ak:sessions:id-mapping:session#session-1")
 
 
 class TestDynamoDBStoreOperations:
@@ -154,6 +167,11 @@ class TestDynamoDBStoreOperations:
         store = DynamoDBSessionIdMappingStore()
         store._driver = MagicMock()
         return store
+
+    def test_table_name_derived_from_session_table(self, monkeypatch):
+        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("dynamodb")))
+        store = DynamoDBSessionIdMappingStore()
+        assert store._driver._table_name == "ak-sessions-id-mapping"
 
     def test_save_puts_both_items(self, store):
         store.save("session-1", "thread-1")
@@ -187,7 +205,9 @@ class TestInitiationManager:
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory")))
 
     def test_get_returns_none_when_disabled(self, monkeypatch):
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory", mapping_table=None)))
+        monkeypatch.setattr(
+            "agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory", conversation_initiation_enabled=False))
+        )
         assert InitiationManager.get() is None
 
     def test_get_returns_shared_instance_when_enabled(self, enabled_cfg):
@@ -284,7 +304,9 @@ class TestInitiationManager:
 
 class TestSessionIdResolver:
     def test_identity_when_disabled(self, monkeypatch):
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory", mapping_table=None)))
+        monkeypatch.setattr(
+            "agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory", conversation_initiation_enabled=False))
+        )
         assert SessionIdResolver().resolve_session_id("thread-1") == "thread-1"
 
     def test_delegates_to_manager_when_enabled(self, monkeypatch):

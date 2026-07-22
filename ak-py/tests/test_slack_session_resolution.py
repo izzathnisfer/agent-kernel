@@ -20,14 +20,7 @@ from agentkernel.core.initiation import InitiationManager
 from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
 
 
-class FakeMappingTableCfg:
-    table_name = "test-mapping"
-    collection_name = "test-mapping"
-    prefix = "ak:test-map:"
-    ttl = 0
-
-
-def make_fake_cfg(mapping_table=FakeMappingTableCfg):
+def make_fake_cfg(conversation_initiation_enabled=True):
     class FakeCfg:
         class session:
             type = "in_memory"
@@ -40,7 +33,11 @@ def make_fake_cfg(mapping_table=FakeMappingTableCfg):
         class api:
             max_file_size = 10 * 1024 * 1024
 
-    FakeCfg.mapping_table = mapping_table
+        class conversation_initiation:
+            enabled = conversation_initiation_enabled
+            store = None
+
+    FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
     return FakeCfg
 
 
@@ -172,6 +169,6 @@ class TestSlackSessionDerivation:
     def test_disabled_feature_is_identity(self, monkeypatch, handler):
         monkeypatch.setattr(
             "agentkernel.core.config.AKConfig.get",
-            classmethod(lambda cls: make_fake_cfg(mapping_table=None)),
+            classmethod(lambda cls: make_fake_cfg(conversation_initiation_enabled=False)),
         )
         assert handler.resolve_session_id("3333.4444") == "3333.4444"

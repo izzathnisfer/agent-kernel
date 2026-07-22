@@ -4,7 +4,7 @@ import logging
 from ....core.chat_service import ChatService
 from ....core.config import AKConfig
 from ....core.model import BaseRunRequest, ExecutionMode, StreamChunk
-from ..core.initiation_dispatch import register_initiation_queue_dispatcher
+from ..core.initiation_dispatch import InitiationQueueDispatcher
 from ..core.sqs_handler import SQSHandler
 from .core import LambdaSQSConsumer
 
@@ -21,7 +21,7 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
     @classmethod
     def _get_chat_service(cls) -> ChatService:
         if cls._chat_service is None:
-            register_initiation_queue_dispatcher()
+            InitiationQueueDispatcher.register()
             cls._chat_service = ChatService()
         return cls._chat_service
 
@@ -166,7 +166,7 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
     @classmethod
     def _get_chat_service(cls) -> ChatService:
         if cls._chat_service is None:
-            register_initiation_queue_dispatcher()
+            InitiationQueueDispatcher.register()
             cls._chat_service = ChatService()
         return cls._chat_service
 

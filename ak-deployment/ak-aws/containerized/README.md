@@ -332,9 +332,11 @@ curl -X GET .../chat/{session_id}?request_id=...
 
 ### Agent-Initiated Conversations
 
-Enable the Session ID Mapping table so agents can proactively open conversations on messaging
-platforms and have replies continue the same session (see
-`docs/docs/advanced/conversation-initiation.md`):
+Agent-initiated conversations use a Session ID Mapping store that follows `session.type` — set
+`conversation_initiation.enabled: true` in `config.yaml` for single-process REST (queue-mode deployments
+auto-enable), see `docs/docs/advanced/conversation-initiation.md`. Only set `conversation_initiation`
+below when the session store is DynamoDB (`create_dynamodb_memory_table = true`); other backends
+(Redis, Valkey, ...) need no extra AWS resource since the mapping rides the same session store:
 
 ```hcl
 conversation_initiation = true
@@ -342,8 +344,7 @@ conversation_initiation = true
 
 Creates a `-session-id-mapping` DynamoDB table (partition key `map_key` (S), TTL attribute
 `expiry_time`) with read/write IAM grants for the REST/IO service task role only — the Agent
-Runner is messaging-platform blind and never touches the table. Configure the application side
-with a `mapping_table:` block in `config.yaml` (the store backend follows `session.type`).
+Runner is messaging-platform blind and never touches the table.
 
 ## Auto Scaling
 

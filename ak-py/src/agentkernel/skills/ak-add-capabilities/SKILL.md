@@ -788,12 +788,11 @@ See `examples/api/thread-openai` and `examples/api/multimodal/thread-openai`.
 
 **Ask:** Which deployment shape — single-process REST (integration handler in the same process) or queue-based (AWS Lambda / ECS)?
 
-1. Update `config.yaml` — presence of the `mapping_table:` block enables the feature; the mapping store backend follows `session.type` (connection settings are reused from `session.<backend>`):
+1. Update `config.yaml` — queue-mode deployments (ECS/Lambda) auto-enable the feature; single-process REST needs an explicit opt-in via `conversation_initiation.enabled: true`. The mapping store backend follows `session.type`, reusing its connection settings, with the namespace (table/collection name or key prefix) and TTL derived from the session store's own:
 ```yaml
-mapping_table:
-  prefix: "ak:session-map:"            # Redis / Valkey key prefix
-  table_name: ak-session-id-mapping    # DynamoDB / Cosmos DB (partition key 'map_key' (S))
-  ttl: 0                               # seconds, 0 disables (not supported on Cosmos DB)
+conversation_initiation:
+  enabled: true       # required for single-process REST; queue-mode auto-enables
+  # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own (dotted path)
 ```
 
 2. When enabled, the `initiate_conversation(target, prompt, user_id, agent)` system tool is registered on all agents: it creates a fresh session, composes the outbound message by running the agent with `prompt` (the new session's history contains the exchange), and dispatches it for delivery. Inbound platform messages resolve their conversation id through the Session ID Mapping automatically.

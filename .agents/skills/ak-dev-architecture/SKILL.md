@@ -106,7 +106,7 @@ Pydantic-based configuration:
 - **Auto-initialized** at import time via `AKConfig._set()`
 - **Config sources** (priority order): environment variables (`AK_` prefix) → config file (YAML/JSON, default `config.yaml`) → defaults
 - **Override path**: Set `AK_CONFIG_PATH_OVERRIDE` env var
-- **Key sections**: `session`, `api`, `websocket_api`, `a2a`, `mcp`, `slack`, `whatsapp`, `messenger`, `instagram`, `telegram`, `gmail`, `multimodal`, `thread`, `mapping_table`, `trace`, `guardrail`, `execution`, `logging`
+- **Key sections**: `session`, `api`, `websocket_api`, `a2a`, `mcp`, `slack`, `whatsapp`, `messenger`, `instagram`, `telegram`, `gmail`, `multimodal`, `thread`, `conversation_initiation`, `trace`, `guardrail`, `execution`, `logging`
 
 ## Request/Reply Model (`ak-py/src/agentkernel/core/model.py`)
 
@@ -233,7 +233,7 @@ Attachments in thread mode additionally require `multimodal.enabled: true` with 
 
 ## Agent-Initiated Conversations (`ak-py/src/agentkernel/core/initiation/`)
 
-Lets an agent proactively message a user on a messaging platform such that the user's reply continues the same session. Gated by the presence of the `mapping_table:` config block (mirrors the `thread:` pattern); spec set under `docs/specs/ak-134/`.
+Lets an agent proactively message a user on a messaging platform such that the user's reply continues the same session. Gated by `AKConfig.conversation_initiation_enabled` — auto-enabled in queue-mode deployments (`execution.queues` configured), explicit opt-in required for single-process REST (`conversation_initiation.enabled: true`); spec set under `docs/specs/ak-134/`.
 
 ### Key Components
 
@@ -242,24 +242,24 @@ Lets an agent proactively message a user on a messaging platform such that the u
 - **`InitiationSender`** (`manager.py`): Single-process REST sender contract — `RESTAPI.run()` scans handlers for it and registers an in-process dispatcher (send → `complete()`)
 - **`InitiationMessage`** (`model.py`): `session_id`, agent-generated `message`, opaque `target`/`target_details`, recipient `user_id`, `request_id`; `INITIATION_MESSAGE_TYPE` is the queue message-type attribute value
 - **`InitiateConversationTool`** (`tools.py`): `SystemTool` registered on all agents when enabled. `initiate_conversation(target, prompt, user_id="", agent="")`: creates a fresh uuid4 session, runs the owning agent with the prompt **on a dedicated thread with its own event loop** (tool functions may execute inside a running framework loop, adapter-dependent) so the reply becomes the outbound message and history lands in the new session naturally (prompt-only — no fixed-text path), then dispatches. All failures are returned as text, never raised. `target_details` is deliberately NOT a tool parameter — strict LLM tool schemas reject free-form dict params; platform extras come only from custom dispatch paths
-- **`SessionIdMappingStore`** (`mapping/base.py`): ABC storing the `session_id ↔ messaging_integration_thread_id` association as **two records** (`thread#<id>` → session, `session#<id>` → thread id) so both directions are O(1). Backend follows `session.type` (`SessionIdMappingStoreBuilder` reuses `SessionStoreBuilder.Types`); connection settings come from `session.<backend>`, namespace settings (`table_name`/`collection_name`/`prefix`/`ttl`) from `mapping_table`. Backends reuse the shared `core/util/driver/` drivers; DynamoDB uses a hash-only table (partition key `map_key`)
+- **`SessionIdMappingStore`** (`mapping/base.py`): ABC storing the `session_id ↔ messaging_integration_thread_id` association as **two records** (`thread#<id>` → session, `session#<id>` → thread id) so both directions are O(1); `THREAD_RECORD_PREFIX`/`SESSION_RECORD_PREFIX` and the `thread_record_key()`/`session_record_key()` composers live on the ABC as ClassVars/staticmethods. Backend follows `session.type` unless `conversation_initiation.store` names a bring-your-own dotted path; connection settings come from `session.<backend>`, namespace (table/collection name or key prefix) is derived by suffixing the session store's own (`-id-mapping` / `id-mapping:`), and TTL is reused from it. Backends reuse the shared `core/util/driver/` drivers; DynamoDB uses a hash-only table (partition key `map_key`)
 
 ### Rules
 
 1. The **Agent Runner is messaging-platform blind**: `target` is opaque, and the runner never touches the mapping table (the ECS Terraform grants it no table access)
 2. **Messages reach the user only from the Response Handler role.** Queue deployments: initiation messages arrive on the Output Queue marked `message_type=INITIATION`; stock `ResponseHandler`/`ECSOutputConsumer` log a warning and drop them — the user's `process_message` override parses the `InitiationMessage`, sends via the platform API, then **must call `InitiationManager.get().complete(initiation, thread_id)`**. Single-process REST: implement `InitiationSender` on a handler
-3. Dispatchers are registered by the deployment layer (`ECSAgentRunner.run()`, the Lambda runners' `_get_chat_service()`, `RESTAPI._register_initiation_sender()`); core never imports deployment
+3. Dispatchers are registered by the deployment layer (`ECSAgentRunner.run()`/`InitiationQueueDispatcher.register()`, the Lambda runners' `_get_chat_service()`, `RESTAPI._register_initiation_sender()`); core never imports deployment
 4. Reply-side agent selection stays request-based — no agent pin is persisted
 
-### Configuration (`_MappingTableConfig` in `config.py`)
+### Configuration (`_ConversationInitiationConfig` in `config.py`)
 
 ```yaml
-mapping_table:            # presence enables the feature; backend follows session.type
-  table_name: ak-session-id-mapping   # DynamoDB / Cosmos DB (partition key 'map_key' (S))
-  collection_name: ak-session-id-mapping  # Firestore
-  prefix: "ak:session-map:"           # Redis / Valkey
-  ttl: 0                              # 0 disables; not supported on Cosmos DB
+conversation_initiation:
+  enabled: true    # None (default) = auto-enable in queue mode; explicit true/false overrides
+  # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own dotted path
 ```
+
+`AKConfig.conversation_initiation_enabled` is the single gate consumers check (`SystemToolFactory.get_all()`, `InitiationManager.get()`): explicit `conversation_initiation.enabled` wins, otherwise enabled iff `execution.queues.input.url` is configured — queue dispatchers register before any tool call, but system tools attach at Agent init (before dispatcher registration in queue deployments), so gating on dispatcher presence doesn't work; config-based detection is timing-safe.
 
 ## Knowledge Bases (`ak-py/src/agentkernel/knowledgebase/`)
 

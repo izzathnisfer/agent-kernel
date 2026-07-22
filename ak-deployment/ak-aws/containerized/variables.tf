@@ -348,6 +348,6 @@ variable "scaling_config" {
 
 variable "conversation_initiation" {
   type        = bool
-  description = "Enable agent-initiated conversations. Creates the Session ID Mapping DynamoDB table used to bind initiated sessions to messaging platform thread ids."
+  description = "Provision the Session ID Mapping DynamoDB table used to bind initiated sessions to messaging platform thread ids. Only needed when the session store itself is DynamoDB (create_dynamodb_memory_table = true) — other backends (Redis, Valkey, ...) reuse the session store, no extra resource required."
   default     = false
 }

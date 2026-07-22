@@ -55,14 +55,7 @@ class DummyAgent(Agent):
         pass
 
 
-class FakeMappingTableCfg:
-    table_name = "test-mapping"
-    collection_name = "test-mapping"
-    prefix = "ak:test-map:"
-    ttl = 0
-
-
-def make_fake_cfg(mapping_table=FakeMappingTableCfg):
+def make_fake_cfg(conversation_initiation_enabled=True):
     class FakeCfg:
         multimodal = None
         thread = None
@@ -78,7 +71,11 @@ def make_fake_cfg(mapping_table=FakeMappingTableCfg):
             class output:
                 enabled = False
 
-    FakeCfg.mapping_table = mapping_table
+        class conversation_initiation:
+            enabled = conversation_initiation_enabled
+            store = None
+
+    FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
     return FakeCfg
 
 
@@ -164,7 +161,7 @@ class TestInitiateConversation:
         assert dispatched == []
 
     def test_disabled_feature_returns_error_text(self, monkeypatch):
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg(mapping_table=None)))
+        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg(conversation_initiation_enabled=False)))
         result = _initiate_conversation(target="U123", prompt="hi")
         assert "not enabled" in result
 
@@ -187,13 +184,13 @@ class TestInitiateConversation:
 
 
 class TestSystemToolRegistration:
-    def test_registered_when_mapping_table_present(self, enabled_cfg):
+    def test_registered_when_enabled(self, enabled_cfg):
         tools = SystemToolFactory.get_all()
         assert any(isinstance(tool, InitiateConversationTool) for tool in tools)
         assert "initiate_conversation" in SystemToolFactory.get_system_prompt_suffix()
 
     def test_not_registered_when_disabled(self, monkeypatch):
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg(mapping_table=None)))
+        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg(conversation_initiation_enabled=False)))
         assert not any(isinstance(tool, InitiateConversationTool) for tool in SystemToolFactory.get_all())
 
 

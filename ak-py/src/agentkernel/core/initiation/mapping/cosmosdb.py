@@ -4,8 +4,7 @@ Azure Cosmos DB (Table API)-backed Session ID Mapping store. Requires the
 
 Layout: one entity per mapping direction — PartitionKey = record key, a fixed
 RowKey, and the mapped id stored as bytes in the ``value`` property. TTL is not
-supported on this backend (matching the Cosmos DB thread store); the driver is
-constructed with TTL disabled regardless of ``mapping_table.ttl``.
+supported on this backend (matching the Cosmos DB thread store).
 """
 
 import logging
@@ -13,7 +12,7 @@ from typing import Optional
 
 from ...config import AKConfig
 from ...util.driver.cosmosdb import CosmosDBDriver
-from .base import SessionIdMappingStore, session_record_key, thread_record_key
+from .base import SessionIdMappingStore
 
 ROW_KEY = "value"
 
@@ -22,20 +21,17 @@ class CosmosDBSessionIdMappingStore(SessionIdMappingStore):
     """
     Cosmos DB Table API-backed implementation of the SessionIdMappingStore interface.
 
-    The table name comes from ``mapping_table``; the connection string comes from
-    ``session.cosmosdb``.
+    The table name is derived by suffixing the session store's table name with
+    ``-id-mapping``; the connection string comes from ``session.cosmosdb``.
     """
 
     def __init__(self):
         self._log = logging.getLogger("ak.initiation.mapping.cosmosdb")
-        cfg = AKConfig.get()
-        mapping_cfg = cfg.mapping_table
-        if mapping_cfg is None:
-            raise ValueError("mapping_table config block is required to use CosmosDBSessionIdMappingStore")
-        conn = cfg.session.cosmosdb
+        conn = AKConfig.get().session.cosmosdb
         if conn is None:
             raise ValueError("session.cosmosdb config block is required to use CosmosDBSessionIdMappingStore")
-        self._driver = CosmosDBDriver(connection_string=conn.connection_string, table_name=mapping_cfg.table_name)
+        table_name = f"{conn.table_name}-id-mapping"
+        self._driver = CosmosDBDriver(connection_string=conn.connection_string, table_name=table_name)
 
     def _get_value(self, record_key: str) -> Optional[str]:
         """
@@ -54,7 +50,7 @@ class CosmosDBSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         :return: The mapped session id, or None if no mapping exists.
         """
-        return self._get_value(thread_record_key(messaging_integration_thread_id))
+        return self._get_value(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id))
 
     def get_messaging_integration_thread_id(self, session_id: str) -> Optional[str]:
         """
@@ -63,7 +59,7 @@ class CosmosDBSessionIdMappingStore(SessionIdMappingStore):
         :param session_id: The Agent Kernel session id.
         :return: The mapped messaging platform thread id, or None if no mapping exists.
         """
-        return self._get_value(session_record_key(session_id))
+        return self._get_value(SessionIdMappingStore.session_record_key(session_id))
 
     def save(self, session_id: str, messaging_integration_thread_id: str) -> None:
         """
@@ -73,8 +69,8 @@ class CosmosDBSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         """
         self._log.debug(f"Saving mapping {session_id} <-> {messaging_integration_thread_id}")
-        self._driver.put(thread_record_key(messaging_integration_thread_id), ROW_KEY, session_id.encode("utf-8"))
-        self._driver.put(session_record_key(session_id), ROW_KEY, messaging_integration_thread_id.encode("utf-8"))
+        self._driver.put(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id), ROW_KEY, session_id.encode("utf-8"))
+        self._driver.put(SessionIdMappingStore.session_record_key(session_id), ROW_KEY, messaging_integration_thread_id.encode("utf-8"))
 
     def clear(self) -> None:
         """
