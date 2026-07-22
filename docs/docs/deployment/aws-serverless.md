@@ -545,6 +545,8 @@ handler = ResponseHandler.handle
 
 See [examples/aws-serverless/scalable-openai/lambda_response_handler.py](https://github.com/yaalalabs/agent-kernel/tree/develop/examples/aws-serverless/scalable-openai/lambda_response_handler.py) for the reference implementation.
 
+> **Agent-initiated conversations**: when `mapping_table` is configured (see [Conversation Initiation](../advanced/conversation-initiation.md)), the stock `ResponseHandler.process_message` guards records carrying the `INITIATION` message-type attribute — it logs a warning and drops them instead of storing them. To actually deliver these messages, subclass `ResponseHandler`, override `process_message` to detect the attribute, send via the platform API, and call `InitiationManager.get().complete(initiation, messaging_integration_thread_id)` to bind the mapping and initialize the AK conversation thread. See [examples/aws-serverless/slack-initiation](https://github.com/yaalalabs/agent-kernel/tree/develop/examples/aws-serverless/slack-initiation) for the reference implementation.
+
 #### 4. WebSocket Connection Handler (for async/stream WebSocket modes)
 
 This Lambda handles WebSocket connection lifecycle events (`$connect` and `$disconnect` routes), stores connection metadata in DynamoDB, and validates authentication tokens.

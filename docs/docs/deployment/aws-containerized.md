@@ -141,6 +141,7 @@ graph TB
   - `GET /api/v1/chat/{session_id}?request_id=...` (`rest_async` only, 404 otherwise): reads the response store, validates the stored reply's `session_id` matches the path (so a reply can't be read under the wrong session), and returns the body or `NOT_FOUND` while still processing.
   - The IO container registers **no agents**; agent validation and execution happen only in the Agent Runner.
 - **`output-queue-consumer` thread**: `ECSOutputConsumer.run()` spawns `execution.queues.output.no_of_consumers` (default **2**) long-poll threads on the Output Queue, each writing `{session_id, request_id, body}` records to the response store. On permanent failure (message exceeded `max_receive_count`), it writes an error record to the store so the waiting HTTP caller gets an error instead of hanging.
+  - When `mapping_table` is configured (see [Conversation Initiation](../advanced/conversation-initiation.md)), records carrying the `INITIATION` message-type attribute are guarded before this normal path: the stock `process_message` logs a warning and drops them rather than writing to the response store. Deliver initiation messages by subclassing `ECSOutputConsumer` and overriding `process_message` to send via the platform API and call `InitiationManager.get().complete(...)`.
 
 **Entrypoint (`app_rest_service.py`)** (no agent definitions):
 
