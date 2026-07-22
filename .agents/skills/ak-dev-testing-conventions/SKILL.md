@@ -82,6 +82,7 @@ Tests live in `ak-py/tests/` and follow the naming convention `test_<module>.py`
 | `test_factory.py` | Shared pluggable-backend helpers (`resolve_dotted`, `require_extra`, `AKConfigError`) in `core/util/factory.py` |
 | `test_store_builders.py` | Session/thread/multimodal store builders: fail-loud on unknown type, BYO dotted-path subclass resolution |
 | `test_trace.py` | Trace factory built-in resolution, BYO dotted path, unknown-type error |
+| `test_trace_logfire.py` | Logfire provider: complete `BaseTrace`, configure-once + auto-detect, `session_id` scrubbing allowlist, Pydantic AI runner span-wrapping |
 
 ## Test Patterns
 

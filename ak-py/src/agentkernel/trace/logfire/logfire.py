@@ -12,6 +12,21 @@ from ..base import BaseTrace
 _SERVICE_NAME = "AgentKernel"
 
 
+def _keep_session_id(match: "logfire.ScrubMatch") -> object | None:
+    """Scrubbing allowlist for AK's own ``session_id`` span attribute.
+
+    The traced runners attach ``session_id`` for trace correlation, but Logfire's default scrubber
+    redacts it because the key contains the sensitive substring ``session``. This callback returns
+    the original value for exactly that attribute (a session identifier, not a secret) and returns
+    ``None`` for everything else, so all other default scrubbing — prompts, tool args, tokens —
+    stays intact.
+    """
+    path = getattr(match, "path", None)
+    if path and path[-1] == "session_id":
+        return match.value
+    return None
+
+
 class Logfire(BaseTrace):
     """Pydantic Logfire tracing for Agent Kernel.
 
@@ -31,6 +46,10 @@ class Logfire(BaseTrace):
     ``logfire auth`` login), and otherwise falls back to printing spans to the console — so the
     provider runs with zero signup for a quick local evaluation. ``LOGFIRE_SERVICE_NAME`` overrides
     the service name; console output honours Logfire's own environment variables.
+
+    **Scrubbing.** A scrubbing callback (:func:`_keep_session_id`) allowlists the ``session_id``
+    correlation attribute, which Logfire's default scrubber would otherwise redact for matching the
+    "session" pattern; every other default scrub (prompts, tool args, tokens) stays on.
     """
 
     # Logfire must be configured exactly once per process. ``Trace.get()`` builds a fresh Logfire
@@ -59,6 +78,10 @@ class Logfire(BaseTrace):
                 # spans to the console. This is the one non-default setting — Logfire's own default
                 # (``None``) raises when no credential is configured, which would break local runs.
                 send_to_logfire="if-token-present",
+                # Keep the ``session_id`` correlation attribute out of the default scrubber, which
+                # would otherwise redact it for matching the "session" pattern. All other scrubbing
+                # stays on.
+                scrubbing=logfire.ScrubbingOptions(callback=_keep_session_id),
             )
             Logfire._configured = True
             self._log.debug("Logfire configured (send_to_logfire=if-token-present)")

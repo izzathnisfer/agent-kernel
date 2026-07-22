@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 import logfire
+from openinference.instrumentation.langchain import LangChainInstrumentor
 
 from ...core import Session
 from ...core.model import AgentReply, AgentRequest
@@ -16,10 +17,12 @@ class LogfireLangGraphRunner(LangGraphRunner):
         """
         super().__init__()
         self._log = logging.getLogger("ak.trace.logfire.langgraph")
-        # LangGraph has neither a Logfire-native nor a bundled OpenInference instrumentor. Its model
-        # calls run through LiteLLM (shipped with the langgraph extra), which Logfire instruments
-        # natively; combined with the AK-level span below this captures the LLM calls per session.
-        logfire.instrument_litellm()
+        # LangGraph has no Logfire-native instrumentor and is model-agnostic (the model layer may be
+        # langchain-openai, langchain-litellm, ...), so instrumenting a single model SDK would miss
+        # the others. Reuse the OpenInference LangChain instrumentor bundled with the langgraph extra:
+        # it hooks LangChain's callback system (which LangGraph runs on), capturing nodes and model
+        # calls regardless of backend, and emits into Logfire's global tracer provider.
+        LangChainInstrumentor().instrument()
 
     async def run(self, agent: Any, session: Session, requests: list[AgentRequest]) -> AgentReply:
         """

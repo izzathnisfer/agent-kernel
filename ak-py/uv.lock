@@ -112,6 +112,7 @@ langgraph = [
     { name = "langchain-community" },
     { name = "langgraph" },
     { name = "litellm" },
+    { name = "openinference-instrumentation-langchain" },
 ]
 logfire = [
     { name = "logfire" },
@@ -246,6 +247,7 @@ requires-dist = [
     { name = "openai-guardrails", marker = "extra == 'openai'", specifier = ">=0.2.1" },
     { name = "openinference-instrumentation-crewai", marker = "extra == 'crewai'", specifier = ">=0.1.16" },
     { name = "openinference-instrumentation-google-adk", marker = "extra == 'adk'", specifier = ">=0.1.6" },
+    { name = "openinference-instrumentation-langchain", marker = "extra == 'langgraph'", specifier = ">=0.1.29" },
     { name = "openinference-instrumentation-litellm", marker = "extra == 'crewai'", specifier = ">=0.1.28" },
     { name = "openinference-instrumentation-openai-agents", marker = "extra == 'openai'", specifier = ">=1.4.0" },
     { name = "openinference-instrumentation-pydantic-ai", marker = "extra == 'pydanticai'", specifier = ">=0.1.17" },
@@ -3811,6 +3813,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1b/1a/f35f3f38dba763e3ab41a73c15125de6107b3dd1aacbff50201b945e7d89/openinference_instrumentation_google_adk-0.1.15.tar.gz", hash = "sha256:1c0c73ad3b128858486f2066ceba3690061cbb8755bcd97a58220d9a5a42cf8e", size = 14739, upload-time = "2026-05-22T21:10:48.449Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/49/24/dbddd058a5b837c5f50a42dd94b4d9e338dc362c3cf067a6620c18a7f5c3/openinference_instrumentation_google_adk-0.1.15-py3-none-any.whl", hash = "sha256:be6db6bb68922acae5103bbb72fda9b880a809309b49289fa23d685742de8ebe", size = 16661, upload-time = "2026-05-22T21:10:46.054Z" },
+]
+
+[[package]]
+name = "openinference-instrumentation-langchain"
+version = "0.1.67"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-instrumentation" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/84/02/f381a25a0d11e57f91a90effda4abc484f25598d32a59566205583ca198c/openinference_instrumentation_langchain-0.1.67.tar.gz", hash = "sha256:94bdd348ceacc6657ae7b37f7050fe6289484fb65be9ee51edc2d9c3261a6605", size = 76093, upload-time = "2026-07-01T15:44:22.946Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/c3/28b6acb7b29ff1c203521087c06d113397f39d04ae502b6f38ebbd29d564/openinference_instrumentation_langchain-0.1.67-py3-none-any.whl", hash = "sha256:2c279640072737359ded51bdf9b82374f44f25f92b2300dde44b3a9e2da8f79f", size = 24833, upload-time = "2026-07-01T15:44:21.74Z" },
 ]
 
 [[package]]

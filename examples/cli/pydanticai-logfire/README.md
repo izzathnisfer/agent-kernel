@@ -64,21 +64,24 @@ Optional environment variables: `LOGFIRE_SERVICE_NAME` overrides the service nam
 
 ## Running
 
-Install dependencies using:
+The `pydanticai` and `logfire` extras are not on PyPI yet, so **build against the locally built
+wheel** — first build it once from the repo root, then build this example:
 
-    ./build.sh
+    (cd ../../../ak-py && uv build --wheel)   # refresh ak-py/dist after any ak-py source change
+    ./build.sh local                          # installs agentkernel from ak-py/dist + the logfire extra
 
-Install local dependencies in development mode using:
+Plain `./build.sh` (PyPI mode) will **not** work until the extras ship — it silently omits the
+`logfire` package and the demo fails with `requires the 'logfire' extra`.
 
-    ./build.sh local
+Run the demo with the example's own interpreter (avoid `uv run …` here — it re-syncs from PyPI and
+can undo the local install):
 
-Run this demo using the following.
-
-    python demo.py
+    export OPENAI_API_KEY=sk-...     # the agents use openai:gpt-4o-mini
+    .venv/bin/python demo.py
 
 To run tests:
 
-    uv run pytest -s
+    .venv/bin/python -m pytest -s
 
 > Note: until a release of `agentkernel` that includes the `pydanticai` and `logfire` extras is
 > published to PyPI, build with `./build.sh local` against a locally built `ak-py/dist`. The

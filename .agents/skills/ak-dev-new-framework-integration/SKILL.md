@@ -282,7 +282,7 @@ In `ak-py/pyproject.toml`, add an optional dependency group:
 
 ### 11. Add Tracing Support
 
-There are **two** tracing backends, each with per-framework traced runners. A new framework needs a traced runner under **both** `ak-py/src/agentkernel/trace/langfuse/<name>.py` and `ak-py/src/agentkernel/trace/openllmetry/<name>.py`:
+There are **three** tracing backends, each with per-framework traced runners. A new framework needs a traced runner under all of `ak-py/src/agentkernel/trace/langfuse/<name>.py`, `ak-py/src/agentkernel/trace/openllmetry/<name>.py`, and `ak-py/src/agentkernel/trace/logfire/<name>.py`:
 
 ```python
 from ...framework.<name>.<name> import <Name>Runner
@@ -328,7 +328,7 @@ Create at minimum:
 - [ ] `<Name>Runner.stream()` implemented — either real token streaming or a `NotImplementedError` stub
 - [ ] Public alias at `ak-py/src/agentkernel/<name>.py`
 - [ ] Optional dependency group in `ak-py/pyproject.toml`
-- [ ] Trace runners in `ak-py/src/agentkernel/trace/langfuse/<name>.py` and `ak-py/src/agentkernel/trace/openllmetry/<name>.py` (optional)
+- [ ] Trace runners in `ak-py/src/agentkernel/trace/langfuse/<name>.py`, `ak-py/src/agentkernel/trace/openllmetry/<name>.py`, and `ak-py/src/agentkernel/trace/logfire/<name>.py` (optional)
 - [ ] Updates to `trace/base.py` and `trace/trace.py` (if adding tracing)
 - [ ] Unit tests in `ak-py/tests/`
 - [ ] CLI example in `examples/cli/<name>/`

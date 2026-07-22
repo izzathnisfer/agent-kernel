@@ -417,8 +417,8 @@ OpenTelemetry. Two things make it distinct in Agent Kernel:
   (and `logfire.instrument_openai_agents()` for the OpenAI Agents SDK), so model requests, tool
   calls, and structured-output validations appear as properly nested spans with each framework's
   native semantics — no third-party span processor in between. Because Logfire installs itself as
-  the global OpenTelemetry tracer provider, the OpenInference instrumentors bundled with the CrewAI
-  and Google ADK extras, LiteLLM (LangGraph), and Smolagents' native OTel output all flow into it.
+  the global OpenTelemetry tracer provider, the OpenInference instrumentors bundled with the CrewAI,
+  Google ADK, and LangGraph (LangChain) extras, plus Smolagents' native OTel output, all flow into it.
 - **Auto-detected destination.** With `send_to_logfire="if-token-present"`, Logfire streams spans to
   the hosted dashboard when a credential is available and otherwise prints them to the console — so
   tracing runs with zero signup for a quick local evaluation.

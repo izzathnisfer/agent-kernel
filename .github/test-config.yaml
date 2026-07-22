@@ -36,6 +36,8 @@ e2e:
       path: examples/cli/sandbox/profiles
     - type: cli
       path: examples/cli/sandbox/policy
+    - type: cli
+      path: examples/api/pydanticai-logfire
     
     # API examples
     - type: api

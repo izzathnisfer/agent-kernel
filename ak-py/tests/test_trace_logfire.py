@@ -5,6 +5,7 @@ lives in ``test_trace.py`` alongside the other tracers; this file covers the pro
 its traced runner.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,7 +15,7 @@ logfire = pytest.importorskip("logfire")
 from agentkernel.core import Session
 from agentkernel.core.model import AgentReplyText, AgentRequestText
 from agentkernel.trace.base import BaseTrace
-from agentkernel.trace.logfire.logfire import Logfire
+from agentkernel.trace.logfire.logfire import Logfire, _keep_session_id
 
 
 def test_logfire_is_complete_basetrace():
@@ -33,8 +34,19 @@ def test_init_configures_logfire_with_auto_detect():
             Logfire().init()  # second build's init() is a no-op: configuration happens once per process
         configure.assert_called_once()
         assert configure.call_args.kwargs["send_to_logfire"] == "if-token-present"
+        assert "scrubbing" in configure.call_args.kwargs  # session_id allowlist wired in
     finally:
         Logfire._configured = False  # don't leak the guard into other tests
+
+
+def test_keep_session_id_allowlists_only_session_id():
+    """The scrubbing callback un-redacts the session_id correlation attribute and nothing else."""
+    session_match = SimpleNamespace(path=("session_id",), value="sess-1")
+    other_match = SimpleNamespace(path=("prompt",), value="secret prompt")
+
+    assert _keep_session_id(session_match) == "sess-1"  # kept
+    assert _keep_session_id(other_match) is None  # falls through to default scrubbing
+    assert _keep_session_id(SimpleNamespace(path=(), value="x")) is None  # empty path is safe
 
 
 def test_pydanticai_runner_instruments_on_construction():

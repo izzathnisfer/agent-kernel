@@ -10,7 +10,13 @@ fi
 if [[ ${1-} != "local" ]]; then
   uv sync --all-extras
 else
-  # For local development of agentkernel, you can force reinstall from local dist
   uv sync --find-links ../../../ak-py/dist --all-extras
-  uv pip install --force-reinstall --no-deps --no-index --find-links ../../../ak-py/dist agentkernel[cli,pydanticai,logfire,test] || true
+  dist_dir="$(cd ../../../ak-py/dist && pwd)"
+  wheel="$(ls -t "$dist_dir"/agentkernel-*.whl 2>/dev/null | head -1 || true)"
+  if [[ -z "$wheel" ]]; then
+    echo "No agentkernel wheel in $dist_dir — build it first: (cd ../../../ak-py && uv build --wheel)" >&2
+    exit 1
+  fi
+  uv pip install --python .venv/bin/python --refresh-package agentkernel --reinstall-package agentkernel \
+    "agentkernel[cli,pydanticai,logfire,test] @ file://${wheel}"
 fi
