@@ -163,8 +163,6 @@ them. Provision them (and the IAM policies) with the `deploy/` Terraform module.
 
 ```bash
 cd deploy
-# Using local state? Delete the optional remote backend first:
-#   rm backend.tf
 ./deploy.sh
 ```
 
@@ -172,6 +170,11 @@ On the first run `deploy.sh` copies `terraform.tfvars.example` to
 `terraform.tfvars` and stops so you can edit the bucket names/region; re-run
 `./deploy.sh` to `terraform init` + `apply`. Tear the buckets down with
 `./deploy.sh destroy`.
+
+State is local by default. To use an S3 remote-state backend, run
+`OKF_REMOTE_STATE=1 ./deploy.sh` once — it copies `backend.tf.example` to
+`backend.tf` (git-ignored) for you to point at a state bucket you own, then
+re-run `./deploy.sh`.
 
 `deploy/` creates **two buckets** and their access policies:
 

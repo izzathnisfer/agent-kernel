@@ -1,0 +1,16 @@
+# OPTIONAL: remote Terraform state backend (opt-in).
+#
+# This example uses local state by default; no remote state is required (see the
+# design's Non-goals). To use an S3 backend, run `OKF_REMOTE_STATE=1 ./deploy.sh`
+# — it copies this file to `backend.tf` (git-ignored) on first run. Then edit
+# that copy to point at a bucket you control and re-run `./deploy.sh`.
+
+terraform {
+  backend "s3" {
+    bucket       = "CHANGE-ME-terraform-state-bucket"
+    key          = "agent-kernel/examples/okf/terraform.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+    encrypt      = true
+  }
+}

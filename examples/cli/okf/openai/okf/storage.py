@@ -239,16 +239,22 @@ class S3Storage(OKFStorage):
         try:
             self._client.head_object(Bucket=self._bucket, Key=self._key(path))
             return True
-        except ClientError:
-            return False
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404", "NotFound"):
+                return False
+            raise
 
     def last_modified(self, path: str) -> Optional[datetime]:
         from botocore.exceptions import ClientError
 
         try:
             resp = self._client.head_object(Bucket=self._bucket, Key=self._key(path))
-        except ClientError:
-            return None
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404", "NotFound"):
+                return None
+            raise
         # S3 returns a timezone-aware datetime for LastModified.
         mtime: Optional[datetime] = resp.get("LastModified")
         logger.debug("s3 last_modified: s3://%s/%s -> %s", self._bucket, self._key(path), mtime)

@@ -61,7 +61,7 @@ class OKFFormat:
         :raises FrontmatterError: if the frontmatter block is absent or not a valid
             YAML mapping.
         """
-        match = OKFFormat._FRONTMATTER_RE.match(content.lstrip("﻿"))
+        match = OKFFormat._FRONTMATTER_RE.match(content.lstrip("\ufeff"))
         if not match:
             raise FrontmatterError("document is missing a YAML frontmatter block delimited by '---' lines")
         raw_meta, body = match.group(1), match.group(2)

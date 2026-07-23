@@ -7,6 +7,8 @@ __pycache__/
 htmlcov/
 .coverage
 report.html
+# Active remote-state backend, copied from backend.tf.example on opt-in (deploy/)
+deploy/backend.tf
 # Local Terraform state / plugin cache (deploy/)
 deploy/.terraform/
 deploy/*.tfstate

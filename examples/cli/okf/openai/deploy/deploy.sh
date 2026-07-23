@@ -7,10 +7,13 @@
 # (see the README).
 #
 # Usage:
-#   ./deploy.sh            # terraform init + apply
-#   ./deploy.sh destroy    # terraform destroy
+#   ./deploy.sh                       # terraform init + apply (local state)
+#   ./deploy.sh destroy               # terraform destroy
+#   OKF_REMOTE_STATE=1 ./deploy.sh    # opt into an S3 remote-state backend
 #
-# Using local state? Delete the optional remote backend first: rm backend.tf
+# State is local by default. Set OKF_REMOTE_STATE=1 to opt into remote state:
+# on first run this copies backend.tf.example -> backend.tf (git-ignored) for you
+# to edit (point it at a bucket you own), then re-run ./deploy.sh.
 
 set -euo pipefail
 
@@ -19,6 +22,16 @@ cd "$(dirname "$0")"
 if ! command -v terraform >/dev/null 2>&1; then
   echo "error: terraform is not installed or not on PATH" >&2
   exit 1
+fi
+
+# Opt into remote state only when asked. On first run copy the backend template
+# into place (git-ignored) so terraform init never auto-loads a placeholder
+# bucket; the user edits the copy before re-running.
+if [[ ${OKF_REMOTE_STATE-} == "1" && ! -f backend.tf ]]; then
+  cp backend.tf.example backend.tf
+  echo "Created backend.tf from backend.tf.example (remote state)."
+  echo "Edit it (set your Terraform state bucket), then re-run ./deploy.sh."
+  exit 0
 fi
 
 # Bootstrap terraform.tfvars from the example on first run so apply never runs
