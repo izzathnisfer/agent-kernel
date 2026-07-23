@@ -157,7 +157,7 @@ module "ci_package" {
 | Name | Description | Example |
 |------|-------------|---------|
 | `s3_bucket` | S3 bucket name containing the package | `myapp-prod-sources-123456789012` |
-| `s3_key` | S3 object key for the package | `myapp/us-west-2/prod/api/function/api-function.zip` |
+| `s3_key` | S3 object key for the package | `myapp/us-west-2/prod/api/lambda/source_code-d41d8cd98f00b204e9800998ecf8427e.zip` |
 | `s3_object_version` | Version ID of the S3 object | `abc123def456` |
 | `package_etag` | ETag/checksum of the package | `"d41d8cd98f00b204e9800998ecf8427e"` |
 | `package_size` | Size of the package in bytes | `1048576` |
@@ -169,19 +169,27 @@ module "ci_package" {
 The module creates a hierarchical S3 key structure:
 
 ```
-{product_alias}/{region}/{env_alias}/{module_name}/{package_type}/{filename}
-                                                     └── "function" or "layer"
+{product_alias}/{region}/{env_alias}/{module_name}/{package_type}/source_code-{md5}.zip
+                                                     └── "lambda" or "layer"
 ```
+
+The filename embeds the md5 checksum of the local package so the object key
+changes whenever the code changes. This is what makes an S3-backed Lambda
+redeploy: the `terraform-aws-modules/lambda` module only detects new code when
+`s3_bucket`, `s3_key`, or `s3_object_version` changes, and bucket versioning is
+disabled outside production. When the package isn't present locally (an
+already-uploaded object is being referenced), the static `source_code.zip` name
+is used instead.
 
 **Example**:
 ```
-myapp/us-west-2/prod/api/function/api-handler.zip
-myapp/us-west-2/prod/shared/layer/dependencies.zip
-myapp/us-west-2/dev/worker/function/worker.zip
+myapp/us-west-2/prod/api/lambda/source_code-d41d8cd98f00b204e9800998ecf8427e.zip
+myapp/us-west-2/prod/shared/layer/source_code-a1b2c3d4e5f60718293a4b5c6d7e8f90.zip
 ```
 
 ### 🔄 Version Management
 
+- **Content-Addressed Key**: The object key embeds the package MD5, so a code change produces a new key and forces the Lambda to redeploy (even without bucket versioning)
 - **Checksum Tracking**: Uses file MD5 hash (etag) to detect changes
 - **Automatic Updates**: Uploads new version when local file changes
 - **Reference Mode**: If local file doesn't exist, references existing S3 object
@@ -420,14 +428,15 @@ Error: Package size exceeded
 
 **Issue**: Lambda still using old code after Terraform apply
 
-**Solution**: Verify package changed:
-```bash
-# Check file changed
-md5sum dist/function.zip
+The module content-addresses the S3 key (`source_code-{md5}.zip`), so a changed
+package produces a new key and the Lambda redeploys automatically — no manual
+tainting required. If the Lambda still runs old code, the package that
+Terraform hashed most likely did not actually change.
 
-# Force Terraform to detect change
-terraform taint module.function_package.aws_s3_object.package
-terraform apply
+**Solution**: Verify the package really changed and was rebuilt before apply:
+```bash
+# Confirm the checksum changed after your rebuild
+md5sum dist/function.zip
 ```
 
 ### S3 Bucket Access Denied

@@ -1,7 +1,3 @@
-locals {
-  package_file_name = "source_code.zip"
-}
-
 resource "aws_iam_role" "authorizer_lambda_role" {
   name = "${var.product_alias}-${var.env_alias}-${var.authorizer_info.module_name}-${var.authorizer_info.function_name}-lambda-role"
   assume_role_policy = jsonencode({
@@ -57,7 +53,7 @@ resource "aws_security_group" "authorizer_lambda" {
 data "aws_s3_object" "authorizer_source_code" {
   count  = (var.authorizer_info.package_type == "S3Zip") ? 1 : 0
   bucket = module.authorizer_source_storage[0].source_storage_s3_bucket
-  key    = "${var.product_alias}/${var.region}/${var.env_alias}/${var.authorizer_info.module_name}/lambda/${local.package_file_name}"
+  key        = module.authorizer_source_package[0].s3_key
   depends_on = [module.authorizer_source_package]
 }
 
