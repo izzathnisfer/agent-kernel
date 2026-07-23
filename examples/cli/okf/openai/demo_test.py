@@ -1,7 +1,7 @@
 """End-to-end demo test — requires a live model key.
 
 Drives the real CLI (``demo.py``) through the full three-role flow over the
-committed ``sample_source/`` (the Sherlock Holmes stories), using the
+committed ``sample_source/`` (four original synthetic detective stories), using the
 ``Test`` harness which starts the agents as a subprocess and switches between
 them with ``!select <name>``:
 
@@ -77,11 +77,11 @@ async def test_curator_syncs_source(test_client):
 async def test_consumer_answers_from_bundle(test_client):
     await test_client.send("!select consumer")
     await test_client.send(
-        "In the story 'A Scandal in Bohemia', what is the name of the woman Holmes "
-        "refers to as 'the woman'? Answer in one short sentence."
+        "In the story 'The Lighthouse Cipher', what is the name of the thief Inspector "
+        "Merrow refers to as 'the Magpie'? Answer in one short sentence."
     )
     response = (test_client.last_agent_response or "").lower()
-    assert "irene adler" in response
+    assert "coral deveraux" in response
 
 
 @pytest.mark.order(3)
@@ -89,16 +89,16 @@ async def test_producer_writes_then_consumer_reads(test_client):
     # Producer writes a new concept with a distinctive, checkable fact.
     await test_client.send("!select producer")
     await test_client.send(
-        "Create a concept at summaries/scandal_in_bohemia.md summarizing 'A Scandal "
-        "in Bohemia'. Use type Summary and a title, and make sure the summary mentions "
-        "Irene Adler. Then log the change."
+        "Create a concept at summaries/lighthouse_cipher.md summarizing 'The Lighthouse "
+        "Cipher'. Use type Summary and a title, and make sure the summary mentions "
+        "Coral Deveraux. Then log the change."
     )
     producer_response = (test_client.last_agent_response or "").lower()
-    assert "wrote" in producer_response or "summaries/scandal_in_bohemia.md" in producer_response
+    assert "wrote" in producer_response or "summaries/lighthouse_cipher.md" in producer_response
 
     # The consumer re-reads the just-written doc: proves the producer's write is
     # visible end-to-end (the agents share one in-process, write-through bundle).
     await test_client.send("!select consumer")
-    await test_client.send("Read summaries/scandal_in_bohemia.md and tell me which woman it is about.")
+    await test_client.send("Read summaries/lighthouse_cipher.md and tell me which thief it is about.")
     consumer_response = (test_client.last_agent_response or "").lower()
-    assert "irene adler" in consumer_response
+    assert "coral deveraux" in consumer_response
