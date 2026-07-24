@@ -1,0 +1,24 @@
+# WARNING: label_filter scopes which unread emails this bot will read AND REPLY TO.
+# It defaults to a dedicated test label here (NOT "INBOX") so a first run can't act on
+# your existing real mail. In Gmail, create a label matching this name and apply it only
+# to emails you want the bot to see. Also set AK_GMAIL__SENDER_FILTER and/or
+# AK_GMAIL__SUBJECT_FILTER (see README.md) as a second layer of scoping — the poll loop
+# starts acting on whatever matches the instant you run server.py, with no manual trigger
+# like the webhook-based examples have.
+gmail:
+  agent: general
+  poll_interval: 30                     # Check for emails every 30 seconds
+  label_filter: "ak-initiation-test"    # Dedicated test label — NOT your real inbox
+
+# Agent-initiated conversations (the initiate_conversation system tool + reply
+# resolution). Gmail is a single-process polling deployment, so it needs the
+# explicit opt-in below (queue-mode deployments auto-enable). The mapping
+# store follows session.type (in-memory here).
+conversation_initiation:
+  enabled: true
+
+logging:
+  ak:
+    level: DEBUG
+  system:
+    level: DEBUG

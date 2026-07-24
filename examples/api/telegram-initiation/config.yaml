@@ -1,0 +1,22 @@
+# Core settings
+logging:
+  ak:
+    level: DEBUG
+library_version: "0.1.0"
+
+# Telegram integration settings — bot_token comes from AK_TELEGRAM__BOT_TOKEN
+telegram:
+  agent: "general"
+  api_version: "bot"
+
+# Agent-initiated conversations (the initiate_conversation system tool + reply
+# resolution). Single-process REST deployments need the explicit opt-in below;
+# queue-mode deployments auto-enable. The mapping store follows session.type
+# (in-memory here).
+conversation_initiation:
+  enabled: true
+
+# Optional: uncomment to also record initiated conversations as AK threads
+# (readable over GET /api/v1/threads). The thread is owned by the recipient.
+# thread:
+#   type: memory

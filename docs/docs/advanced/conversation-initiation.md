@@ -146,6 +146,12 @@ class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):
   above.
 - `examples/aws-containerized/slack-initiation/` — AWS ECS containerized deployment, the same
   pattern adapted to the two-service ECS shape.
+- `examples/api/telegram-initiation/` — single-process REST deployment. Telegram has no
+  per-message "thread" concept, so the resolved identifier is the chat id itself rather than a
+  per-message thread id.
+- `examples/api/gmail-initiation/` — single-process polling deployment (no `RESTAPI.run()`), so the
+  dispatcher is registered manually via `InitiationManager.register_dispatcher()` instead of the
+  automatic `InitiationSender` detection the REST examples get for free.
 
 ## Reply resolution
 
