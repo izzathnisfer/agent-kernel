@@ -253,11 +253,7 @@ Lets an agent proactively message a user on a messaging platform such that the u
 
 ### Configuration (`_ConversationInitiationConfig` in `config.py`)
 
-```yaml
-conversation_initiation:
-  enabled: true    # None (default) = auto-enable in queue mode; explicit true/false overrides
-  # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own dotted path
-```
+The `conversation_initiation:` block carries two optional keys: `enabled` (`None` by default — auto-enable in queue mode; an explicit `true`/`false` overrides) and `store` (dotted path to a bring-your-own `SessionIdMappingStore` subclass).
 
 `AKConfig.conversation_initiation_enabled` is the single gate consumers check (`SystemToolFactory.get_all()`, `InitiationManager.get()`): explicit `conversation_initiation.enabled` wins, otherwise enabled iff `execution.queues.input.url` is configured — queue dispatchers register before any tool call, but system tools attach at Agent init (before dispatcher registration in queue deployments), so gating on dispatcher presence doesn't work; config-based detection is timing-safe.
 

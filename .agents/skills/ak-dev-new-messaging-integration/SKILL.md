@@ -251,17 +251,11 @@ def _split_reply(self, text: str, max_length: int = 4000) -> list[str]:
 To let agents proactively open conversations on the platform (single-process REST deployments),
 also implement `InitiationSender` on the handler — `RESTAPI.run()` detects it and registers the
 in-process dispatcher, which sends and then binds the `session_id ↔ messaging_integration_thread_id`
-mapping automatically:
+mapping automatically.
 
-```python
-from agentkernel.core.initiation import InitiationSender
-
-
-class AgentNewPlatformRequestHandler(RESTRequestHandler, InitiationSender):
-    def send_initiation_message(self, target: str, message: str, target_details: dict | None = None) -> str:
-        response = ...  # platform send API call to `target`
-        return response["thread_id"]  # whatever id the platform derives for replies
-```
+Add `InitiationSender` (from `agentkernel.core.initiation`) to the handler's bases alongside
+`RESTRequestHandler`, and implement `send_initiation_message(target, message, target_details=None) -> str`:
+send to `target` via the platform API and return the id the platform derives for replies.
 
 The returned id MUST equal the id your inbound webhook derives from a reply (before resolution) —
 that round-trip identity is what makes replies continue the initiated session. See

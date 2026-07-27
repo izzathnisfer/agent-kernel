@@ -788,27 +788,14 @@ See `examples/api/thread-openai` and `examples/api/multimodal/thread-openai`.
 
 **Ask:** Which deployment shape — single-process REST (integration handler in the same process) or queue-based (AWS Lambda / ECS)?
 
-1. Update `config.yaml` — queue-mode deployments (ECS/Lambda) auto-enable the feature; single-process REST needs an explicit opt-in via `conversation_initiation.enabled: true`. The mapping store backend follows `session.type`, reusing its connection settings, with the namespace (table/collection name or key prefix) and TTL derived from the session store's own:
-```yaml
-conversation_initiation:
-  enabled: true       # required for single-process REST; queue-mode auto-enables
-  # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own (dotted path)
-```
+1. Update `config.yaml` — queue-mode deployments (ECS/Lambda) auto-enable the feature; single-process REST needs an explicit opt-in via `conversation_initiation.enabled: true`. The mapping store backend follows `session.type`, reusing its connection settings, with the namespace (table/collection name or key prefix) and TTL derived from the session store's own. Add a `conversation_initiation:` block with `enabled: true` (required for single-process REST; queue-mode auto-enables), plus an optional `store:` key naming a dotted path to a bring-your-own `SessionIdMappingStore` subclass.
 
 2. When enabled, the `initiate_conversation(target, prompt, user_id, agent)` system tool is registered on all agents: it creates a fresh session, composes the outbound message by running the agent with `prompt` (the new session's history contains the exchange), and dispatches it for delivery. Inbound platform messages resolve their conversation id through the Session ID Mapping automatically.
 
    **Step 3 is mandatory, not a refinement.** Auto-enable only guarantees the message reaches the Output Queue — the platform send is the user's override. Without it the tool reports "Conversation initiated." to the agent and the stock response handler drops the message, so the agent claims success while the recipient hears nothing. If the user is not ready to wire the send point, set `conversation_initiation.enabled: false` rather than leaving the tool advertised.
 
 3. Wire the send point:
-   - **Single-process REST**: implement `InitiationSender` on your handler — `RESTAPI.run()` registers the in-process dispatcher (send, then the mapping is bound automatically):
-     ```python
-     from agentkernel.core.initiation import InitiationSender
-
-     class MySlackHandler(AgentSlackRequestHandler, InitiationSender):
-         def send_initiation_message(self, target, message, target_details=None) -> str:
-             response = ...  # platform send call
-             return response["ts"]  # the platform's reply-thread id
-     ```
+   - **Single-process REST**: add `InitiationSender` (from `agentkernel.core.initiation`) to your handler's bases and implement `send_initiation_message(target, message, target_details=None) -> str`, returning the platform's reply-thread id (Slack: `response["ts"]`). `RESTAPI.run()` detects it and registers the in-process dispatcher — send, and the mapping is bound automatically.
    - **Queue deployments**: initiation messages arrive on the Output Queue marked `message_type=INITIATION`; your response-handler `process_message` override parses the `InitiationMessage`, sends it, then MUST call `InitiationManager.get().complete(initiation, thread_id)`. When delivering ordinary replies, check `InitiationManager.get().get_messaging_integration_thread_id(session_id)` to thread them correctly.
 
 With Conversation Threads also enabled, each initiated conversation gets a thread owned by the recipient (`user_id`, defaults to `target`), seeded with the outbound message.
