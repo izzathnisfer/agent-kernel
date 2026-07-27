@@ -126,7 +126,8 @@ below point into `design.md`.
 
 - **Goal:** The S3 run path's buckets and IAM policies are provisioned by Terraform, not left as
   manual prerequisites; the app code still assumes buckets exist.
-- **Files:** `examples/cli/okf/openai/deploy/{main.tf, variables.tf, outputs.tf, backend.tf (optional)}`.
+- **Files:** `examples/cli/okf/openai/deploy/{main.tf, variables.tf, outputs.tf, deploy.sh,
+  terraform.tfvars.example, backend.tf.example}`.
 - **Steps:**
   1. `variables.tf`: `region`, bundle bucket name/prefix, source bucket name/prefix (design → Deployment).
   2. `main.tf`: create the **bundle (OKF wiki) bucket** with a **read-write** access policy
@@ -134,8 +135,13 @@ below point into `design.md`.
      access policy (`s3:GetObject`/`s3:ListBucket`, never `Put`/`Delete`) — the AWS-boundary form of
      the tool-subset permission split (design → Deployment, Agents).
   3. `outputs.tf`: emit created bucket names/prefixes for the demo's `S3Storage` constructor params.
-     Optional `backend.tf` for remote state, deletable for local state (as in `agent/deploy/`).
-  4. Confirm `S3Storage` never provisions — buckets are assumed to exist (design → Deployment).
+  4. `deploy.sh`: wrap `terraform init`/`apply` (and `destroy`), bootstrapping `terraform.tfvars`
+     from the example on first run so `apply` never runs against placeholder bucket names.
+  5. Keep Terraform state **local by default** — commit `backend.tf.example` only, never an active
+     `backend.tf`, and have `OKF_REMOTE_STATE=1 ./deploy.sh` copy the template to a git-ignored
+     `backend.tf` (then exit for the operator to edit) on opt-in. Terraform auto-loads `backend.tf`,
+     so shipping only the template keeps a fresh clone's `init` off the placeholder state bucket.
+  6. Confirm `S3Storage` never provisions — buckets are assumed to exist (design → Deployment).
 - **Verify:** `terraform -chdir=deploy init && terraform -chdir=deploy validate` (and `plan` against a
   real account) succeed; outputs feed the demo's `S3Storage` params.
 

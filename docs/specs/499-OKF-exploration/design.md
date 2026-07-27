@@ -82,8 +82,13 @@ Sources:
 
 - A `deploy/` Terraform module provisions the AWS resources the S3 run path needs, mirroring the
   repo's Terraform convention (`agent/deploy/`, `ak-deployment/`): standard files
-  `main.tf`, `variables.tf`, `outputs.tf` (and an optional `backend.tf` for remote state that can
-  be deleted for local state, as in `agent/deploy/backend.tf`).
+  `main.tf`, `variables.tf`, `outputs.tf`, driven by a `deploy.sh` wrapper.
+- **Terraform state is local by default; remote state is opt-in.** No active `backend.tf` is
+  committed — `deploy/` ships an inert `backend.tf.example` template instead, and
+  `OKF_REMOTE_STATE=1 ./deploy.sh` copies it to a git-ignored `backend.tf` on first run for the
+  operator to point at a state bucket they own, then exits so they can edit it before re-running.
+  Because Terraform auto-loads `backend.tf`, shipping only the template is what keeps
+  `terraform init` in a fresh clone from ever initializing against a placeholder state bucket.
 - It creates **two S3 buckets** and their access policies:
   - the **bundle (OKF wiki) bucket** — the durable home of the OKF bundle; the demo needs
     **read-write** on it (`s3:GetObject`, `s3:PutObject`, `s3:ListBucket`).
@@ -362,8 +367,8 @@ graph LR
   on demand).
 - No IAM user/credential provisioning in `deploy/` — it creates the two buckets and their access
   policies only; attaching those policies to the principal that runs the demo (and supplying its
-  credentials) is left to the operator. No remote Terraform state backend is required (the
-  optional `backend.tf` can be deleted for local state).
+  credentials) is left to the operator. No remote Terraform state backend is required — state is
+  local by default, and remote state is opt-in via `OKF_REMOTE_STATE=1 ./deploy.sh`.
 - No *automated* "reconcile / enrich" duties for the Curator (the diagram's link-fixing / bulk
   index regeneration beyond the per-write `index.md` update) as dedicated tooling. The
   deterministic `sync_source()` stays a raw mirror; the richer categorized import is prompt-driven
