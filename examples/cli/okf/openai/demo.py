@@ -25,7 +25,6 @@ flows mutates it; reset it any time with ``rm -rf sample_bundle`` (the next sync
 repopulates it).
 """
 
-import logging
 import os
 
 from agentkernel.cli import CLI
@@ -37,24 +36,6 @@ from okf.storage import FileSystemStorage, OKFStorage, S3Storage
 from okf.tools import OKFTools
 
 MODEL = os.getenv("OKF_MODEL", "gpt-4.1")
-
-
-def _configure_logging() -> None:
-    """Route the ``okf`` package logs to the console at ``OKF_LOG_LEVEL``.
-
-    Defaults to ``INFO``; set ``OKF_LOG_LEVEL=DEBUG`` to trace every storage,
-    cache, and tool call, or ``WARNING`` to see only rejected writes. Only the
-    ``okf`` logger namespace is configured, so it does not touch the OpenAI
-    Agents SDK or Agent Kernel loggers.
-    """
-    level = getattr(logging, os.getenv("OKF_LOG_LEVEL", "INFO").upper(), logging.INFO)
-    okf_logger = logging.getLogger("okf")
-    okf_logger.setLevel(level)
-    if not okf_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
-        okf_logger.addHandler(handler)
-    okf_logger.propagate = False
 
 
 def _build_bundle() -> OKFBundle:
@@ -78,7 +59,6 @@ def _build_bundle() -> OKFBundle:
     return OKFBundle(bundle_storage, source_storage)
 
 
-_configure_logging()
 bundle = _build_bundle()
 
 consumer = Agent(

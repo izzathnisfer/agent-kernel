@@ -218,7 +218,10 @@ sync freshness, exactly as file mtime does locally.
 | `OKF_BUNDLE_BUCKET` / `OKF_BUNDLE_PREFIX` | — | Bundle bucket/prefix (s3 backend, read-write). |
 | `OKF_SOURCE_BUCKET` / `OKF_SOURCE_PREFIX` | — | Source bucket/prefix (s3 backend, read-only). |
 | `OKF_MODEL` | `gpt-4.1` | Model for all three agents. |
-| `OKF_LOG_LEVEL` | `INFO` | Console log level for the `okf` package (`DEBUG` traces every storage/cache/tool call; `WARNING` shows only rejected writes). |
+
+Console log level (including storage/cache/tool call tracing) is controlled the same way as
+the rest of Agent Kernel: via `logging.system.level` in `config.yaml` (set to `INFO` here), or
+the `AK_LOGGING__SYSTEM__LEVEL` environment variable — no OKF-specific logging setup.
 
 ## Run the tests
 
