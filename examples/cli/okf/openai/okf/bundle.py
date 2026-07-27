@@ -46,6 +46,10 @@ class OKFBundle:
 
     # -- bundle access (through the cache) --------------------------------
 
+    def list_bundle(self, prefix: str = "") -> list[str]:
+        """List bundle document paths under ``prefix`` (recursive)."""
+        return self.cache.list(prefix)
+
     def read(self, path: str) -> str:
         """Read a bundle document (cache-first). Raises ``NotFoundError`` if absent."""
         return self.cache.read(path)
@@ -90,10 +94,3 @@ class OKFBundle:
         if self._source is None:
             raise RuntimeError("no source storage configured for this bundle")
         return self._source.last_modified(path)
-
-    # NOTE: ``list`` is defined last on purpose. Naming a method ``list`` shadows
-    # the builtin for ``list[str]`` annotations that appear *after* it in the
-    # class body (a mypy name-resolution quirk); keeping it last avoids that.
-    def list(self, prefix: str = "") -> list[str]:
-        """List bundle document paths under ``prefix`` (recursive)."""
-        return self.cache.list(prefix)

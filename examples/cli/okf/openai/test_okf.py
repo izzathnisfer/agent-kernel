@@ -259,7 +259,7 @@ def test_source_tools_are_read_only(bundle_with_source):
     assert "One row per refund" in OKFTools.op_read_source_file(bundle_with_source, "tables/refunds.md")
     # Reading the source never creates a bundle document, and no tool mutates the
     # source (only sync_source writes, and only into the bundle's synced/ subtree).
-    assert bundle_with_source.list() == []
+    assert bundle_with_source.list_bundle() == []
     names = set(OKFTools.build_tools(bundle_with_source))
     assert "write_source_file" not in names and "delete_source_file" not in names
 

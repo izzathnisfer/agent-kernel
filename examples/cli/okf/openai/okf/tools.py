@@ -118,7 +118,7 @@ class OKFTools:
         docs: list[str] = []
         subdirs: set[str] = set()
         index_name = OKFTools._index_path(directory)
-        for path in bundle.list(directory):
+        for path in bundle.list_bundle(directory):
             if prefix and not path.startswith(prefix):
                 continue
             rest = path[len(prefix) :]
@@ -289,7 +289,7 @@ class OKFTools:
         if bundle.exists(target) and target.endswith(".md"):
             candidates = [target]
         else:
-            candidates = [p for p in bundle.list(target) if p.endswith(".md")]
+            candidates = [p for p in bundle.list_bundle(target) if p.endswith(".md")]
         needle = keyword.lower()
 
         matches: list[tuple[str, list[str]]] = []
