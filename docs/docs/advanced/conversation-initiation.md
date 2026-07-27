@@ -65,6 +65,20 @@ Set `conversation_initiation.enabled: false` to force-disable in queue mode, or 
 entirely via `conversation_initiation.store` (a dotted path to a `SessionIdMappingStore` subclass) — bypassing
 the `session.type` derivation.
 
+:::warning Auto-enable gives you dispatch, not delivery
+
+Queue mode registers the dispatcher that carries the message out of the Agent Runner, which is why
+the feature can switch itself on. It cannot deliver the message — [that is your `process_message`
+override](#queue-deployments-lambda-serverless--ecs-containerized), and the library has no way to
+detect whether you wrote one.
+
+So in a **stock queue deployment with no override**, asking an agent to notify someone produces:
+the tool returns `Conversation initiated.`, the agent reports success to the requester, and the
+stock response handler logs a warning and **drops the message**. Nothing reaches the recipient.
+
+Either implement the override below, or set `conversation_initiation.enabled: false` until you do.
+:::
+
 ## The `initiate_conversation` tool
 
 `initiate_conversation(target, prompt, user_id="", agent="")`
@@ -84,7 +98,11 @@ There is no fixed-text path: callers needing near-exact wording put it in the pr
 
 Initiation messages arrive on the **Output Queue** marked with the `message_type=INITIATION`
 attribute. Stock response handlers log a warning and drop them — delivery belongs to your
-`process_message` override (the same override that already delivers ordinary replies):
+`process_message` override (the same override that already delivers ordinary replies).
+
+**This override is not optional.** Without it the feature is silently inert in a queue
+deployment: the tool still reports success to the agent while every initiation message is
+discarded ([see the warning above](#enabling)).
 
 ```python
 from agentkernel.core.initiation import INITIATION_MESSAGE_TYPE, InitiationManager, InitiationMessage

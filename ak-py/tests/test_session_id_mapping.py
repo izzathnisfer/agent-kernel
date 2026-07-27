@@ -20,7 +20,20 @@ def clear_in_memory_store():
     InitiationManager.reset()
 
 
-def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = True, initiation_store: str = None, redis=True):
+_UNSET = object()
+
+
+def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = True, initiation_store: str = None, redis=True, enabled=_UNSET):
+    """
+    Build a stand-in AKConfig.
+
+    ``conversation_initiation_enabled`` is the effective gate (the real property's result),
+    while ``enabled`` is the raw ``conversation_initiation.enabled`` field. They normally
+    agree, so ``enabled`` defaults to mirroring the gate; pass ``enabled=None`` to model
+    auto-enable (queue mode inferred the feature, the operator never set it), which
+    ``InitiationManager.get()`` distinguishes from an explicit opt-in.
+    """
+
     class FakeCfg:
         class session:
             type = session_type
@@ -49,9 +62,9 @@ def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = Tru
             valkey = None
 
         class conversation_initiation:
-            enabled = conversation_initiation_enabled
             store = initiation_store
 
+    FakeCfg.conversation_initiation.enabled = conversation_initiation_enabled if enabled is _UNSET else enabled
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
     if not redis:
         FakeCfg.session.redis = None
@@ -300,6 +313,72 @@ class TestInitiationManager:
         initiation = make_initiation()
         InitiationManager.get().dispatch(initiation)
         assert received == [initiation]
+
+
+class TestUnbuildableMappingStore:
+    """
+    A mapping store that cannot be built is handled by intent: auto-enable (queue mode
+    inferred the feature) degrades to feature-off, while an explicit opt-in still raises.
+
+    The trigger here is a ``session.type`` the builder cannot resolve — legal since the
+    BYO-stores change, where ``session.type`` may be a dotted path to a SessionStore that
+    has no mapping-store counterpart.
+    """
+
+    def _cfg(self, monkeypatch, enabled):
+        monkeypatch.setattr(
+            "agentkernel.core.config.AKConfig.get",
+            classmethod(lambda cls: make_fake_cfg("my_pkg.my_module.MySessionStore", enabled=enabled)),
+        )
+
+    def test_auto_enabled_degrades_to_feature_off(self, monkeypatch, caplog):
+        self._cfg(monkeypatch, enabled=None)
+
+        with caplog.at_level("WARNING"):
+            assert InitiationManager.get() is None
+
+        assert "conversation_initiation.store" in caplog.text
+
+    def test_auto_enabled_keeps_inbound_messages_working(self, monkeypatch):
+        """The point of degrading: resolution falls back instead of failing every request."""
+        self._cfg(monkeypatch, enabled=None)
+
+        assert SessionIdResolver().resolve_session_id("thread-1") == "thread-1"
+
+    def test_auto_disabled_decision_is_cached(self, monkeypatch, caplog):
+        self._cfg(monkeypatch, enabled=None)
+        build = MagicMock(side_effect=AKConfigError("unknown session store type"))
+        monkeypatch.setattr(SessionIdMappingStoreBuilder, "build", staticmethod(build))
+
+        with caplog.at_level("WARNING"):
+            assert InitiationManager.get() is None
+            assert InitiationManager.get() is None
+
+        assert build.call_count == 1
+        assert caplog.text.count("conversation_initiation.store") == 1
+
+    def test_explicitly_enabled_still_raises(self, monkeypatch):
+        self._cfg(monkeypatch, enabled=True)
+
+        with pytest.raises(AKConfigError):
+            InitiationManager.get()
+
+    def test_explicit_failure_is_not_cached_as_disabled(self, monkeypatch):
+        """An explicit opt-in must keep raising, not silently degrade on the second call."""
+        self._cfg(monkeypatch, enabled=True)
+
+        with pytest.raises(AKConfigError):
+            InitiationManager.get()
+        with pytest.raises(AKConfigError):
+            InitiationManager.get()
+
+    def test_reset_clears_the_auto_disabled_decision(self, monkeypatch):
+        self._cfg(monkeypatch, enabled=None)
+        assert InitiationManager.get() is None
+
+        InitiationManager.reset()
+        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory")))
+        assert InitiationManager.get() is not None
 
 
 class TestSessionIdResolver:

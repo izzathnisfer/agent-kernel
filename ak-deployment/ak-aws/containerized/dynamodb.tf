@@ -22,13 +22,20 @@ resource "aws_dynamodb_table" "response_store" {
 
 # ---------- DynamoDB Session ID Mapping (agent-initiated conversations) ----------
 # The mapping store follows session.type at the application level, so this table is only
-# used when the session store itself is DynamoDB (create_dynamodb_memory_table = true).
-# Set conversation_initiation accordingly for other session backends (Redis, Valkey, ...).
+# used when the session store itself is DynamoDB (create_dynamodb_memory_table = true) —
+# enforced by the validation on var.conversation_initiation. Other session backends
+# (Redis, Valkey, ...) need no resource here: the mapping rides the session store.
+#
+# The name MUST stay in lockstep with the application's derivation: the mapping store
+# suffixes the session store's own table name with "-id-mapping"
+# (core/initiation/mapping/dynamodb.py). local.dynamodb_memory_table_name is exactly what
+# is injected as AK_SESSION__DYNAMODB__TABLE_NAME, so deriving from it here keeps the two
+# names paired by construction rather than by a literal that can drift.
 
 resource "aws_dynamodb_table" "session_id_mapping" {
   count = var.conversation_initiation ? 1 : 0
 
-  name         = "${local.prefix}-session-id-mapping"
+  name         = "${local.dynamodb_memory_table_name}-id-mapping"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "map_key"
 

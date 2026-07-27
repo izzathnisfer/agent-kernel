@@ -334,7 +334,15 @@ curl -X GET .../chat/{session_id}?request_id=...
 
 Agent-initiated conversations use a Session ID Mapping store that follows `session.type` — set
 `conversation_initiation.enabled: true` in `config.yaml` for single-process REST (queue-mode deployments
-auto-enable), see `docs/docs/advanced/conversation-initiation.md`. Only set `conversation_initiation`
+auto-enable), see `docs/docs/advanced/conversation-initiation.md`.
+
+> **Queue-mode auto-enable delivers nothing on its own.** The feature switches itself on because
+> queue mode registers a dispatcher, but the platform send lives in your response handler's
+> `process_message` override. Until you write one, the `initiate_conversation` tool reports success
+> to the agent and the stock handler drops the message. Set `conversation_initiation.enabled: false`
+> in `config.yaml` if you do not want the tool advertised yet.
+
+Only set `conversation_initiation`
 below when the session store is DynamoDB (`create_dynamodb_memory_table = true`); other backends
 (Redis, Valkey, ...) need no extra AWS resource since the mapping rides the same session store:
 
@@ -342,9 +350,15 @@ below when the session store is DynamoDB (`create_dynamodb_memory_table = true`)
 conversation_initiation = true
 ```
 
-Creates a `-session-id-mapping` DynamoDB table (partition key `map_key` (S), TTL attribute
-`expiry_time`) with read/write IAM grants for the REST/IO service task role only — the Agent
+Creates a DynamoDB table named after the session store's own with an `-id-mapping` suffix
+(`<product>-<env>-<module>-session_store-id-mapping`), partition key `map_key` (S), TTL attribute
+`expiry_time`, with read/write IAM grants for the REST/IO service task role only — the Agent
 Runner is messaging-platform blind and never touches the table.
+
+The name is derived rather than fixed because the application looks the table up as
+`{session.dynamodb.table_name}-id-mapping`; the two must agree or every lookup misses. Setting
+`conversation_initiation = true` without `create_dynamodb_memory_table = true` therefore fails
+validation.
 
 ## Auto Scaling
 

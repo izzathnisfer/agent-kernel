@@ -348,6 +348,14 @@ variable "scaling_config" {
 
 variable "conversation_initiation" {
   type        = bool
-  description = "Provision the Session ID Mapping DynamoDB table used to bind initiated sessions to messaging platform thread ids. Only needed when the session store itself is DynamoDB (create_dynamodb_memory_table = true) — other backends (Redis, Valkey, ...) reuse the session store, no extra resource required."
+  description = "Provision the Session ID Mapping DynamoDB table used to bind initiated sessions to messaging platform thread ids. Its name is derived from the DynamoDB session store's table name by suffixing '-id-mapping', matching what the application looks for, so this requires create_dynamodb_memory_table = true. Other session backends (Redis, Valkey, ...) reuse the session store and need no extra resource."
   default     = false
+
+  validation {
+    condition = (
+      !var.conversation_initiation ||
+      var.create_dynamodb_memory_table
+    )
+    error_message = "conversation_initiation = true requires create_dynamodb_memory_table = true — the mapping table name is derived from the DynamoDB session store's table name. Other session backends (Redis, Valkey, ...) need no Terraform resource."
+  }
 }

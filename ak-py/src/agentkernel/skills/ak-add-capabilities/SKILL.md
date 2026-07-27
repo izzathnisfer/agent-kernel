@@ -797,6 +797,8 @@ conversation_initiation:
 
 2. When enabled, the `initiate_conversation(target, prompt, user_id, agent)` system tool is registered on all agents: it creates a fresh session, composes the outbound message by running the agent with `prompt` (the new session's history contains the exchange), and dispatches it for delivery. Inbound platform messages resolve their conversation id through the Session ID Mapping automatically.
 
+   **Step 3 is mandatory, not a refinement.** Auto-enable only guarantees the message reaches the Output Queue — the platform send is the user's override. Without it the tool reports "Conversation initiated." to the agent and the stock response handler drops the message, so the agent claims success while the recipient hears nothing. If the user is not ready to wire the send point, set `conversation_initiation.enabled: false` rather than leaving the tool advertised.
+
 3. Wire the send point:
    - **Single-process REST**: implement `InitiationSender` on your handler — `RESTAPI.run()` registers the in-process dispatcher (send, then the mapping is bound automatically):
      ```python

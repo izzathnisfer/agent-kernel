@@ -27,8 +27,17 @@ class InitiationQueueDispatcher:
         Register the Output Queue dispatcher for agent-initiated conversations.
         Called by the agent runner entry points; safe to call whether or not the
         feature is enabled, and idempotent.
+
+        Also warms the InitiationManager so that a mapping store which cannot be built
+        surfaces as early as each deployment shape allows, rather than on every inbound
+        message. ECS calls this from the runner's ``run()``, so the failure lands at
+        container start; Lambda calls it when building the ChatService, so it lands on the
+        first invocation. Either way this changes *when* the failure appears, not whether:
+        an explicitly enabled feature still raises, while an auto-enabled one still
+        degrades to feature-off with a single warning.
         """
         InitiationManager.register_dispatcher(cls._dispatch)
+        InitiationManager.get()
 
     @classmethod
     def _dispatch(cls, initiation: InitiationMessage) -> None:

@@ -49,6 +49,10 @@ class InitiationManager:
 
     _instance: Optional["InitiationManager"] = None
     _dispatcher: Optional[Callable[[InitiationMessage], None]] = None
+    # Set when auto-enable selected the feature but its mapping store could not be
+    # built: the decision to stay off is cached so the warning is logged once
+    # instead of on every inbound message (see get()).
+    _auto_disabled: bool = False
     _lock: RLock = RLock()
     _log = logging.getLogger("ak.initiation.manager")
 
@@ -65,13 +69,41 @@ class InitiationManager:
         Return the shared InitiationManager instance, or None when agent-initiated
         conversations are not enabled (see ``AKConfig.conversation_initiation_enabled``). Callers use
         the None check as the feature-enabled check.
-        :return: The shared instance, or None if the feature is disabled.
+
+        A mapping store that cannot be built is handled by intent, because the same
+        failure means different things depending on how the feature was switched on:
+
+        - **Auto-enabled** (``conversation_initiation.enabled`` unset, queue mode inferred
+          it): the operator never asked for this. Degrade to feature-off with one WARNING
+          naming the remedy, rather than failing every inbound message on a lazy raise.
+        - **Explicitly enabled** (``enabled: true``): the operator asked for it, so a broken
+          mapping store is a real misconfiguration and the error propagates.
+
+        :return: The shared instance, or None if the feature is disabled or auto-degraded.
+        :raises Exception: Propagated from the store builder when the feature was enabled explicitly.
         """
-        if not AKConfig.get().conversation_initiation_enabled:
+        config = AKConfig.get()
+        if not config.conversation_initiation_enabled:
             return None
         with cls._lock:
+            if cls._auto_disabled:
+                return None
             if cls._instance is None:
-                cls._instance = cls(store=SessionIdMappingStoreBuilder.build())
+                try:
+                    cls._instance = cls(store=SessionIdMappingStoreBuilder.build())
+                except Exception:
+                    if config.conversation_initiation.enabled is not None:
+                        raise
+                    cls._auto_disabled = True
+                    cls._log.warning(
+                        "Agent-initiated conversations auto-enabled in queue mode, but the Session ID Mapping "
+                        "store could not be built — the feature is disabled for this process and inbound "
+                        "messages keep using platform-derived session ids. Set conversation_initiation.store to "
+                        "a SessionIdMappingStore dotted path to enable it, or conversation_initiation.enabled: "
+                        "false to silence this.",
+                        exc_info=True,
+                    )
+                    return None
             return cls._instance
 
     @classmethod
@@ -89,12 +121,13 @@ class InitiationManager:
     @classmethod
     def reset(cls) -> None:
         """
-        Drop the shared instance and any registered dispatcher so the next get()
-        rebuilds from config. Intended for testing.
+        Drop the shared instance, any registered dispatcher, and any cached
+        auto-disabled decision so the next get() rebuilds from config. Intended for testing.
         """
         with cls._lock:
             cls._instance = None
             cls._dispatcher = None
+            cls._auto_disabled = False
 
     def resolve_session_id(self, messaging_integration_thread_id: str) -> str:
         """
