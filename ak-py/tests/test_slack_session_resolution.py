@@ -14,10 +14,12 @@ fallback is ever reintroduced inside handle() itself. TestSlackSessionDerivation
 below it exercises resolve_session_id directly as a lower-level supplement.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from agentkernel.core.initiation import InitiationManager
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
 
 
 def make_fake_cfg(conversation_initiation_enabled=True):
@@ -33,21 +35,18 @@ def make_fake_cfg(conversation_initiation_enabled=True):
         class api:
             max_file_size = 10 * 1024 * 1024
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
 @pytest.fixture(autouse=True)
 def reset_state():
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     yield
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
 
 
 @pytest.fixture

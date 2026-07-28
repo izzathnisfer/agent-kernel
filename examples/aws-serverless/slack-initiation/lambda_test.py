@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +22,9 @@ os.environ["SLACK_SIGNING_SECRET"] = SIGNING_SECRET
 os.environ["SLACK_BOT_TOKEN"] = "xoxb-test-token"
 
 from agentkernel.core.initiation import InitiationManager  # noqa: E402
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore  # noqa: E402
+from agentkernel.core.session.mapping.in_memory import (  # noqa: E402
+    InMemoryMappingStore,
+)
 
 # Import the example modules once, at collection time, before any test's monkeypatched
 # AKConfig is in effect. agentkernel.aws (imported transitively by lambda_agent_runner
@@ -45,13 +48,30 @@ def slack_headers(body: bytes) -> dict:
 
 def lambda_event(payload: dict) -> dict:
     body = json.dumps(payload).encode()
-    return {"headers": slack_headers(body), "body": body.decode(), "isBase64Encoded": False}
+    return {
+        "headers": slack_headers(body),
+        "body": body.decode(),
+        "isBase64Encoded": False,
+    }
 
 
 def message_event(
-    *, ts: str, thread_ts: str = None, text: str = "hello", user: str = "U777", channel: str = "C1", bot_id: str = None
+    *,
+    ts: str,
+    thread_ts: str = None,
+    text: str = "hello",
+    user: str = "U777",
+    channel: str = "C1",
+    bot_id: str = None,
 ) -> dict:
-    event = {"type": "message", "text": text, "user": user, "channel": channel, "ts": ts, "client_msg_id": f"msg-{ts}"}
+    event = {
+        "type": "message",
+        "text": text,
+        "user": user,
+        "channel": channel,
+        "ts": ts,
+        "client_msg_id": f"msg-{ts}",
+    }
     if thread_ts is not None:
         event["thread_ts"] = thread_ts
     if bot_id is not None:
@@ -78,11 +98,8 @@ def make_fake_cfg(conversation_initiation_enabled=True):
                 class output:
                     url = "https://sqs.test/output"
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     FakeCfg.thread = None
     return FakeCfg
 
@@ -91,10 +108,10 @@ def make_fake_cfg(conversation_initiation_enabled=True):
 def reset_state(monkeypatch):
     monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg()))
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     yield
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
 
 
 class TestSlackEventsHandler:
@@ -120,7 +137,8 @@ class TestSlackEventsHandler:
 
         calls = []
         monkeypatch.setattr(
-            "agentkernel.aws.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "agentkernel.aws.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         status, body = handle_slack_events(lambda_event(message_event(ts="1.1", bot_id="B1")), None)
@@ -132,7 +150,8 @@ class TestSlackEventsHandler:
 
         calls = []
         monkeypatch.setattr(
-            "agentkernel.aws.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "agentkernel.aws.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         status, body = handle_slack_events(lambda_event(message_event(ts="1.1", text="   ")), None)
@@ -145,7 +164,8 @@ class TestSlackEventsHandler:
         InitiationManager.get()._store.save("session-1", "1111.2222")
         calls = []
         monkeypatch.setattr(
-            "agentkernel.aws.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "agentkernel.aws.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         status, _ = handle_slack_events(lambda_event(message_event(ts="5555.6666", thread_ts="1111.2222")), None)
@@ -160,7 +180,8 @@ class TestSlackEventsHandler:
         InitiationManager.get()._store.save("session-1", "1111.2222")
         calls = []
         monkeypatch.setattr(
-            "agentkernel.aws.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "agentkernel.aws.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         status, _ = handle_slack_events(lambda_event(message_event(ts="3333.4444")), None)
@@ -173,7 +194,8 @@ class TestSlackEventsHandler:
 
         calls = []
         monkeypatch.setattr(
-            "agentkernel.aws.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "agentkernel.aws.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         handle_slack_events(lambda_event(message_event(ts="7.7", channel="C42")), None)
@@ -196,7 +218,8 @@ class TestSlackEventsHandler:
 
         calls = []
         monkeypatch.setattr(
-            "agentkernel.aws.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "agentkernel.aws.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         handle_slack_events(lambda_event(message_event(ts="7.7", user="U0REQUESTER")), None)
@@ -242,7 +265,8 @@ class TestAgentRunnerAttributePassthrough:
 
         calls = []
         monkeypatch.setattr(
-            "agentkernel.aws.SQSHandler.send_message_to_output_queue", lambda **kwargs: calls.append(kwargs)
+            "agentkernel.aws.SQSHandler.send_message_to_output_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         AgentRunner._send_to_output_queue(
@@ -283,7 +307,12 @@ class FakeSlackClient:
 
 
 def output_record(
-    *, body: dict, message_type: str = None, channel: str = None, thread_ts: str = None, request_id: str = "req-1"
+    *,
+    body: dict,
+    message_type: str = None,
+    channel: str = None,
+    thread_ts: str = None,
+    request_id: str = "req-1",
 ) -> dict:
     attrs = {"request_id": {"stringValue": request_id}}
     if message_type is not None:
@@ -324,7 +353,11 @@ class TestSlackResponseHandler:
 
         fake_client = FakeSlackClient()
         monkeypatch.setattr(mod, "_slack_client", fake_client)
-        monkeypatch.setattr(mod.SlackResponseHandler, "_get_response_store", classmethod(lambda cls: FakeStore()))
+        monkeypatch.setattr(
+            mod.SlackResponseHandler,
+            "_get_response_store",
+            classmethod(lambda cls: FakeStore()),
+        )
 
         body = {"result": "Traffic.", "session_id": "session-1"}
         mod.SlackResponseHandler.process_message(output_record(body=body, channel="C1", thread_ts="1.1"))
@@ -336,7 +369,11 @@ class TestSlackResponseHandler:
 
         fake_client = FakeSlackClient()
         monkeypatch.setattr(mod, "_slack_client", fake_client)
-        monkeypatch.setattr(mod.SlackResponseHandler, "_get_response_store", classmethod(lambda cls: FakeStore()))
+        monkeypatch.setattr(
+            mod.SlackResponseHandler,
+            "_get_response_store",
+            classmethod(lambda cls: FakeStore()),
+        )
 
         body = {"result": "Traffic.", "session_id": "session-1"}
         mod.SlackResponseHandler.process_message(output_record(body=body))

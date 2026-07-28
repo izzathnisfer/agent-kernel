@@ -1,13 +1,13 @@
 # AK-134: Agent-initiated conversations — Implementation Spec
 
-This spec details the implementation of the approved [design.md](design.md): a new `core/initiation/` package (mapping store, manager, system tool), a resolve hook on the request-handler surfaces, initiation delivery through the response handlers' existing `process_message` override point (no new send method), and a `conversation_initiation:` config block plus Terraform table (provisioned only for a DynamoDB-backed session store). The design idea: the tool creates the session platform-blind inside the Agent Runner, runs the owning agent with the caller's prompt so the outbound message and its context land in the new session's framework history naturally, and dispatches an `InitiationMessage`; the Response Handler sends it, learns the `messaging_integration_thread_id`, and binds the mapping that the Request Handler later resolves replies through.
+This spec details the implementation of the approved [design.md](design.md): a new `core/initiation/` package (mapping store, manager, system tool), a resolve hook on the request-handler surfaces, initiation delivery through the response handlers' existing `process_message` override point (no new send method), and a `session.initiation:` config block plus Terraform table (provisioned only for a DynamoDB-backed session store). The design idea: the tool creates the session platform-blind inside the Agent Runner, runs the owning agent with the caller's prompt so the outbound message and its context land in the new session's framework history naturally, and dispatches an `InitiationMessage`; the Response Handler sends it, learns the `messaging_integration_thread_id`, and binds the mapping that the Request Handler later resolves replies through.
 
 ## Design
 
 ### Feature gate
 
-1. The entire feature is gated by **`AKConfig.conversation_initiation_enabled`** (an always-present `conversation_initiation:` config block): an explicit `conversation_initiation.enabled` wins; otherwise auto-enabled in queue-mode deployments (`execution.queues.input.url` configured), since only those register a dispatcher at startup — timing-safe because system tools attach at Agent init, before dispatcher registration. Single-process REST needs the explicit `conversation_initiation.enabled: true` opt-in. When disabled: `InitiationManager.get()` returns `None`, the tool is not registered, resolve hooks return the platform-derived id unchanged, and the response-handler initiation branch is never taken.
-2. **Accepted trade-off — auto-enable proves dispatchability, not deliverability.** The gate keys off dispatcher registration, but the final hop (the actual platform send) lives in the user's `process_message` override, which core cannot detect. A stock queue deployment therefore advertises `initiate_conversation` on every agent while its stock response handler warns-and-drops the dispatched message: the tool returns "Conversation initiated.", the agent reports success, and nothing is delivered. This was weighed against gating the tool separately (auto-enable only the resolve hooks, require `enabled: true` for the tool) and against the previous presence-gate, and default-on was kept: queue mode is where the feature is meant to run, the split gate costs a second gate concept for a case that a one-line config change already covers, and the alternative penalizes the common path to protect the un-configured one. The failure mode is therefore documented rather than designed around — see the warning in `docs/docs/advanced/conversation-initiation.md` §Enabling, the containerized module README, and the `ak-add-capabilities` skill. Operators who do not want it set `conversation_initiation.enabled: false`.
+1. The entire feature is gated by **`AKConfig.conversation_initiation_enabled`** (an always-present `session.initiation:` config block): an explicit `session.initiation.enabled` wins; otherwise auto-enabled in queue-mode deployments (`execution.queues.input.url` configured), since only those register a dispatcher at startup — timing-safe because system tools attach at Agent init, before dispatcher registration. Single-process REST needs the explicit `session.initiation.enabled: true` opt-in. When disabled: `InitiationManager.get()` returns `None`, the tool is not registered, resolve hooks return the platform-derived id unchanged, and the response-handler initiation branch is never taken.
+2. **Accepted trade-off — auto-enable proves dispatchability, not deliverability.** The gate keys off dispatcher registration, but the final hop (the actual platform send) lives in the user's `process_message` override, which core cannot detect. A stock queue deployment therefore advertises `initiate_conversation` on every agent while its stock response handler warns-and-drops the dispatched message: the tool returns "Conversation initiated.", the agent reports success, and nothing is delivered. This was weighed against gating the tool separately (auto-enable only the resolve hooks, require `enabled: true` for the tool) and against the previous presence-gate, and default-on was kept: queue mode is where the feature is meant to run, the split gate costs a second gate concept for a case that a one-line config change already covers, and the alternative penalizes the common path to protect the un-configured one. The failure mode is therefore documented rather than designed around — see the warning in `docs/docs/advanced/conversation-initiation.md` §Enabling, the containerized module README, and the `ak-add-capabilities` skill. Operators who do not want it set `session.initiation.enabled: false`.
 3. **An unbuildable mapping store is resolved by intent, not uniformly.** `InitiationManager.get()` distinguishes the two ways the gate can be true. Auto-enabled (`enabled` unset) means the operator never asked for the feature, so a store that cannot be built degrades to feature-off with one cached WARNING naming the remedy — inbound messages keep resolving to platform-derived ids instead of failing. Explicitly enabled (`enabled: true`) means the operator did ask, so the error propagates, and `InitiationQueueDispatcher.register()` warms the manager at startup so it surfaces at boot rather than on the first user message. Without this split, a queue deployment using a BYO dotted-path `session.type` (legal since the BYO-stores change) would raise inside every inbound request for a feature it never opted into.
 4. The core never imports from `deployment/`, `integration/`, or `api/` — dispatchers and senders are *registered into* the core by those layers (same direction as `RESTAPI.run(handlers=...)`).
 
@@ -16,13 +16,20 @@ This spec details the implementation of the approved [design.md](design.md): a n
 ```
 ak-py/src/agentkernel/core/initiation/
 ├── __init__.py          # exports: InitiationManager, InitiationSender, InitiationMessage,
-│                        #          SessionIdMappingStore, InitiateConversationTool
+│                        #          InitiateConversationTool
 ├── model.py             # InitiationMessage
 ├── manager.py           # InitiationManager (singleton façade) + InitiationSender (ABC)
-├── tools.py             # InitiateConversationTool (SystemTool) + _initiate_conversation()
+└── tool.py              # InitiateConversationTool (SystemTool) + _initiate_conversation()
+```
+
+The mapping store is **not** part of this package: it belongs to the session store, so the
+`MappingStore` ABC sits beside `SessionStore` and the backends live under `core/session/`.
+
+```
+ak-py/src/agentkernel/core/session/
+├── base.py              # SessionStore (ABC, + get_mapping_store) and MappingStore (ABC)
 └── mapping/
-    ├── __init__.py      # SessionIdMappingStoreBuilder
-    ├── base.py          # SessionIdMappingStore (ABC)
+    ├── __init__.py      # build_mapping_store(default_factory) — honours the BYO dotted path
     ├── in_memory.py     # ClassVar dict, ephemeral
     ├── redis.py         # reuses session.redis connection config
     ├── valkey.py        # reuses session.valkey connection config (valkey extra)
@@ -42,7 +49,7 @@ class InitiationMessage(BaseModel):
     type: Literal["initiation"] = "initiation"
 
 
-class SessionIdMappingStore(ABC):
+class MappingStore(ABC):
     @abstractmethod
     def get_session_id(self, messaging_integration_thread_id: str) -> str | None: ...
     @abstractmethod
@@ -94,7 +101,8 @@ class InitiationManager:
 ```
 
 3. **Governing rule — one choke point per direction:** every resolve goes through `InitiationManager.resolve_session_id()` and every bind through `complete()`/`bind()`, in all deployment shapes. The queue and single-process paths differ only in *who* performs the platform send (the user's `process_message` override vs. a registered `InitiationSender`).
-4. **Governing rule — mapping store follows the session store:** `SessionIdMappingStoreBuilder.build()` switches on `AKConfig.get().session.type` exactly as `SessionStoreBuilder.build()` does (`ak-py/src/agentkernel/core/builder.py:132-162`), including the unknown-type `AKConfigError` and the `valkey` ImportError message pattern (`builder.py:139-144`) — unless `conversation_initiation.store` names a bring-your-own dotted path (`resolve_dotted(path, base=SessionIdMappingStore)()`), which takes precedence. Connection settings come from the existing `session.<backend>` config (`_SessionStoreConfig`, url/credentials); namespace (table/collection name or key prefix) is derived by suffixing the session store's own (`-id-mapping` / `id-mapping:`), and TTL is reused from it — no separate namespace config.
+4. **Governing rule — the mapping store belongs to the session store:** there is no separate backend selection. Each session store constructs its paired `MappingStore` in its own constructor via `build_mapping_store(...)` and returns it from `get_mapping_store()`, so `session.type` selects both at once and they cannot drift apart. `session.initiation.store` names a bring-your-own dotted path (`resolve_dotted(path, base=MappingStore)()`) that overrides the pairing. Connection settings come from the existing `session.<backend>` config (`_SessionStoreConfig`, url/credentials); namespace (table/collection name or key prefix) is derived by suffixing the session store's own (`-id-mapping` / `id-mapping:`), and TTL is reused from it — no separate namespace config. `InitiationManager` never builds storage: it takes the store from `Runtime.current().sessions().get_mapping_store()`.
+5. **Governing rule — every session store must supply a mapping store:** `SessionStore.get_mapping_store()` is `@abstractmethod`, so the requirement is enforced by Python at class instantiation rather than by a runtime check. Adding a session backend without its mapping counterpart is impossible to ship, and a bring-your-own store that omits it raises `TypeError` naming the missing method as `SessionStoreBuilder` constructs it — at startup, before any request. No separate gate, degrade path or warning is needed, and none exists. This is a deliberate breaking change for bring-your-own session stores written before the method.
 
 ### Mapping store data model
 
@@ -184,9 +192,9 @@ class SessionIdResolver:
 New classes in `ak-py/src/agentkernel/core/config.py`, and a new optional root field after `thread` (`config.py:393`):
 
 ```python
-class _ConversationInitiationConfig(BaseModel):
-    """Configuration for agent-initiated conversations (the Session ID Mapping store and
-    the initiate_conversation system tool)."""
+class _SessionInitiationConfig(BaseModel):
+    """Configuration for agent-initiated conversations, whose Mapping store is provided by
+    the session store (see SessionStore.get_mapping_store)."""
 
     enabled: Optional[bool] = Field(
         default=None,
@@ -194,17 +202,19 @@ class _ConversationInitiationConfig(BaseModel):
     )
     store: Optional[str] = Field(
         default=None,
-        description="Dotted path to a SessionIdMappingStore subclass (bring-your-own).",
+        description="Dotted path to a MappingStore subclass (bring-your-own).",
     )
 
-class AKConfig(...):
-    conversation_initiation: _ConversationInitiationConfig = Field(
+class _SessionStoreConfig(BaseModel):
+    ...                                  # type / cache / per-backend blocks unchanged
+    initiation: _SessionInitiationConfig = Field(
         description="Agent-initiated conversation configurations",
-        default_factory=_ConversationInitiationConfig,
+        default_factory=_SessionInitiationConfig,
     )
 ```
 
-- No existing field, type, default, or description changes to other blocks. Existing YAML files and `AK_*` env vars are unaffected; the new block is reachable as `AK_CONVERSATION_INITIATION__ENABLED` etc. through the existing env mechanism. `AKConfig.conversation_initiation_enabled` is a plain Python property (not a pydantic field) computing the effective enabled state — see §Feature gate.
+- The block is nested inside `session:` rather than sitting at the top level, because the mapping store is the session store's own — one connection, one namespace, one place to configure both. There is no top-level `conversation_initiation:` block.
+- No existing field, type, default, or description changes to other blocks. Existing YAML files and `AK_*` env vars are unaffected; the new keys are reachable as `AK_SESSION__INITIATION__ENABLED` / `AK_SESSION__INITIATION__STORE` through the existing env mechanism. `AKConfig.conversation_initiation_enabled` is a plain Python property (not a pydantic field) computing the effective enabled state — see §Feature gate.
 
 ### Terraform changes
 
@@ -234,7 +244,7 @@ All intentional; everything not listed is a non-change.
 | Platform send raises inside the user's `process_message` override (API error, policy window) | user override | propagate (like any processing failure) — existing SQS retry semantics apply, then `on_permanent_failure` (whose initiation guard logs only — no response-store error entry, since no HTTP caller waits on an initiation) |
 | Bind or thread-init fails after a successful send | `InitiationManager.complete()` | `complete()` catches `Exception` internally, logs ERROR, never raises — raising from the user's override after the send would redeliver and **resend the platform message** (duplicate outreach is worse than a degraded mapping; the reply then falls back to the platform-derived session id) |
 | No dispatcher registered / manager disabled / bad params | tool | return actionable error text, never raise into the framework (pattern: `_analyze_attachments`) |
-| `valkey` extra missing with `session.type: valkey` | `SessionIdMappingStoreBuilder` | same `ImportError` message pattern as `SessionStoreBuilder` (`builder.py:139-144`) |
+| `valkey` extra missing with `session.type: valkey` | `SessionStoreBuilder` | the session store fails first with its existing `ImportError` message (`builder.py:139-144`); its mapping store is never reached |
 | Reply arrives between send and bind | — | accepted race: resolve falls back to the platform-derived id for that message; the initiated session's history is complete before the send, so subsequent correctly-resolved replies have full context; documented limitation |
 | Thread-naming model unavailable | `complete()` → naming strategy | existing `ThreadNamingStrategy` truncation fallback; no new handling |
 
@@ -244,7 +254,7 @@ Concurrency: `InitiationManager` is a class-level singleton guarded by an `RLock
 
 New test files (`ak-py/tests/`):
 
-- `test_session_id_mapping.py` — `InMemorySessionIdMappingStore` bidirectional save/get/clear and save-if-absent idempotency; `SessionIdMappingStoreBuilder` follows `session.type` and derives namespace/TTL from the session store's own (monkeypatch `agentkernel.core.config.AKConfig.get` with a `FakeCfg` exposing `session.type` + per-backend blocks + `conversation_initiation`, per the established pattern); unknown type raises `AKConfigError`; `test_store_builders.py` covers the `conversation_initiation.store` bring-your-own dotted path; `InitiationManager.get()` returns `None` when `conversation_initiation_enabled` is False and a manager when True (`InitiationManager.reset()` in an autouse fixture, mirroring thread-manager tests).
+- `test_mapping_store.py` — `InMemoryMappingStore` bidirectional save/get/clear and save-if-absent idempotency; each session backend pairs itself with the matching mapping store and derives namespace/TTL from its own settings (monkeypatch `agentkernel.core.config.AKConfig.get` with a `FakeCfg` exposing `session.type` + per-backend blocks + the nested `session.initiation` block, per the established pattern); `session.initiation.store` overrides the pairing; `test_store_builders.py` covers `build_mapping_store` (default pairing, BYO dotted path, precedence, non-MappingStore rejection) and that a session store omitting the abstract `get_mapping_store()` raises `TypeError` as the builder constructs it; `InitiationManager.get()` returns `None` when `conversation_initiation_enabled` is False and a manager when True (`InitiationManager.reset()` in an autouse fixture, mirroring thread-manager tests).
 - `test_initiation_tool.py` — using `DummyAgent`/`DummyRunner` and an in-memory runtime: the tool creates the session in the store, runs the agent (DummyRunner reply becomes the outbound message, session history persisted), and dispatches an `InitiationMessage` with `user_id` defaulting to `target`; missing dispatcher / missing target / missing prompt return error text without raising.
 - `test_initiation_response_handlers.py` — the riskiest consumers: for `ResponseHandler` (Lambda record shape) and `ECSOutputConsumer` (boto3 record shape), an `INITIATION`-attributed record hitting the **stock** handler is logged and dropped — no response-store write, no broadcast, no raise (same for `on_permanent_failure`); a **subclass** override following the documented contract (parse → fake send → `complete()`) binds the mapping (in-memory store via monkeypatched config) and creates the AK thread + first assistant message when `thread` config is present (`ConversationThreadManager.reset()` + `InitiationManager.reset()` between cases); `complete()` swallows a failing mapping store (logs, never raises); a `CHAT_RESPONSE`-attributed record still follows the existing store/broadcast path (patch targets unchanged from `test_akresponsehandler.py`: `ResponseDBHandler`, `BaseWSHandler`, `SQSHandler.get_message_custom_attributes` inputs).
 - `test_queue_request_handler_resolve.py` — `POST /api/v1/chat` rewrites a mapped `session_id` before enqueue and returns the resolved id (patch `get_queue_handler`/`get_response_store` fakes); identity fallback when unmapped or disabled.

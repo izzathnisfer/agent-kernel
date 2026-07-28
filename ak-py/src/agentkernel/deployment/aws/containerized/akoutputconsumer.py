@@ -87,7 +87,6 @@ class ECSOutputConsumer(ECSSQSConsumer):
         cls._log.error(f"Permanent failure for output message {record.get('MessageId')} " f"after {max_retries} retries")
 
         if cls._is_initiation_message(record):
-            # No HTTP caller waits on an initiation — log only, no response-store error entry.
             cls._log.error("Initiation message permanently failed — the initiation was not delivered to the user")
             return
 

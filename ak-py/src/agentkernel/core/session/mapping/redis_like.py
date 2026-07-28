@@ -8,12 +8,12 @@ import logging
 from typing import Optional
 
 from ...util.driver.redis_like import _RedisLikeDriver
-from .base import SessionIdMappingStore
+from ..base import MappingStore
 
 
-class _RedisLikeSessionIdMappingStore(SessionIdMappingStore):
+class _RedisLikeMappingStore(MappingStore):
     """
-    Redis-compatible implementation of the SessionIdMappingStore interface.
+    Redis-compatible implementation of the MappingStore interface.
 
     Each mapping direction is a plain string key under the configured prefix;
     the driver applies the configured TTL atomically on every SET.
@@ -36,7 +36,7 @@ class _RedisLikeSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         :return: The mapped session id, or None if no mapping exists.
         """
-        return self._driver.get(self._driver.key(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id)))
+        return self._driver.get(self._driver.key(MappingStore.thread_record_key(messaging_integration_thread_id)))
 
     def get_messaging_integration_thread_id(self, session_id: str) -> Optional[str]:
         """
@@ -45,7 +45,7 @@ class _RedisLikeSessionIdMappingStore(SessionIdMappingStore):
         :param session_id: The Agent Kernel session id.
         :return: The mapped messaging platform thread id, or None if no mapping exists.
         """
-        return self._driver.get(self._driver.key(SessionIdMappingStore.session_record_key(session_id)))
+        return self._driver.get(self._driver.key(MappingStore.session_record_key(session_id)))
 
     def save(self, session_id: str, messaging_integration_thread_id: str) -> None:
         """
@@ -55,8 +55,8 @@ class _RedisLikeSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         """
         self._log.debug(f"Saving mapping {session_id} <-> {messaging_integration_thread_id}")
-        self._driver.set(self._driver.key(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id)), session_id)
-        self._driver.set(self._driver.key(SessionIdMappingStore.session_record_key(session_id)), messaging_integration_thread_id)
+        self._driver.set(self._driver.key(MappingStore.thread_record_key(messaging_integration_thread_id)), session_id)
+        self._driver.set(self._driver.key(MappingStore.session_record_key(session_id)), messaging_integration_thread_id)
 
     def clear(self) -> None:
         """

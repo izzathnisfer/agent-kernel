@@ -4,18 +4,18 @@ Builds [spec.md](spec.md) in order; every iteration leaves the branch working an
 
 **Post-review revision:** iterations below describe the original implementation (PR #362), which used a
 `mapping_table:` config block as the feature gate. Following review feedback, that block was replaced with
-`AKConfig.conversation_initiation_enabled` (auto-enabled in queue mode, explicit `conversation_initiation.enabled` opt-in for REST) and
+`AKConfig.conversation_initiation_enabled` (auto-enabled in queue mode, explicit `session.initiation.enabled` opt-in for REST) and
 namespace/TTL derivation from the session store's own settings — see the current [spec.md](spec.md) §Feature
 gate and §Config changes for the as-built config shape. The iterations below are left as the historical
 implementation record and are not updated line-by-line for the new config field names.
 
 ## Iteration 1: Config block + Session ID Mapping store
 
-- **Goal:** `mapping_table:` config parses and `SessionIdMappingStoreBuilder.build()` returns the backend matching `session.type`; feature still inert everywhere else.
+- **Goal:** `mapping_table:` config parses and `the session store.build()` returns the backend matching `session.type`; feature still inert everywhere else.
 - **Files:** `ak-py/src/agentkernel/core/config.py`; new `ak-py/src/agentkernel/core/initiation/__init__.py`, `initiation/mapping/{__init__,base,in_memory,redis,valkey,dynamodb,cosmosdb,firestore}.py`; new `ak-py/tests/test_session_id_mapping.py`
 - **Steps:**
   1. Add `_MappingTableConfig` and the optional `mapping_table` root field (§Config changes).
-  2. Implement `SessionIdMappingStore` ABC and the six backends with the two-records-per-mapping model, reusing the shared `core/util/driver/` drivers as the session/thread stores do (§Mapping store data model).
+  2. Implement `MappingStore` ABC and the six backends with the two-records-per-mapping model, reusing the shared `core/util/driver/` drivers as the session/thread stores do (§Mapping store data model).
   3. Implement the builder following `session.type`, including the valkey ImportError pattern (§rule 4).
 - **Verify:** `uv run pytest tests/test_session_id_mapping.py tests/test_config.py` (add the `mapping_table` default-None assertion to `test_config.py` here).
 
@@ -94,3 +94,26 @@ implementation record and are not updated line-by-line for the new config field 
   3. Bundled user skills (`ak-py/src/agentkernel/skills/`): check for config-block references; update or record that none apply.
   4. Run the `ak-dev-sync-docs-from-branch` and `ak-dev-sync-skills-from-branch` flows to confirm nothing was missed before merge.
 - **Verify:** sync flows report no remaining drift; `git grep send_initiation_message docs/ .agents/` shows only the REST-mode contract.
+
+## Iteration 11: Fold the mapping store into the session store
+
+Done after review. The mapping store had its own top-level config block and its own backend-selection
+builder that mirrored `SessionStoreBuilder` — two parallel switches on `session.type` that had to stay
+in agreement. Since the mapping store is the session store's companion table, it is now owned by it.
+
+- **Files:** `core/config.py` (top-level `conversation_initiation:` replaced by a nested
+  `session.initiation` block); `core/session/base.py` (gains the `MappingStore` ABC beside
+  `SessionStore`, plus an abstract `get_mapping_store()`); `core/initiation/mapping/`
+  moved to `core/session/mapping/` with `SessionIdMappingStore` renamed `MappingStore` and the
+  builder replaced by `build_mapping_store()`; the six session backends;
+  `core/initiation/manager.py`; `core/initiation/tools.py` renamed `tool.py`.
+- **Steps:** each session store constructs its paired mapping store and returns it from
+  `get_mapping_store()`, which is `@abstractmethod` so no backend can omit it; `InitiationManager`
+  takes the store from `Runtime.current().sessions()` instead of building one.
+- **Supersedes:** the auto-disable degrade path added for the lazy-build failure mode. An
+  intermediate revision put a runtime gate in `SessionStoreBuilder.build()` (raise on an explicit
+  opt-in, warn when auto-enabled) to catch a session store that supplied no mapping store; making
+  `get_mapping_store()` abstract removed the need for it, so both the gate and `core/builder.py`
+  are untouched in the final state.
+- **Verify:** `uv run pytest` (`test_mapping_store.py`, renamed from `test_session_id_mapping.py`)
+  and `make lint-check-all`.

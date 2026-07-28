@@ -1,11 +1,12 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from agentkernel.core.initiation import INITIATION_MESSAGE_TYPE, InitiationManager, InitiationMessage
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
 from agentkernel.core.model import ExecutionMode
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
 from agentkernel.core.thread.manager import ConversationThreadManager
 from agentkernel.core.thread.naming import ThreadNamingStrategy
 from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
@@ -30,12 +31,9 @@ def make_fake_cfg(conversation_initiation_enabled=True, thread=None, mode=Execut
                 class output:
                     max_receive_count = 3
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.execution.mode = mode
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     FakeCfg.thread = thread
     return FakeCfg
 
@@ -72,7 +70,7 @@ def boto3_record(body: dict, message_type: str = None, request_id: str = "req-1"
 @pytest.fixture(autouse=True)
 def reset_state():
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     ConversationThreadManager.reset()
     InMemoryThreadStore._threads.clear()
     InMemoryThreadStore._messages.clear()
@@ -81,7 +79,7 @@ def reset_state():
     ECSOutputConsumer._response_store = None
     yield
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     ConversationThreadManager.reset()
     InMemoryThreadStore._threads.clear()
     InMemoryThreadStore._messages.clear()

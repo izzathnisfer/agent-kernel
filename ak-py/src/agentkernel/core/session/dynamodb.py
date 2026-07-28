@@ -5,7 +5,9 @@ from boto3.dynamodb.types import Binary
 from ..base import Session
 from ..config import AKConfig
 from ..util.driver.dynamodb import DynamoDBDriver
-from .base import SessionCache, SessionStore
+from .base import MappingStore, SessionCache, SessionStore
+from .mapping import build_mapping_store
+from .mapping.dynamodb import DynamoDBMappingStore
 from .serde import BinarySerde
 
 
@@ -34,6 +36,15 @@ class DynamoDBSessionStore(SessionStore):
             raise ValueError("AKConfig.session.dynamodb.table_name must be set to use DynamoDBSessionStore")
         self._driver = DynamoDBDriver(table_name=cfg.table_name, partition_key="session_id", sort_key="key", ttl=cfg.ttl)
         self._cache = cache
+        self._mapping = build_mapping_store(DynamoDBMappingStore)
+
+    def get_mapping_store(self) -> MappingStore:
+        """
+        Returns the Session ID Mapping store paired with this session store.
+
+        :return: The DynamoDBMappingStore sharing this store's connection settings.
+        """
+        return self._mapping
 
     def load(self, session_id: str, strict: bool = False) -> Session:
         """

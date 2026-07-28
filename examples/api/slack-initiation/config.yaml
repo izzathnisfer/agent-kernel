@@ -1,7 +1,11 @@
-# Core settings
+# Core settings.
+# INFO rather than DEBUG so this example's own "┃ STEP ..." trace lines stand out instead of
+# being buried in the library's internals — server.py logs them under "ak.example.slack_initiation",
+# a child of the "ak" logger, so they inherit this level and AKLogger's handler and formatter.
+# Switch to DEBUG when you need the library's internals too.
 logging:
   ak:
-    level: DEBUG
+    level: INFO
 library_version: "0.1.0"
 
 # Slack integration settings
@@ -10,10 +14,11 @@ slack:
 
 # Agent-initiated conversations (the initiate_conversation system tool + reply
 # resolution). Single-process REST deployments need the explicit opt-in below;
-# queue-mode deployments auto-enable. The mapping store follows session.type
-# (in-memory here).
-conversation_initiation:
-  enabled: true
+# queue-mode deployments auto-enable. The mapping store is provided by the
+# session store, so it follows session.type (in-memory here).
+session:
+  initiation:
+    enabled: true
 
 # Optional: uncomment to also record initiated conversations as AK threads
 # (readable over GET /api/v1/threads). The thread is owned by the recipient.

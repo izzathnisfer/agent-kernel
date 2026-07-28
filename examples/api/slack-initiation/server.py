@@ -19,14 +19,79 @@ requester and recipient apart — see README.md's "How it works" for the full
 rationale and a worked example.
 """
 
+import logging
 from typing import Optional
 
+from agentkernel import Agent, PostHook, PreHook, Session
 from agentkernel.api import RESTAPI
-from agentkernel.core import AgentRequestAny, ToolContext
+from agentkernel.core import AgentRequestAny, AgentRequestText, ToolContext
 from agentkernel.core.initiation import InitiationSender
 from agentkernel.openai import OpenAIModule, OpenAIToolBuilder
 from agentkernel.slack import AgentSlackRequestHandler
 from agents import Agent as OpenAIAgent
+
+_log = logging.getLogger("ak.example.slack_initiation")
+
+
+def _trace(step: str, detail: str) -> None:
+    """
+    Emits one aligned, prefixed line marking a step of the initiation round trip.
+
+    The logger sits under the ``ak.`` namespace on purpose: AKLogger configures a handler,
+    formatter and level on the ``ak`` logger and sets ``propagate = False``, so a child of it
+    is formatted and filtered like the library's own output. A logger named after this module
+    instead (``logging.getLogger(__name__)``) would reach the root logger, which nothing
+    configures unless ``logging.system.level`` is set — Python's lastResort handler would then
+    drop every line below WARNING.
+
+    :param step: Short step label, padded so the lines align in a busy console.
+    :param detail: The step's specifics.
+    """
+    _log.info(f"┃ {step:<8} {detail}")
+
+
+def _prompt_text(requests: list) -> str:
+    """
+    Extracts the first text prompt from a request list, shortened for one-line logging.
+
+    :param requests: The request list handed to the agent.
+    :return: The prompt text truncated to 110 characters, or "" when there is none.
+    """
+    for req in requests:
+        if isinstance(req, AgentRequestText):
+            text = req.prompt.replace("\n", " ")
+            return text if len(text) <= 110 else f"{text[:107]}..."
+    return ""
+
+
+class TraceAskPreHook(PreHook):
+    """Logs the inbound prompt and which agent and session are about to handle it."""
+
+    async def on_run(self, session: Session, agent: Agent, requests: list) -> list:
+        _trace("ASK", f"agent={agent.name} session={session.id} prompt={_prompt_text(requests)!r}")
+        return requests
+
+    def name(self) -> str:
+        return "trace-ask"
+
+
+class TraceReplyPostHook(PostHook):
+    """
+    Logs the agent's reply — for the notifier this is the text the recipient will read.
+
+    The reply is read with ``str()`` rather than a named field, which covers every reply type:
+    ``AgentReplyText`` returns its ``response``, ``AgentReplyImage`` appends the attachment
+    note, ``AgentReplyAny`` its structured content. That is how ``core/initiation/tool.py``
+    reads the composed message too.
+    """
+
+    async def on_run(self, session: Session, requests: list, agent: Agent, agent_reply) -> object:
+        reply = str(agent_reply).replace("\n", " ")
+        _trace("REPLY", f"agent={agent.name} session={session.id} text={reply[:110]!r}")
+        return agent_reply
+
+    def name(self) -> str:
+        return "trace-reply"
 
 
 def get_requester_id() -> str:
@@ -79,11 +144,32 @@ notifier_agent = OpenAIAgent(
 )
 
 
-OpenAIModule([general_agent, notifier_agent])
+_module = OpenAIModule([general_agent, notifier_agent])
+for _agent in (general_agent, notifier_agent):
+    _module.pre_hook(_agent, [TraceAskPreHook()])
+    _module.post_hook(_agent, [TraceReplyPostHook()])
 
 
 class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):
     """Slack handler that can also deliver agent-initiated messages."""
+
+    def resolve_session_id(self, messaging_integration_thread_id: str) -> str:
+        """
+        Resolves an inbound thread id, logging whether it hit the Session ID Mapping.
+
+        Overriding only to trace the decision — it defers to the SessionIdResolver mixin for
+        the actual lookup. A "mapped" line means the reply was threaded under a message the
+        agent initiated, so it continues that session; "unmapped" means it starts a new one.
+
+        :param messaging_integration_thread_id: The thread_ts Slack derived for this message.
+        :return: The mapped session id, or the given id when no mapping applies.
+        """
+        session_id = super().resolve_session_id(messaging_integration_thread_id)
+        if session_id == messaging_integration_thread_id:
+            _trace("INBOUND", f"thread_ts={messaging_integration_thread_id} unmapped -> new session")
+        else:
+            _trace("INBOUND", f"thread_ts={messaging_integration_thread_id} mapped -> session={session_id}")
+        return session_id
 
     def send_initiation_message(self, target: str, message: str, target_details: Optional[dict] = None) -> str:
         """
@@ -105,7 +191,9 @@ class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):
             if target.startswith(("U", "W")):
                 opened = await client.conversations_open(users=target)
                 channel = opened["channel"]["id"]
+            _trace("SEND", f"target={target} channel={channel}")
             response = await client.chat_postMessage(channel=channel, text=message)
+            _trace("SENT", f"ts={response['ts']} — a threaded reply under this ts continues the initiated session")
             return response["ts"]
 
         return asyncio.run(_send())

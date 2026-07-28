@@ -190,8 +190,6 @@ class AgentMessengerRequestHandler(RESTRequestHandler):
 
     async def _process_agent_message(self, sender_id: str, message_text: str, attachments: list = None):
         service = AgentService()
-        # Use sender_id as session_id to maintain conversation context; a sender an
-        # agent already initiated a conversation with resolves to that session (overridable).
         session_id = self.resolve_session_id(sender_id)
         try:
             # Mark message as seen

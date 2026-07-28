@@ -15,9 +15,8 @@ from threading import RLock
 from typing import Callable, Optional
 
 from ..config import AKConfig
+from ..session.base import MappingStore
 from ..thread import ConversationThreadManager
-from .mapping import SessionIdMappingStoreBuilder
-from .mapping.base import SessionIdMappingStore
 from .model import InitiationMessage
 
 
@@ -49,17 +48,13 @@ class InitiationManager:
 
     _instance: Optional["InitiationManager"] = None
     _dispatcher: Optional[Callable[[InitiationMessage], None]] = None
-    # Set when auto-enable selected the feature but its mapping store could not be
-    # built: the decision to stay off is cached so the warning is logged once
-    # instead of on every inbound message (see get()).
-    _auto_disabled: bool = False
     _lock: RLock = RLock()
     _log = logging.getLogger("ak.initiation.manager")
 
-    def __init__(self, store: SessionIdMappingStore):
+    def __init__(self, store: MappingStore):
         """
         Initializes an InitiationManager instance.
-        :param store: The SessionIdMappingStore backend to persist mappings in.
+        :param store: The MappingStore backend to persist mappings in.
         """
         self._store = store
 
@@ -70,40 +65,23 @@ class InitiationManager:
         conversations are not enabled (see ``AKConfig.conversation_initiation_enabled``). Callers use
         the None check as the feature-enabled check.
 
-        A mapping store that cannot be built is handled by intent, because the same
-        failure means different things depending on how the feature was switched on:
+        The mapping store is not built here — it is the session store's, obtained through
+        ``SessionStore.get_mapping_store()``, so both share one connection and one namespace.
+        That method is abstract, so every session store is guaranteed to supply one.
 
-        - **Auto-enabled** (``conversation_initiation.enabled`` unset, queue mode inferred
-          it): the operator never asked for this. Degrade to feature-off with one WARNING
-          naming the remedy, rather than failing every inbound message on a lazy raise.
-        - **Explicitly enabled** (``enabled: true``): the operator asked for it, so a broken
-          mapping store is a real misconfiguration and the error propagates.
+        Runtime is imported inside the method because ``core.runtime`` reaches this package
+        through the system tool registry; deferring it keeps that cycle broken, as
+        ``core/tool.py`` does for the same reason.
 
-        :return: The shared instance, or None if the feature is disabled or auto-degraded.
-        :raises Exception: Propagated from the store builder when the feature was enabled explicitly.
+        :return: The shared instance, or None if the feature is disabled.
         """
-        config = AKConfig.get()
-        if not config.conversation_initiation_enabled:
+        if not AKConfig.get().conversation_initiation_enabled:
             return None
         with cls._lock:
-            if cls._auto_disabled:
-                return None
             if cls._instance is None:
-                try:
-                    cls._instance = cls(store=SessionIdMappingStoreBuilder.build())
-                except Exception:
-                    if config.conversation_initiation.enabled is not None:
-                        raise
-                    cls._auto_disabled = True
-                    cls._log.warning(
-                        "Agent-initiated conversations auto-enabled in queue mode, but the Session ID Mapping "
-                        "store could not be built — the feature is disabled for this process and inbound "
-                        "messages keep using platform-derived session ids. Set conversation_initiation.store to "
-                        "a SessionIdMappingStore dotted path to enable it, or conversation_initiation.enabled: "
-                        "false to silence this.",
-                        exc_info=True,
-                    )
-                    return None
+                from ..runtime import Runtime
+
+                cls._instance = cls(store=Runtime.current().sessions().get_mapping_store())
             return cls._instance
 
     @classmethod
@@ -121,13 +99,12 @@ class InitiationManager:
     @classmethod
     def reset(cls) -> None:
         """
-        Drop the shared instance, any registered dispatcher, and any cached
-        auto-disabled decision so the next get() rebuilds from config. Intended for testing.
+        Drop the shared instance and any registered dispatcher so the next get()
+        rebuilds from config. Intended for testing.
         """
         with cls._lock:
             cls._instance = None
             cls._dispatcher = None
-            cls._auto_disabled = False
 
     def resolve_session_id(self, messaging_integration_thread_id: str) -> str:
         """

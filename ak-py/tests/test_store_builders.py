@@ -3,7 +3,7 @@
 Covers the behaviour change (unknown type now fails loud instead of silently falling back to
 an in-memory default) and the bring-your-own dotted-path hatch with each surface's
 construction contract (session store gets ``cache=``, thread store is no-arg, attachment store
-gets ``session_id``, mapping store is no-arg via ``conversation_initiation.store``).
+gets ``session_id``, mapping store is no-arg via ``session.initiation.store``).
 """
 
 import types
@@ -13,14 +13,13 @@ import pytest
 
 from agentkernel.core.builder import SessionStoreBuilder
 from agentkernel.core.config import AKConfig
-from agentkernel.core.initiation.mapping import SessionIdMappingStoreBuilder
-from agentkernel.core.initiation.mapping.base import SessionIdMappingStore
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
 from agentkernel.core.multimodal.storage.base import AttachmentStore
 from agentkernel.core.multimodal.storage.in_memory import InMemoryAttachmentStore
 from agentkernel.core.multimodal.storage.storage_manager import AttachmentStorageManager
-from agentkernel.core.session.base import SessionStore
+from agentkernel.core.session.base import MappingStore, SessionStore
 from agentkernel.core.session.in_memory import InMemorySessionStore
+from agentkernel.core.session.mapping import build_mapping_store
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
 from agentkernel.core.thread.store.base import ThreadStore, ThreadStoreBuilder
 from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
 from agentkernel.core.util.factory import AKConfigError
@@ -53,6 +52,9 @@ class _ByoSessionStore(SessionStore):
 
     def clear(self): ...
 
+    def get_mapping_store(self):
+        return InMemoryMappingStore()
+
 
 class _ByoThreadStore(ThreadStore):
     def create(self, thread): ...
@@ -81,7 +83,7 @@ class _ByoAttachmentStore(AttachmentStore):
     def delete(self, attachment_id): ...
 
 
-class _ByoSessionIdMappingStore(SessionIdMappingStore):
+class _ByoMappingStore(MappingStore):
     def __init__(self):
         self.records = {}
 
@@ -102,6 +104,7 @@ def test_session_builder_default_in_memory():
         cfg = Mock()
         cfg.session.type = "in_memory"
         cfg.session.cache = None
+        cfg.session.initiation.store = None
         mock_get.return_value = cfg
         assert isinstance(SessionStoreBuilder.build(), InMemorySessionStore)
 
@@ -111,6 +114,7 @@ def test_session_builder_unknown_type_fails_loud():
         cfg = Mock()
         cfg.session.type = "reids"  # typo -> no longer a silent fallback to in_memory
         cfg.session.cache = None
+        cfg.session.initiation.store = None
         mock_get.return_value = cfg
         with pytest.raises(AKConfigError):
             SessionStoreBuilder.build()
@@ -122,6 +126,8 @@ def test_session_builder_byo_dotted_path_gets_cache(monkeypatch):
         cfg = Mock()
         cfg.session.type = "byo_pkg.Store"
         cfg.session.cache = None
+        cfg.session.initiation.store = None
+        cfg.conversation_initiation_enabled = False  # this BYO store supplies no mapping store
         mock_get.return_value = cfg
         store = SessionStoreBuilder.build()
     assert isinstance(store, _ByoSessionStore)
@@ -197,44 +203,74 @@ def test_multimodal_byo_dotted_path_gets_session_id(monkeypatch):
     assert store.session_id == "sess-1"  # builder passed session_id per the multimodal contract
 
 
-# --- SessionIdMappingStoreBuilder ------------------------------------------- #
+# --- mapping store: build_mapping_store + the SessionStoreBuilder gate ------ #
 
 
-def test_mapping_builder_default_in_memory():
+def test_mapping_defaults_to_the_backends_own_pairing():
     with patch.object(AKConfig, "get") as mock_get:
         cfg = Mock()
-        cfg.conversation_initiation.store = None
-        cfg.session.type = "in_memory"
+        cfg.session.initiation.store = None
         mock_get.return_value = cfg
-        assert isinstance(SessionIdMappingStoreBuilder.build(), InMemorySessionIdMappingStore)
+        assert isinstance(build_mapping_store(InMemoryMappingStore), InMemoryMappingStore)
 
 
-def test_mapping_builder_unknown_type_fails_loud():
+def test_mapping_byo_dotted_path(monkeypatch):
+    _patch_import(monkeypatch, "byo_pkg", types.SimpleNamespace(Store=_ByoMappingStore))
     with patch.object(AKConfig, "get") as mock_get:
         cfg = Mock()
-        cfg.conversation_initiation.store = None
-        cfg.session.type = "reids"  # typo -> no silent fallback
+        cfg.session.initiation.store = "byo_pkg.Store"
+        mock_get.return_value = cfg
+        store = build_mapping_store(InMemoryMappingStore)
+    assert isinstance(store, _ByoMappingStore)
+
+
+def test_mapping_byo_dotted_path_takes_precedence_over_the_pairing():
+    """session.initiation.store wins even when the backend supplies its own pairing."""
+    with patch.object(AKConfig, "get") as mock_get:
+        cfg = Mock()
+        cfg.session.initiation.store = "agentkernel.core.session.mapping.in_memory.InMemoryMappingStore"
+        mock_get.return_value = cfg
+        store = build_mapping_store(_ByoMappingStore)
+    assert isinstance(store, InMemoryMappingStore)
+
+
+def test_mapping_byo_dotted_path_must_be_a_mapping_store(monkeypatch):
+    _patch_import(monkeypatch, "byo_pkg", types.SimpleNamespace(NotAStore=object))
+    with patch.object(AKConfig, "get") as mock_get:
+        cfg = Mock()
+        cfg.session.initiation.store = "byo_pkg.NotAStore"
         mock_get.return_value = cfg
         with pytest.raises(AKConfigError):
-            SessionIdMappingStoreBuilder.build()
+            build_mapping_store(InMemoryMappingStore)
 
 
-def test_mapping_builder_byo_dotted_path(monkeypatch):
-    _patch_import(monkeypatch, "byo_pkg", types.SimpleNamespace(Store=_ByoSessionIdMappingStore))
+class _StorelessSessionStore(SessionStore):
+    """A bring-your-own session store whose author forgot the mapping store."""
+
+    def __init__(self, cache=None):
+        self.cache = cache
+
+    def new(self, session_id): ...
+
+    def load(self, session_id, strict=False): ...
+
+    def store(self, session): ...
+
+    def clear(self): ...
+
+
+def test_session_builder_rejects_a_store_without_a_mapping_store(monkeypatch):
+    """
+    get_mapping_store() is abstract, so a session store that omits it cannot be
+    instantiated at all — the builder surfaces that at startup, before any request. This
+    replaces the earlier runtime gate and is a deliberate breaking change for BYO stores.
+    """
+    _patch_import(monkeypatch, "byo_sessions", types.SimpleNamespace(Store=_StorelessSessionStore))
     with patch.object(AKConfig, "get") as mock_get:
         cfg = Mock()
-        cfg.conversation_initiation.store = "byo_pkg.Store"
+        cfg.session.type = "byo_sessions.Store"
+        cfg.session.cache = None
+        cfg.session.initiation.store = None
         mock_get.return_value = cfg
-        store = SessionIdMappingStoreBuilder.build()
-    assert isinstance(store, _ByoSessionIdMappingStore)
-
-
-def test_mapping_builder_byo_dotted_path_takes_precedence_over_session_type():
-    """conversation_initiation.store wins even when session.type also names a built-in backend."""
-    with patch.object(AKConfig, "get") as mock_get:
-        cfg = Mock()
-        cfg.conversation_initiation.store = "agentkernel.core.initiation.mapping.in_memory.InMemorySessionIdMappingStore"
-        cfg.session.type = "redis"
-        mock_get.return_value = cfg
-        store = SessionIdMappingStoreBuilder.build()
-    assert isinstance(store, InMemorySessionIdMappingStore)
+        with pytest.raises(TypeError, match="get_mapping_store"):
+            SessionStoreBuilder.build()

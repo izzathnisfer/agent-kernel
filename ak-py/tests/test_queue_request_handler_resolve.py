@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -5,8 +6,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agentkernel.core.initiation import InitiationManager
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
 from agentkernel.core.model import ExecutionMode
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
 from agentkernel.deployment.common.queue_request_handler import QueueRequestHandler
 
 
@@ -19,11 +20,8 @@ def make_fake_cfg(conversation_initiation_enabled=True):
         class execution:
             mode = ExecutionMode.REST_ASYNC
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
@@ -44,10 +42,10 @@ class FakeQueueRequestHandler(QueueRequestHandler):
 @pytest.fixture(autouse=True)
 def reset_state():
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     yield
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
 
 
 def make_client(handler) -> TestClient:

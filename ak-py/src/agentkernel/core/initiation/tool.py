@@ -7,6 +7,14 @@ Agent Runner, runs the owning agent with the caller's prompt so the outbound
 message and its context land in the new session's framework history
 naturally, and dispatches an InitiationMessage toward the Response Handler —
 the single send point.
+
+``_initiate_conversation``'s own docstring is parsed by the framework adapters into the
+LLM-visible tool schema (the OpenAI SDK's ``function_tool`` reads it), so it describes only
+what the model needs; implementation rationale belongs here or on the nested helpers.
+
+``InitiationMessage.target_details`` is deliberately absent from the tool signature: LLM
+tool schemas must be strict, which rules out free-form dict parameters, so platform extras
+can only be supplied by a custom dispatch path and never by the model.
 """
 
 import asyncio
@@ -20,7 +28,7 @@ from ..tool import ToolContext
 from .manager import InitiationManager
 from .model import InitiationMessage
 
-_log = logging.getLogger("ak.initiation.tools")
+_log = logging.getLogger("ak.initiation.tool")
 
 
 def _initiate_conversation(target: str, prompt: str, user_id: str = "", agent: str = "") -> str:
@@ -46,10 +54,8 @@ def _initiate_conversation(target: str, prompt: str, user_id: str = "", agent: s
         if manager is None:
             return (
                 "Cannot initiate conversation: conversation initiation is not enabled "
-                "(set conversation_initiation.enabled: true, or deploy in queue mode)"
+                "(set session.initiation.enabled: true, or deploy in queue mode)"
             )
-        # Intra-package dispatcher check: failing here avoids a wasted agent run
-        # before dispatch() would raise the same condition.
         if InitiationManager._dispatcher is None:
             return "Cannot initiate conversation: no initiation dispatcher is registered in this process"
 
@@ -68,14 +74,26 @@ def _initiate_conversation(target: str, prompt: str, user_id: str = "", agent: s
         session_id = str(uuid.uuid4())
         session = runtime.sessions().new(session_id)
 
-        # Tool functions may execute inside a running framework event loop
-        # (adapter-dependent — the OpenAI SDK runs sync tools via
-        # asyncio.to_thread), so the nested agent run gets its own event loop on
-        # a dedicated thread. The new session has its own lock and context, so
-        # this cannot deadlock the caller's run.
         outcome: dict = {}
 
         def _run() -> None:
+            """
+            Runs the nested agent on a dedicated thread, recording its reply or error in
+            ``outcome``.
+
+            This function is synchronous (LLM tool functions are), but composing the
+            outbound message means awaiting ``runtime.run()``. Bridging sync to async needs
+            ``asyncio.run()``, which raises if the calling thread already has a running event
+            loop — and whether it does is adapter-dependent: the OpenAI SDK runs sync tools
+            via ``asyncio.to_thread`` (no loop on that worker), while another adapter may
+            call straight from the loop thread. A brand-new thread is guaranteed to have no
+            loop, so starting one and joining it works under every adapter. It buys no
+            concurrency, only a clean loop; the new session has its own lock and context, so
+            it cannot deadlock the caller's run.
+
+            ``BaseException`` is caught because an exception raised on this thread would
+            otherwise be swallowed instead of reaching the tool's return value.
+            """
             try:
                 outcome["reply"] = asyncio.run(runtime.run(selected, session, [AgentRequestText(prompt=prompt)]))
             except BaseException as e:
@@ -90,9 +108,6 @@ def _initiate_conversation(target: str, prompt: str, user_id: str = "", agent: s
             return f"Cannot initiate conversation: composing the outbound message failed ({outcome['error']})"
 
         message = str(outcome["reply"])
-        # target_details stays None here: LLM tool schemas must be strict
-        # (no free-form dict parameters), so platform extras can only come
-        # from custom dispatch paths, not from the model.
         initiation = InitiationMessage(
             session_id=session_id,
             message=message,

@@ -72,10 +72,6 @@ class QueueRequestHandler(RESTRequestHandler):
                 if not body.prompt:
                     raise HTTPException(status_code=400, detail="prompt is required")
 
-                # Agent-initiated conversations: a caller-supplied id that matches a
-                # mapped messaging_integration_thread_id is rewritten to the initiated
-                # session id. The resolved id is enqueued and returned — pollers must
-                # use the returned session_id.
                 resolved_session_id = self.resolve_session_id(body.session_id)
                 if resolved_session_id != body.session_id:
                     self._log.info(f"[RESOLVED] session_id {body.session_id} -> {resolved_session_id} via Session ID Mapping")

@@ -106,7 +106,7 @@ Pydantic-based configuration:
 - **Auto-initialized** at import time via `AKConfig._set()`
 - **Config sources** (priority order): environment variables (`AK_` prefix) → config file (YAML/JSON, default `config.yaml`) → defaults
 - **Override path**: Set `AK_CONFIG_PATH_OVERRIDE` env var
-- **Key sections**: `session`, `api`, `websocket_api`, `a2a`, `mcp`, `slack`, `whatsapp`, `messenger`, `instagram`, `telegram`, `gmail`, `multimodal`, `thread`, `conversation_initiation`, `trace`, `guardrail`, `execution`, `logging`
+- **Key sections**: `session`, `api`, `websocket_api`, `a2a`, `mcp`, `slack`, `whatsapp`, `messenger`, `instagram`, `telegram`, `gmail`, `multimodal`, `thread`, `trace`, `guardrail`, `execution`, `logging`
 
 ## Request/Reply Model (`ak-py/src/agentkernel/core/model.py`)
 
@@ -233,7 +233,7 @@ Attachments in thread mode additionally require `multimodal.enabled: true` with 
 
 ## Agent-Initiated Conversations (`ak-py/src/agentkernel/core/initiation/`)
 
-Lets an agent proactively message a user on a messaging platform such that the user's reply continues the same session. Gated by `AKConfig.conversation_initiation_enabled` — auto-enabled in queue-mode deployments (`execution.queues` configured), explicit opt-in required for single-process REST (`conversation_initiation.enabled: true`); spec set under `docs/specs/ak-134/`.
+Lets an agent proactively message a user on a messaging platform such that the user's reply continues the same session. Gated by `AKConfig.conversation_initiation_enabled` — auto-enabled in queue-mode deployments (`execution.queues` configured), explicit opt-in required for single-process REST (`session.initiation.enabled: true`); spec set under `docs/specs/ak-134/`.
 
 ### Key Components
 
@@ -242,7 +242,7 @@ Lets an agent proactively message a user on a messaging platform such that the u
 - **`InitiationSender`** (`manager.py`): Single-process REST sender contract — `RESTAPI.run()` scans handlers for it and registers an in-process dispatcher (send → `complete()`)
 - **`InitiationMessage`** (`model.py`): `session_id`, agent-generated `message`, opaque `target`/`target_details`, recipient `user_id`, `request_id`; `INITIATION_MESSAGE_TYPE` is the queue message-type attribute value
 - **`InitiateConversationTool`** (`tools.py`): `SystemTool` registered on all agents when enabled. `initiate_conversation(target, prompt, user_id="", agent="")`: creates a fresh uuid4 session, runs the owning agent with the prompt **on a dedicated thread with its own event loop** (tool functions may execute inside a running framework loop, adapter-dependent) so the reply becomes the outbound message and history lands in the new session naturally (prompt-only — no fixed-text path), then dispatches. All failures are returned as text, never raised. `target_details` is deliberately NOT a tool parameter — strict LLM tool schemas reject free-form dict params; platform extras come only from custom dispatch paths
-- **`SessionIdMappingStore`** (`mapping/base.py`): ABC storing the `session_id ↔ messaging_integration_thread_id` association as **two records** (`thread#<id>` → session, `session#<id>` → thread id) so both directions are O(1); `THREAD_RECORD_PREFIX`/`SESSION_RECORD_PREFIX` and the `thread_record_key()`/`session_record_key()` composers live on the ABC as ClassVars/staticmethods. Backend follows `session.type` unless `conversation_initiation.store` names a bring-your-own dotted path; connection settings come from `session.<backend>`, namespace (table/collection name or key prefix) is derived by suffixing the session store's own (`-id-mapping` / `id-mapping:`), and TTL is reused from it. Backends reuse the shared `core/util/driver/` drivers; DynamoDB uses a hash-only table (partition key `map_key`)
+- **`MappingStore`** (`core/session/base.py`, beside `SessionStore`): ABC storing the `session_id ↔ messaging_integration_thread_id` association as **two records** (`thread#<id>` → session, `session#<id>` → thread id) so both directions are O(1); `THREAD_RECORD_PREFIX`/`SESSION_RECORD_PREFIX` and the `thread_record_key()`/`session_record_key()` composers live on the ABC as ClassVars/staticmethods. It is owned by the session store, not the initiation package: each backend builds its pair in its constructor via `build_mapping_store()` and returns it from `SessionStore.get_mapping_store()`, so `session.type` selects both and they share one connection. `session.initiation.store` overrides the pairing with a dotted path; namespace (table/collection name or key prefix) is derived by suffixing the session store's own (`-id-mapping` / `id-mapping:`), and TTL is reused from it. `get_mapping_store()` is `@abstractmethod`, so a backend added without its mapping counterpart cannot be instantiated — the requirement is enforced by Python at startup rather than by a runtime gate, and it is a breaking change for bring-your-own session stores predating the method. Backends reuse the shared `core/util/driver/` drivers; DynamoDB uses a hash-only table (partition key `map_key`)
 
 ### Rules
 
@@ -253,9 +253,9 @@ Lets an agent proactively message a user on a messaging platform such that the u
 
 ### Configuration (`_ConversationInitiationConfig` in `config.py`)
 
-The `conversation_initiation:` block carries two optional keys: `enabled` (`None` by default — auto-enable in queue mode; an explicit `true`/`false` overrides) and `store` (dotted path to a bring-your-own `SessionIdMappingStore` subclass).
+The `session.initiation:` block carries two optional keys: `enabled` (`None` by default — auto-enable in queue mode; an explicit `true`/`false` overrides) and `store` (dotted path to a bring-your-own `MappingStore` subclass).
 
-`AKConfig.conversation_initiation_enabled` is the single gate consumers check (`SystemToolFactory.get_all()`, `InitiationManager.get()`): explicit `conversation_initiation.enabled` wins, otherwise enabled iff `execution.queues.input.url` is configured — queue dispatchers register before any tool call, but system tools attach at Agent init (before dispatcher registration in queue deployments), so gating on dispatcher presence doesn't work; config-based detection is timing-safe.
+`AKConfig.conversation_initiation_enabled` is the single gate consumers check (`SystemToolFactory.get_all()`, `InitiationManager.get()`): explicit `session.initiation.enabled` wins, otherwise enabled iff `execution.queues.input.url` is configured — queue dispatchers register before any tool call, but system tools attach at Agent init (before dispatcher registration in queue deployments), so gating on dispatcher presence doesn't work; config-based detection is timing-safe.
 
 ## Knowledge Bases (`ak-py/src/agentkernel/knowledgebase/`)
 
@@ -335,13 +335,13 @@ ak-py/src/agentkernel/
 │   ├── util/                # Shared utilities
 │   │   ├── factory.py       # resolve_dotted/require_extra/AKConfigError for pluggable-backend factories
 │   │   └── driver/          # Shared DB connection drivers (Redis, Valkey, DynamoDB, Cosmos DB, Firestore)
-│   ├── initiation/          # Agent-initiated conversations
+│   ├── initiation/          # Agent-initiated conversations (no storage — see session/mapping/)
 │   │   ├── manager.py        # InitiationManager, InitiationSender, SessionIdResolver
 │   │   ├── model.py          # InitiationMessage, INITIATION_MESSAGE_TYPE
-│   │   ├── tools.py          # InitiateConversationTool (SystemTool)
-│   │   └── mapping/          # SessionIdMappingStore ABC + per-backend stores + builder
+│   │   └── tool.py           # InitiateConversationTool (SystemTool)
 │   └── session/             # Session store implementations
-│       ├── base.py           # SessionStore, SessionCache
+│       ├── base.py           # SessionStore (+ get_mapping_store), MappingStore, SessionCache
+│       ├── mapping/          # Session ID Mapping stores, one per session backend
 │       ├── serde.py          # Session (de)serialization helpers
 │       ├── in_memory.py
 │       ├── redis.py

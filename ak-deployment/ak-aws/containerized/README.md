@@ -333,13 +333,13 @@ curl -X GET .../chat/{session_id}?request_id=...
 ### Agent-Initiated Conversations
 
 Agent-initiated conversations use a Session ID Mapping store that follows `session.type` — set
-`conversation_initiation.enabled: true` in `config.yaml` for single-process REST (queue-mode deployments
+`session.initiation.enabled: true` in `config.yaml` for single-process REST (queue-mode deployments
 auto-enable), see `docs/docs/advanced/conversation-initiation.md`.
 
 > **Queue-mode auto-enable delivers nothing on its own.** The feature switches itself on because
 > queue mode registers a dispatcher, but the platform send lives in your response handler's
 > `process_message` override. Until you write one, the `initiate_conversation` tool reports success
-> to the agent and the stock handler drops the message. Set `conversation_initiation.enabled: false`
+> to the agent and the stock handler drops the message. Set `session.initiation.enabled: false`
 > in `config.yaml` if you do not want the tool advertised yet.
 
 Only set `conversation_initiation`

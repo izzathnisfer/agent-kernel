@@ -12,10 +12,11 @@ gmail:
 
 # Agent-initiated conversations (the initiate_conversation system tool + reply
 # resolution). Gmail is a single-process polling deployment, so it needs the
-# explicit opt-in below (queue-mode deployments auto-enable). The mapping
-# store follows session.type (in-memory here).
-conversation_initiation:
-  enabled: true
+# explicit opt-in below (queue-mode deployments auto-enable). The mapping store
+# is provided by the session store, so it follows session.type (in-memory here).
+session:
+  initiation:
+    enabled: true
 
 logging:
   ak:

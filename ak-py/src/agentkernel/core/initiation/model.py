@@ -1,13 +1,15 @@
 """
 Data models for agent-initiated conversations.
+
+``INITIATION_MESSAGE_TYPE`` is the custom queue-message attribute value that marks an
+InitiationMessage on the Output Queue; response handlers branch on it before their normal
+processing.
 """
 
 from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-# Custom queue-message attribute value marking an InitiationMessage on the
-# Output Queue; response handlers branch on it before their normal processing.
 INITIATION_MESSAGE_TYPE = "INITIATION"
 
 

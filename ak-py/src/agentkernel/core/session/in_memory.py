@@ -1,7 +1,9 @@
 import logging
 
 from ..base import Session
-from .base import SessionStore
+from .base import MappingStore, SessionStore
+from .mapping import build_mapping_store
+from .mapping.in_memory import InMemoryMappingStore
 
 
 class InMemorySessionStore(SessionStore):
@@ -15,6 +17,15 @@ class InMemorySessionStore(SessionStore):
         """
         self._sessions = {}
         self._log = logging.getLogger("ak.core.session.inmemory")
+        self._mapping = build_mapping_store(InMemoryMappingStore)
+
+    def get_mapping_store(self) -> MappingStore:
+        """
+        Returns the Session ID Mapping store paired with this session store.
+
+        :return: The InMemoryMappingStore, whose records share this process like the sessions do.
+        """
+        return self._mapping
 
     def load(self, session_id: str, strict: bool = False) -> Session:
         """

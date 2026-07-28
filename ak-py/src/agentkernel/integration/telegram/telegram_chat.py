@@ -180,8 +180,6 @@ class AgentTelegramRequestHandler(RESTRequestHandler):
         :param message: Full message dict from Telegram (for accessing files/images)
         """
         service = AgentService()
-        # Use chat_id as session_id; a chat an agent already initiated a conversation
-        # with resolves to that session via the Session ID Mapping (overridable).
         session_id = self.resolve_session_id(str(chat_id))
 
         try:

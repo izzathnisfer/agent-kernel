@@ -262,8 +262,7 @@ class AgentGmailRequestHandler(SessionIdResolver):
             if attachments:
                 self._log.info(f"[EMAIL] Found {len(attachments)} attachment(s)")
 
-            # Use thread_id as session_id for agent context (threaded conversations);
-            # a thread an agent already initiated resolves to that session (overridable).
+            # Use thread_id as session_id for agent context (threaded conversations)
             session_id = self.resolve_session_id(thread_id or sender)
 
             # Fetch thread history for context (all messages in the thread, sorted by internalDate)

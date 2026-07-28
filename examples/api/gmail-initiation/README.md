@@ -37,7 +37,7 @@ anything that went to a real person.
 
 ## How it works
 
-- `conversation_initiation.enabled: true` in `config.yaml` enables the
+- `session.initiation.enabled: true` in `config.yaml` enables the
   feature: the `initiate_conversation` system tool is registered on all
   agents, and inbound emails resolve through the Session ID Mapping by Gmail
   thread id (already the identifier `AgentGmailRequestHandler` uses for

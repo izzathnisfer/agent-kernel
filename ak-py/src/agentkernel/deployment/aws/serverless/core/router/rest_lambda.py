@@ -139,9 +139,6 @@ class DefaultEndpointsHandler:
         if not session_id:
             raise ValueError("session_id is required")
 
-        # Agent-initiated conversations: rewrite a mapped messaging thread id to the
-        # initiated session id. This router is not a RESTRequestHandler, so the
-        # override point here is InitiationManager.resolve_session_id itself.
         manager = InitiationManager.get()
         if manager is not None:
             resolved_session_id = manager.resolve_session_id(session_id)

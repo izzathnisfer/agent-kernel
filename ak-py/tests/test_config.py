@@ -26,7 +26,7 @@ def test_config_defaults_no_file(monkeypatch):
     assert cfg.session.redis is None
 
     # Agent-initiated conversations are disabled by default outside queue mode
-    assert cfg.conversation_initiation.enabled is None
+    assert cfg.session.initiation.enabled is None
     assert cfg.conversation_initiation_enabled is False
 
 
@@ -197,12 +197,20 @@ class TestInitiationEnabled:
     def test_explicit_false_overrides_queue_mode(self):
         cfg = AKConfig()
         cfg.execution.queues.input.url = "https://sqs.example/input"
-        cfg.conversation_initiation.enabled = False
+        cfg.session.initiation.enabled = False
         assert cfg.conversation_initiation_enabled is False
 
     def test_explicit_true_enables_single_process_rest(self):
         cfg = AKConfig()
-        cfg.conversation_initiation.enabled = True
+        cfg.session.initiation.enabled = True
+        assert cfg.conversation_initiation_enabled is True
+
+    def test_reachable_through_the_nested_session_env_path(self, monkeypatch):
+        monkeypatch.setenv("AK_SESSION__INITIATION__ENABLED", "true")
+        monkeypatch.setenv("AK_SESSION__INITIATION__STORE", "my_pkg.MyMappingStore")
+        cfg = AKConfig()
+        assert cfg.session.initiation.enabled is True
+        assert cfg.session.initiation.store == "my_pkg.MyMappingStore"
         assert cfg.conversation_initiation_enabled is True
 
 

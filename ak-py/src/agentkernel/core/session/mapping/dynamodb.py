@@ -11,15 +11,15 @@ from typing import Optional
 
 from ...config import AKConfig
 from ...util.driver.dynamodb import DynamoDBDriver
-from .base import SessionIdMappingStore
+from ..base import MappingStore
 
 PARTITION_KEY = "map_key"
 VALUE_ATTRIBUTE = "value"
 
 
-class DynamoDBSessionIdMappingStore(SessionIdMappingStore):
+class DynamoDBMappingStore(MappingStore):
     """
-    DynamoDB-backed implementation of the SessionIdMappingStore interface.
+    DynamoDB-backed implementation of the MappingStore interface.
 
     The table name is derived by suffixing the session store's table name with
     ``-id-mapping``; TTL and the AWS connection follow ``session.dynamodb``, as
@@ -27,10 +27,10 @@ class DynamoDBSessionIdMappingStore(SessionIdMappingStore):
     """
 
     def __init__(self):
-        self._log = logging.getLogger("ak.initiation.mapping.dynamodb")
+        self._log = logging.getLogger("ak.core.session.mapping.dynamodb")
         conn = AKConfig.get().session.dynamodb
         if conn is None:
-            raise ValueError("session.dynamodb config block is required to use DynamoDBSessionIdMappingStore")
+            raise ValueError("session.dynamodb config block is required to use DynamoDBMappingStore")
         table_name = f"{conn.table_name}-id-mapping"
         self._driver = DynamoDBDriver(table_name=table_name, partition_key=PARTITION_KEY, ttl=int(conn.ttl))
 
@@ -51,7 +51,7 @@ class DynamoDBSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         :return: The mapped session id, or None if no mapping exists.
         """
-        return self._get_value(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id))
+        return self._get_value(MappingStore.thread_record_key(messaging_integration_thread_id))
 
     def get_messaging_integration_thread_id(self, session_id: str) -> Optional[str]:
         """
@@ -60,7 +60,7 @@ class DynamoDBSessionIdMappingStore(SessionIdMappingStore):
         :param session_id: The Agent Kernel session id.
         :return: The mapped messaging platform thread id, or None if no mapping exists.
         """
-        return self._get_value(SessionIdMappingStore.session_record_key(session_id))
+        return self._get_value(MappingStore.session_record_key(session_id))
 
     def save(self, session_id: str, messaging_integration_thread_id: str) -> None:
         """
@@ -70,8 +70,8 @@ class DynamoDBSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         """
         self._log.debug(f"Saving mapping {session_id} <-> {messaging_integration_thread_id}")
-        self._driver.put({PARTITION_KEY: SessionIdMappingStore.thread_record_key(messaging_integration_thread_id), VALUE_ATTRIBUTE: session_id})
-        self._driver.put({PARTITION_KEY: SessionIdMappingStore.session_record_key(session_id), VALUE_ATTRIBUTE: messaging_integration_thread_id})
+        self._driver.put({PARTITION_KEY: MappingStore.thread_record_key(messaging_integration_thread_id), VALUE_ATTRIBUTE: session_id})
+        self._driver.put({PARTITION_KEY: MappingStore.session_record_key(session_id), VALUE_ATTRIBUTE: messaging_integration_thread_id})
 
     def clear(self) -> None:
         """

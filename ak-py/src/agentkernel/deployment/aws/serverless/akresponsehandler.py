@@ -145,7 +145,6 @@ class ResponseHandler(LambdaSQSConsumer):
         cls._log.error(f"Permanent failure: {record}: Retried message {cls._get_max_receive_count()} times")
 
         if cls._is_initiation_message(record):
-            # No HTTP caller waits on an initiation — log only, no response-store error entry.
             cls._log.error("Initiation message permanently failed — the initiation was not delivered to the user")
             return
 

@@ -1,12 +1,14 @@
+from types import SimpleNamespace
+
 import pytest
 
 from agentkernel import Agent, Runner
 from agentkernel.core.initiation import InitiateConversationTool, InitiationManager
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
-from agentkernel.core.initiation.tools import _initiate_conversation
+from agentkernel.core.initiation.tool import _initiate_conversation
 from agentkernel.core.model import AgentReplyText, AgentRequestText
 from agentkernel.core.runtime import Runtime
 from agentkernel.core.session.in_memory import InMemorySessionStore
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
 from agentkernel.core.tool import SystemToolFactory, ToolContext
 
 
@@ -71,11 +73,8 @@ def make_fake_cfg(conversation_initiation_enabled=True):
             class output:
                 enabled = False
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
@@ -84,12 +83,12 @@ def reset_state():
     Runtime._system_pre_hooks = None
     Runtime._system_post_hooks = None
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     yield
     Runtime._system_pre_hooks = None
     Runtime._system_post_hooks = None
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
 
 
 @pytest.fixture

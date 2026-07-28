@@ -1,18 +1,15 @@
 """
 Agent-initiated conversations.
 
-Provides the Session ID Mapping store that associates the session created by
-the Agent Runner with the messaging platform's thread identifier, the
-InitiationManager façade that resolves/binds those mappings and dispatches
-initiation messages, and the InitiationSender / SessionIdResolver contracts for
-the handler roles.
+Provides the InitiationManager façade that resolves and binds Session ID Mappings and
+dispatches initiation messages, and the InitiationSender / SessionIdResolver contracts for
+the handler roles. The mapping store itself belongs to the session store — see
+``agentkernel.core.session.MappingStore`` and ``SessionStore.get_mapping_store()``.
 """
 
 from .manager import InitiationManager, InitiationSender, SessionIdResolver
-from .mapping import SessionIdMappingStoreBuilder
-from .mapping.base import SessionIdMappingStore
 from .model import INITIATION_MESSAGE_TYPE, InitiationMessage
-from .tools import InitiateConversationTool
+from .tool import InitiateConversationTool
 
 __all__ = [
     "INITIATION_MESSAGE_TYPE",
@@ -20,7 +17,5 @@ __all__ = [
     "InitiationManager",
     "InitiationMessage",
     "InitiationSender",
-    "SessionIdMappingStore",
-    "SessionIdMappingStoreBuilder",
     "SessionIdResolver",
 ]

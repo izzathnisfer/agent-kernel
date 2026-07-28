@@ -16,24 +16,24 @@ from typing import Optional
 
 from ...config import AKConfig
 from ...util.driver.firestore import FirestoreDriver
-from .base import SessionIdMappingStore
+from ..base import MappingStore
 
 VALUE_FIELD = "value"
 
 
-class FirestoreSessionIdMappingStore(SessionIdMappingStore):
+class FirestoreMappingStore(MappingStore):
     """
-    Firestore-backed implementation of the SessionIdMappingStore interface.
+    Firestore-backed implementation of the MappingStore interface.
 
     The collection name is derived from the session store's collection name;
     ``project_id``, ``database_id``, and TTL come from ``session.firestore``.
     """
 
     def __init__(self):
-        self._log = logging.getLogger("ak.initiation.mapping.firestore")
+        self._log = logging.getLogger("ak.core.session.mapping.firestore")
         conn = AKConfig.get().session.firestore
         if conn is None:
-            raise ValueError("session.firestore config block is required to use FirestoreSessionIdMappingStore")
+            raise ValueError("session.firestore config block is required to use FirestoreMappingStore")
         collection_name = f"{conn.collection_name}-id-mapping"
         self._driver = FirestoreDriver(
             collection_name=collection_name,
@@ -59,7 +59,7 @@ class FirestoreSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         :return: The mapped session id, or None if no mapping exists.
         """
-        return self._get_value(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id))
+        return self._get_value(MappingStore.thread_record_key(messaging_integration_thread_id))
 
     def get_messaging_integration_thread_id(self, session_id: str) -> Optional[str]:
         """
@@ -68,7 +68,7 @@ class FirestoreSessionIdMappingStore(SessionIdMappingStore):
         :param session_id: The Agent Kernel session id.
         :return: The mapped messaging platform thread id, or None if no mapping exists.
         """
-        return self._get_value(SessionIdMappingStore.session_record_key(session_id))
+        return self._get_value(MappingStore.session_record_key(session_id))
 
     def save(self, session_id: str, messaging_integration_thread_id: str) -> None:
         """
@@ -78,8 +78,8 @@ class FirestoreSessionIdMappingStore(SessionIdMappingStore):
         :param messaging_integration_thread_id: The messaging platform's thread identifier.
         """
         self._log.debug(f"Saving mapping {session_id} <-> {messaging_integration_thread_id}")
-        self._driver.put(SessionIdMappingStore.thread_record_key(messaging_integration_thread_id), VALUE_FIELD, session_id.encode("utf-8"))
-        self._driver.put(SessionIdMappingStore.session_record_key(session_id), VALUE_FIELD, messaging_integration_thread_id.encode("utf-8"))
+        self._driver.put(MappingStore.thread_record_key(messaging_integration_thread_id), VALUE_FIELD, session_id.encode("utf-8"))
+        self._driver.put(MappingStore.session_record_key(session_id), VALUE_FIELD, messaging_integration_thread_id.encode("utf-8"))
 
     def clear(self) -> None:
         """

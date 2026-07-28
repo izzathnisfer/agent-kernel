@@ -6,7 +6,7 @@ reply continues the same conversation instead of starting a context-less one.
 
 ## How it works
 
-- `conversation_initiation.enabled: true` in `config.yaml` enables the
+- `session.initiation.enabled: true` in `config.yaml` enables the
   feature for this single-process REST deployment (queue-mode deployments
   auto-enable): the `initiate_conversation` system tool is registered on all
   agents, and inbound Telegram messages resolve through the Session ID

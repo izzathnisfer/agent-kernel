@@ -76,6 +76,27 @@ class _FirestoreConfig(BaseModel):
     )
 
 
+class _SessionInitiationConfig(BaseModel):
+    """Configuration for agent-initiated conversations, whose Mapping store is provided by
+    the session store (see ``SessionStore.get_mapping_store``)."""
+
+    enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable agent-initiated conversations. None (default) auto-enables in queue-mode "
+        "deployments (an execution.queues input URL is configured) since that is the only case where a "
+        "queue dispatcher is registered at startup, and stays disabled for single-process REST. Set "
+        "explicitly to opt a REST deployment in, or to force-disable in queue mode.",
+    )
+    store: Optional[str] = Field(
+        default=None,
+        description="Dotted path to a MappingStore subclass (bring-your-own), overriding the store the "
+        "session store would otherwise pair itself with. When unset, the session store builds the "
+        "mapping store matching its own backend, sharing its connection settings; the table/collection "
+        "name or key prefix is derived from the session store's own by suffixing '-id-mapping' "
+        "(table/collection) or 'id-mapping:' (key prefix), and it reuses the session store's TTL.",
+    )
+
+
 class _SessionStoreConfig(BaseModel):
     type: str = Field(
         default="in_memory",
@@ -87,6 +108,10 @@ class _SessionStoreConfig(BaseModel):
     dynamodb: Optional[_DynamoDBConfig] = None
     cosmosdb: Optional[_CosmosDBConfig] = None
     firestore: Optional[_FirestoreConfig] = None
+    initiation: _SessionInitiationConfig = Field(
+        description="Agent-initiated conversation configurations",
+        default_factory=_SessionInitiationConfig,
+    )
 
 
 class _RoutesConfig(BaseModel):
@@ -260,26 +285,6 @@ class _ThreadStoreConfig(BaseModel):
     dynamodb: Optional[_ThreadDynamoDBConfig] = None
     firestore: Optional[_ThreadFirestoreConfig] = None
     cosmosdb: Optional[_ThreadCosmosDBConfig] = None
-
-
-class _ConversationInitiationConfig(BaseModel):
-    """Configuration for agent-initiated conversations (the Session ID Mapping store and
-    the ``initiate_conversation`` system tool)."""
-
-    enabled: Optional[bool] = Field(
-        default=None,
-        description="Enable agent-initiated conversations. None (default) auto-enables in queue-mode "
-        "deployments (an execution.queues input URL is configured) since that is the only case where a "
-        "queue dispatcher is registered at startup, and stays disabled for single-process REST. Set "
-        "explicitly to opt a REST deployment in, or to force-disable in queue mode.",
-    )
-    store: Optional[str] = Field(
-        default=None,
-        description="Dotted path to a SessionIdMappingStore subclass (bring-your-own). When unset, the "
-        "mapping store follows session.type and shares its connection settings; its table/collection "
-        "name or key prefix is derived from the session store's own by suffixing '-id-mapping' "
-        "(table/collection) or 'id-mapping:' (key prefix), and it reuses the session store's TTL.",
-    )
 
 
 class _TraceConfig(BaseModel):
@@ -601,10 +606,6 @@ class AKConfig(YamlBaseSettingsModified):
         default=None,
         description="Conversation Thread Support configurations. Feature is enabled only when this block is present.",
     )
-    conversation_initiation: _ConversationInitiationConfig = Field(
-        description="Agent-initiated conversation configurations",
-        default_factory=_ConversationInitiationConfig,
-    )
 
     trace: _TraceConfig = Field(description="Tracing related configurations", default_factory=_TraceConfig)
     guardrail: _GuardrailConfig = Field(description="Guardrail related configurations", default_factory=_GuardrailConfig)
@@ -620,13 +621,13 @@ class AKConfig(YamlBaseSettingsModified):
     @property
     def conversation_initiation_enabled(self) -> bool:
         """
-        Whether agent-initiated conversations are enabled: an explicit ``conversation_initiation.enabled``
+        Whether agent-initiated conversations are enabled: an explicit ``session.initiation.enabled``
         wins; otherwise the feature auto-enables in queue-mode deployments (an
         ``execution.queues`` input URL is configured), since only queue deployments register a
         dispatcher at startup. Single-process REST stays disabled unless opted in explicitly.
         """
-        if self.conversation_initiation.enabled is not None:
-            return self.conversation_initiation.enabled
+        if self.session.initiation.enabled is not None:
+            return self.session.initiation.enabled
         queues = self.execution.queues
         return bool(queues and queues.input and queues.input.url)
 

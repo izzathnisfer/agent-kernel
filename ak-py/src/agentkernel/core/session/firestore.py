@@ -4,7 +4,9 @@ from typing import Optional
 from ..base import Session
 from ..config import AKConfig
 from ..util.driver.firestore import FirestoreDriver
-from .base import SessionCache, SessionStore
+from .base import MappingStore, SessionCache, SessionStore
+from .mapping import build_mapping_store
+from .mapping.firestore import FirestoreMappingStore
 from .serde import BinarySerde
 
 
@@ -40,6 +42,15 @@ class FirestoreSessionStore(SessionStore):
             ttl=cfg.ttl,
         )
         self._cache = cache
+        self._mapping = build_mapping_store(FirestoreMappingStore)
+
+    def get_mapping_store(self) -> MappingStore:
+        """
+        Returns the Session ID Mapping store paired with this session store.
+
+        :return: The FirestoreMappingStore sharing this store's connection settings.
+        """
+        return self._mapping
 
     def load(self, session_id: str, strict: bool = False) -> Session:
         """

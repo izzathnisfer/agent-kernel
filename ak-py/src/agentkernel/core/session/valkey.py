@@ -3,7 +3,9 @@ import logging
 from ..base import Session
 from ..config import AKConfig
 from ..util.driver.valkey import ValkeyDriver
-from .base import SessionCache, SessionStore
+from .base import MappingStore, SessionCache, SessionStore
+from .mapping import build_mapping_store
+from .mapping.valkey import ValkeyMappingStore
 from .serde import BinarySerde
 
 
@@ -25,6 +27,15 @@ class ValkeySessionStore(SessionStore):
             raise ValueError("session.valkey config block is required when session.type is 'valkey'")
         self._driver = ValkeyDriver(url=cfg.url, prefix=cfg.prefix, ttl=int(cfg.ttl))
         self._cache = cache
+        self._mapping = build_mapping_store(ValkeyMappingStore)
+
+    def get_mapping_store(self) -> MappingStore:
+        """
+        Returns the Session ID Mapping store paired with this session store.
+
+        :return: The ValkeyMappingStore sharing this store's connection settings.
+        """
+        return self._mapping
 
     def load(self, session_id: str, strict: bool = False) -> Session:
         """

@@ -3,35 +3,27 @@ from unittest.mock import MagicMock
 import pytest
 
 from agentkernel.core.initiation import InitiationManager, InitiationMessage, SessionIdResolver
-from agentkernel.core.initiation.mapping import SessionIdMappingStoreBuilder
-from agentkernel.core.initiation.mapping.base import SessionIdMappingStore
-from agentkernel.core.initiation.mapping.dynamodb import PARTITION_KEY, VALUE_ATTRIBUTE, DynamoDBSessionIdMappingStore
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
-from agentkernel.core.initiation.mapping.redis import RedisSessionIdMappingStore
-from agentkernel.core.util.factory import AKConfigError
+from agentkernel.core.session.base import MappingStore, SessionStore
+from agentkernel.core.session.in_memory import InMemorySessionStore
+from agentkernel.core.session.mapping.dynamodb import PARTITION_KEY, VALUE_ATTRIBUTE, DynamoDBMappingStore
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
+from agentkernel.core.session.mapping.redis import RedisMappingStore
+from agentkernel.core.session.redis import RedisSessionStore
 
 
 @pytest.fixture(autouse=True)
 def clear_in_memory_store():
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     InitiationManager.reset()
     yield
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     InitiationManager.reset()
 
 
-_UNSET = object()
-
-
-def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = True, initiation_store: str = None, redis=True, enabled=_UNSET):
+def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = True, initiation_store: str = None, redis=True):
     """
-    Build a stand-in AKConfig.
-
-    ``conversation_initiation_enabled`` is the effective gate (the real property's result),
-    while ``enabled`` is the raw ``conversation_initiation.enabled`` field. They normally
-    agree, so ``enabled`` defaults to mirroring the gate; pass ``enabled=None`` to model
-    auto-enable (queue mode inferred the feature, the operator never set it), which
-    ``InitiationManager.get()`` distinguishes from an explicit opt-in.
+    Build a stand-in AKConfig whose ``session`` block carries the nested ``initiation``
+    sub-block the real config now uses.
     """
 
     class FakeCfg:
@@ -61,10 +53,10 @@ def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = Tru
             cache = None
             valkey = None
 
-        class conversation_initiation:
-            store = initiation_store
+            class initiation:
+                enabled = conversation_initiation_enabled
+                store = initiation_store
 
-    FakeCfg.conversation_initiation.enabled = conversation_initiation_enabled if enabled is _UNSET else enabled
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
     if not redis:
         FakeCfg.session.redis = None
@@ -73,34 +65,34 @@ def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = Tru
 
 class TestInMemoryStore:
     def test_save_and_lookup_both_directions(self):
-        store = InMemorySessionIdMappingStore()
+        store = InMemoryMappingStore()
         store.save("session-1", "thread-1")
         assert store.get_session_id("thread-1") == "session-1"
         assert store.get_messaging_integration_thread_id("session-1") == "thread-1"
 
     def test_miss_returns_none(self):
-        store = InMemorySessionIdMappingStore()
+        store = InMemoryMappingStore()
         assert store.get_session_id("unknown") is None
         assert store.get_messaging_integration_thread_id("unknown") is None
 
     def test_save_is_idempotent(self):
-        store = InMemorySessionIdMappingStore()
+        store = InMemoryMappingStore()
         store.save("session-1", "thread-1")
         store.save("session-1", "thread-1")
         assert store.get_session_id("thread-1") == "session-1"
 
     def test_save_is_last_writer_wins(self):
-        store = InMemorySessionIdMappingStore()
+        store = InMemoryMappingStore()
         store.save("session-1", "thread-1")
         store.save("session-2", "thread-1")
         assert store.get_session_id("thread-1") == "session-2"
 
     def test_shared_across_instances(self):
-        InMemorySessionIdMappingStore().save("session-1", "thread-1")
-        assert InMemorySessionIdMappingStore().get_session_id("thread-1") == "session-1"
+        InMemoryMappingStore().save("session-1", "thread-1")
+        assert InMemoryMappingStore().get_session_id("thread-1") == "session-1"
 
     def test_clear(self):
-        store = InMemorySessionIdMappingStore()
+        store = InMemoryMappingStore()
         store.save("session-1", "thread-1")
         store.clear()
         assert store.get_session_id("thread-1") is None
@@ -110,36 +102,59 @@ class TestInMemoryStore:
 class TestRecordKeys:
     def test_directions_never_collide(self):
         # A session id equal to a thread id must still produce distinct records.
-        assert SessionIdMappingStore.thread_record_key("x") != SessionIdMappingStore.session_record_key("x")
+        assert MappingStore.thread_record_key("x") != MappingStore.session_record_key("x")
 
 
-class TestBuilder:
-    def test_defaults_to_in_memory(self, monkeypatch):
+class TestSessionStoreProvenance:
+    """
+    The mapping store belongs to the session store: each backend pairs itself with the
+    matching MappingStore, so the two always share one connection and one namespace.
+    """
+
+    def test_in_memory_session_store_pairs_in_memory_mapping(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory")))
-        assert isinstance(SessionIdMappingStoreBuilder.build(), InMemorySessionIdMappingStore)
+        assert isinstance(InMemorySessionStore().get_mapping_store(), InMemoryMappingStore)
 
-    def test_unknown_type_raises_config_error(self, monkeypatch):
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("not-a-backend")))
-        with pytest.raises(AKConfigError, match="unknown session store type"):
-            SessionIdMappingStoreBuilder.build()
-
-    def test_follows_session_type_redis(self, monkeypatch):
+    def test_redis_session_store_pairs_redis_mapping(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis")))
-        store = SessionIdMappingStoreBuilder.build()
-        assert isinstance(store, RedisSessionIdMappingStore)
+        assert isinstance(RedisSessionStore().get_mapping_store(), RedisMappingStore)
 
-    def test_redis_store_derives_prefix_and_reuses_session_ttl(self, monkeypatch):
-        # url comes from session.redis; the mapping prefix suffixes the session prefix and TTL is reused.
+    def test_a_session_store_without_a_mapping_store_cannot_be_instantiated(self):
+        """
+        The whole point of making get_mapping_store() abstract: adding a session backend
+        without its mapping counterpart fails immediately, not once someone enables the
+        feature. This is a deliberate breaking change for bring-your-own stores.
+        """
+
+        class StorelessSessionStore(SessionStore):
+            def new(self, session_id): ...
+
+            def load(self, session_id, strict=False): ...
+
+            def store(self, session): ...
+
+            def clear(self): ...
+
+        with pytest.raises(TypeError, match="get_mapping_store"):
+            StorelessSessionStore()
+
+    def test_redis_mapping_derives_prefix_and_reuses_session_ttl(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis")))
-        store = SessionIdMappingStoreBuilder.build()
+        store = RedisSessionStore().get_mapping_store()
         assert store._driver._url == "redis://example:6379"
         assert store._driver._prefix == "ak:sessions:id-mapping:"
         assert store._driver.ttl == 60
 
-    def test_redis_store_requires_session_redis_block(self, monkeypatch):
+    def test_redis_mapping_requires_session_redis_block(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis", redis=False)))
         with pytest.raises(ValueError, match="session.redis"):
-            SessionIdMappingStoreBuilder.build()
+            RedisMappingStore()
+
+    def test_byo_dotted_path_overrides_the_paired_backend(self, monkeypatch):
+        """session.initiation.store wins even when the session backend has its own pairing."""
+        path = "agentkernel.core.session.mapping.in_memory.InMemoryMappingStore"
+        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis", initiation_store=path)))
+        assert isinstance(RedisSessionStore().get_mapping_store(), InMemoryMappingStore)
 
 
 class TestRedisStoreOperations:
@@ -148,7 +163,7 @@ class TestRedisStoreOperations:
     @pytest.fixture
     def store(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis")))
-        store = RedisSessionIdMappingStore()
+        store = RedisMappingStore()
         store._driver = MagicMock()
         store._driver.key.side_effect = lambda suffix: f"ak:sessions:id-mapping:{suffix}"
         return store
@@ -177,13 +192,13 @@ class TestDynamoDBStoreOperations:
     @pytest.fixture
     def store(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("dynamodb")))
-        store = DynamoDBSessionIdMappingStore()
+        store = DynamoDBMappingStore()
         store._driver = MagicMock()
         return store
 
     def test_table_name_derived_from_session_table(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("dynamodb")))
-        store = DynamoDBSessionIdMappingStore()
+        store = DynamoDBMappingStore()
         assert store._driver._table_name == "ak-sessions-id-mapping"
 
     def test_save_puts_both_items(self, store):
@@ -313,72 +328,6 @@ class TestInitiationManager:
         initiation = make_initiation()
         InitiationManager.get().dispatch(initiation)
         assert received == [initiation]
-
-
-class TestUnbuildableMappingStore:
-    """
-    A mapping store that cannot be built is handled by intent: auto-enable (queue mode
-    inferred the feature) degrades to feature-off, while an explicit opt-in still raises.
-
-    The trigger here is a ``session.type`` the builder cannot resolve — legal since the
-    BYO-stores change, where ``session.type`` may be a dotted path to a SessionStore that
-    has no mapping-store counterpart.
-    """
-
-    def _cfg(self, monkeypatch, enabled):
-        monkeypatch.setattr(
-            "agentkernel.core.config.AKConfig.get",
-            classmethod(lambda cls: make_fake_cfg("my_pkg.my_module.MySessionStore", enabled=enabled)),
-        )
-
-    def test_auto_enabled_degrades_to_feature_off(self, monkeypatch, caplog):
-        self._cfg(monkeypatch, enabled=None)
-
-        with caplog.at_level("WARNING"):
-            assert InitiationManager.get() is None
-
-        assert "conversation_initiation.store" in caplog.text
-
-    def test_auto_enabled_keeps_inbound_messages_working(self, monkeypatch):
-        """The point of degrading: resolution falls back instead of failing every request."""
-        self._cfg(monkeypatch, enabled=None)
-
-        assert SessionIdResolver().resolve_session_id("thread-1") == "thread-1"
-
-    def test_auto_disabled_decision_is_cached(self, monkeypatch, caplog):
-        self._cfg(monkeypatch, enabled=None)
-        build = MagicMock(side_effect=AKConfigError("unknown session store type"))
-        monkeypatch.setattr(SessionIdMappingStoreBuilder, "build", staticmethod(build))
-
-        with caplog.at_level("WARNING"):
-            assert InitiationManager.get() is None
-            assert InitiationManager.get() is None
-
-        assert build.call_count == 1
-        assert caplog.text.count("conversation_initiation.store") == 1
-
-    def test_explicitly_enabled_still_raises(self, monkeypatch):
-        self._cfg(monkeypatch, enabled=True)
-
-        with pytest.raises(AKConfigError):
-            InitiationManager.get()
-
-    def test_explicit_failure_is_not_cached_as_disabled(self, monkeypatch):
-        """An explicit opt-in must keep raising, not silently degrade on the second call."""
-        self._cfg(monkeypatch, enabled=True)
-
-        with pytest.raises(AKConfigError):
-            InitiationManager.get()
-        with pytest.raises(AKConfigError):
-            InitiationManager.get()
-
-    def test_reset_clears_the_auto_disabled_decision(self, monkeypatch):
-        self._cfg(monkeypatch, enabled=None)
-        assert InitiationManager.get() is None
-
-        InitiationManager.reset()
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("in_memory")))
-        assert InitiationManager.get() is not None
 
 
 class TestSessionIdResolver:

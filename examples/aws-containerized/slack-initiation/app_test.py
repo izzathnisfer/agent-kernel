@@ -17,7 +17,9 @@ os.environ["SLACK_SIGNING_SECRET"] = "test-signing-secret"
 os.environ["SLACK_BOT_TOKEN"] = "xoxb-test-token"
 
 from agentkernel.core.initiation import InitiationManager  # noqa: E402
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore  # noqa: E402
+from agentkernel.core.session.mapping.in_memory import (  # noqa: E402
+    InMemoryMappingStore,
+)
 
 # Import the example modules once, at collection time, before any test's monkeypatched
 # AKConfig is in effect — see lambda_test.py's identical note for why this matters
@@ -51,11 +53,8 @@ def make_fake_cfg(conversation_initiation_enabled=True):
                 class output:
                     url = "https://sqs.test/output"
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     FakeCfg.thread = None
     return FakeCfg
 
@@ -64,10 +63,10 @@ def make_fake_cfg(conversation_initiation_enabled=True):
 def reset_state(monkeypatch):
     monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg()))
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     yield
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
 
 
 class FakeAuthClient:
@@ -101,7 +100,8 @@ class TestSlackECSRequestHandler:
     async def test_bot_message_skipped(self, handler, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "slack_request_handler.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         await handler.handle(slack_message(ts="1.1", user="BOTID"), say=None)
@@ -112,7 +112,8 @@ class TestSlackECSRequestHandler:
     async def test_empty_text_skipped(self, handler, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "slack_request_handler.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         await handler.handle(slack_message(ts="1.1", text="   "), say=None)
@@ -124,7 +125,8 @@ class TestSlackECSRequestHandler:
         InitiationManager.get()._store.save("session-1", "1111.2222")
         calls = []
         monkeypatch.setattr(
-            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "slack_request_handler.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         await handler.handle(slack_message(ts="5555.6666", thread_ts="1111.2222"), say=None)
@@ -137,7 +139,8 @@ class TestSlackECSRequestHandler:
         InitiationManager.get()._store.save("session-1", "1111.2222")
         calls = []
         monkeypatch.setattr(
-            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "slack_request_handler.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         await handler.handle(slack_message(ts="3333.4444"), say=None)
@@ -151,7 +154,8 @@ class TestSlackECSRequestHandler:
         replies inside SQS's dedup window and silently drop the second one."""
         calls = []
         monkeypatch.setattr(
-            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "slack_request_handler.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         await handler.handle(slack_message(ts="2222.0001", thread_ts="1111.2222"), say=None)
@@ -166,7 +170,8 @@ class TestSlackECSRequestHandler:
     async def test_channel_and_thread_ts_attached_as_custom_attributes(self, handler, monkeypatch):
         calls = []
         monkeypatch.setattr(
-            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "slack_request_handler.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         await handler.handle(slack_message(ts="7.7", channel="C42"), say=None)
@@ -189,7 +194,8 @@ class TestSlackECSRequestHandler:
 
         calls = []
         monkeypatch.setattr(
-            "slack_request_handler.SQSHandler.send_message_to_input_queue", lambda **kwargs: calls.append(kwargs)
+            "slack_request_handler.SQSHandler.send_message_to_input_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         await handler.handle(slack_message(ts="7.7", user="U0REQUESTER"), say=None)
@@ -235,7 +241,8 @@ class TestAgentRunnerAttributePassthrough:
 
         calls = []
         monkeypatch.setattr(
-            "app_agent_runner.SQSHandler.send_message_to_output_queue", lambda **kwargs: calls.append(kwargs)
+            "app_agent_runner.SQSHandler.send_message_to_output_queue",
+            lambda **kwargs: calls.append(kwargs),
         )
 
         AgentRunner._send_to_output_queue(
@@ -320,7 +327,11 @@ class TestSlackECSOutputConsumer:
 
         fake_client = FakeSlackClient()
         monkeypatch.setattr(mod, "_slack_client", fake_client)
-        monkeypatch.setattr(mod.SlackECSOutputConsumer, "_get_response_store", classmethod(lambda cls: FakeStore()))
+        monkeypatch.setattr(
+            mod.SlackECSOutputConsumer,
+            "_get_response_store",
+            classmethod(lambda cls: FakeStore()),
+        )
 
         body = {"result": "Traffic.", "session_id": "session-1"}
         mod.SlackECSOutputConsumer.process_message(output_record(body=body, channel="C1", thread_ts="1.1"))
@@ -332,7 +343,11 @@ class TestSlackECSOutputConsumer:
 
         fake_client = FakeSlackClient()
         monkeypatch.setattr(mod, "_slack_client", fake_client)
-        monkeypatch.setattr(mod.SlackECSOutputConsumer, "_get_response_store", classmethod(lambda cls: FakeStore()))
+        monkeypatch.setattr(
+            mod.SlackECSOutputConsumer,
+            "_get_response_store",
+            classmethod(lambda cls: FakeStore()),
+        )
 
         body = {"result": "Traffic.", "session_id": "session-1"}
         mod.SlackECSOutputConsumer.process_message(output_record(body=body))

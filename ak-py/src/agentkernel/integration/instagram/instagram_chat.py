@@ -208,8 +208,6 @@ class AgentInstagramRequestHandler(RESTRequestHandler):
         :param attachments: Optional list of attachments
         """
         service = AgentService()
-        # Use sender_id as session_id to maintain conversation context; a sender an
-        # agent already initiated a conversation with resolves to that session (overridable).
         session_id = self.resolve_session_id(sender_id)
 
         try:

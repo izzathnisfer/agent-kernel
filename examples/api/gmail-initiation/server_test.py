@@ -20,7 +20,7 @@ os.environ["AK_GMAIL__CLIENT_ID"] = "test-client-id"
 os.environ["AK_GMAIL__CLIENT_SECRET"] = "test-client-secret"
 
 from agentkernel.core.initiation import InitiationManager, InitiationMessage  # noqa: E402
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore  # noqa: E402
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore  # noqa: E402
 
 from server import GmailInitiationHandler, register_initiation_dispatcher  # noqa: E402
 
@@ -28,10 +28,10 @@ from server import GmailInitiationHandler, register_initiation_dispatcher  # noq
 @pytest.fixture(autouse=True)
 def reset_state():
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     yield
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
 
 
 class FakeGmailUsersMessages:

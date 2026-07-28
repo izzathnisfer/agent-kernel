@@ -37,15 +37,18 @@ Queue-mode deployments (ECS containerized, Lambda serverless) **auto-enable** th
 config needed beyond `execution.queues`. Single-process REST deployments need an explicit opt-in:
 
 ```yaml
-conversation_initiation:
-  enabled: true   # required for single-process REST; queue-mode auto-enables
-  # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own (dotted path)
+session:
+  initiation:
+    enabled: true   # required for single-process REST; queue-mode auto-enables
+    # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own (dotted path)
 ```
 
-The mapping store backend **follows your `session.type`** and reuses its connection settings; its
-namespace (table/collection name or key prefix) is derived from the session store's own by
-suffixing `-id-mapping` (table/collection) or `id-mapping:` (key prefix), and it reuses the session
-store's TTL — no separate namespace config needed:
+The settings live inside `session:` because the mapping store **is** the session store's: each
+session backend pairs itself with the matching `MappingStore` and hands it out through
+`SessionStore.get_mapping_store()`. The two therefore always share one connection, and the
+mapping's namespace (table/collection name or key prefix) is derived from the session store's own
+by suffixing `-id-mapping` (table/collection) or `id-mapping:` (key prefix), reusing its TTL — no
+separate namespace config needed:
 
 ```yaml
 session:
@@ -61,9 +64,16 @@ With the feature enabled:
 - inbound platform messages resolve their thread id through the mapping before selecting a session;
 - response handlers recognize initiation messages (`message_type=INITIATION` queue attribute).
 
-Set `conversation_initiation.enabled: false` to force-disable in queue mode, or bring your own mapping store
-entirely via `conversation_initiation.store` (a dotted path to a `SessionIdMappingStore` subclass) — bypassing
-the `session.type` derivation.
+Set `session.initiation.enabled: false` to force-disable in queue mode, or bring your own mapping store
+entirely via `session.initiation.store` (a dotted path to a `MappingStore` subclass) — which overrides
+whatever pairing the session backend would otherwise supply.
+
+`get_mapping_store()` is abstract, so a bring-your-own session store (a dotted-path `session.type`)
+**must** implement it — Python refuses to instantiate the class otherwise, so the failure lands at
+startup with a message naming the missing method, never on a user's first message. Implement it by
+returning `build_mapping_store(<YourMappingStore>)`, or point `session.initiation.store` at a
+`MappingStore` and return that. Note this is a breaking change for a custom session store written
+before the method existed.
 
 :::warning Auto-enable gives you dispatch, not delivery
 
@@ -76,7 +86,7 @@ So in a **stock queue deployment with no override**, asking an agent to notify s
 the tool returns `Conversation initiated.`, the agent reports success to the requester, and the
 stock response handler logs a warning and **drops the message**. Nothing reaches the recipient.
 
-Either implement the override below, or set `conversation_initiation.enabled: false` until you do.
+Either implement the override below, or set `session.initiation.enabled: false` until you do.
 :::
 
 ## The `initiate_conversation` tool

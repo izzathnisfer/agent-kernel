@@ -12,19 +12,21 @@ handler's own inbound-message method end to end (not resolve_session_id in
 isolation), mirroring test_slack_session_resolution.py's TestHandleSessionResolution.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from agentkernel.core.initiation import InitiationManager
-from agentkernel.core.initiation.mapping.in_memory import InMemorySessionIdMappingStore
+from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
 
 
 @pytest.fixture(autouse=True)
 def reset_state():
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
     yield
     InitiationManager.reset()
-    InMemorySessionIdMappingStore().clear()
+    InMemoryMappingStore().clear()
 
 
 class FakeAgentService:
@@ -67,11 +69,8 @@ def make_whatsapp_cfg(conversation_initiation_enabled=True):
         class api:
             max_file_size = 10 * 1024 * 1024
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
@@ -141,11 +140,8 @@ def make_telegram_cfg(conversation_initiation_enabled=True):
         class api:
             max_file_size = 10 * 1024 * 1024
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
@@ -216,11 +212,8 @@ def make_messenger_cfg(conversation_initiation_enabled=True):
         class api:
             max_file_size = 10 * 1024 * 1024
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
@@ -295,11 +288,8 @@ def make_instagram_cfg(conversation_initiation_enabled=True):
         class api:
             max_file_size = 10 * 1024 * 1024
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
@@ -369,11 +359,8 @@ def make_gmail_cfg(conversation_initiation_enabled=True):
             poll_interval = 30
             label_filter = "INBOX"
 
-        class conversation_initiation:
-            enabled = conversation_initiation_enabled
-            store = None
-
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
     return FakeCfg
 
 
