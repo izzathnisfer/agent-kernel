@@ -5,7 +5,7 @@ description = "Demo of agent-initiated Slack conversations (Session ID Mapping)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agentkernel[api,openai,slack]>=0.6.1",
+    "agentkernel[api,openai,slack]>=0.7.0",
     "aiohttp>=3.14.1",
 ]
 
