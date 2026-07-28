@@ -38,15 +38,6 @@ from agentkernel.openai import OpenAIModule, OpenAIToolBuilder
 from agentkernel.slack import AgentSlackRequestHandler
 from agents import Agent as OpenAIAgent
 
-SEND_TIMEOUT_SECONDS = 15
-"""
-Upper bound on the Slack calls that deliver an initiation message.
-
-Kept well under the Slack SDK's own 30s-per-call default because the SDK also retries connection
-errors, so its effective wall time is a multiple of that. This bound is what turns a stalled
-network into a prompt, reported failure instead of a hang.
-"""
-
 
 def get_requester_id() -> str:
     """Returns the Slack member id of whoever sent the current message, or "" if unknown."""
@@ -144,24 +135,12 @@ class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):
         """
         Send the initiation message via Slack and return its thread id.
 
-        The send is bounded by SEND_TIMEOUT_SECONDS rather than left to the Slack SDK's own
-        limit. That limit is per-client (30s by default) and the SDK retries connection errors
-        on top of it, so a stalled network produces a multi-minute hang inside a tool call —
-        which in turn blocks the agent run and the HTTP request behind it. Bounding it here
-        fails in seconds instead, and the tool reports the failure to the agent as text.
-
-        A failed send leaves the initiated session behind: the composing agent has already run,
-        and no mapping was bound because nothing was delivered, so no reply can ever reach it.
-        SessionStore exposes only clear() (which wipes every session), so it cannot be removed
-        individually. The initiation tool logs the failure and reports it to the agent as text.
-
         :param target: Slack channel id or member id (a member id opens a DM).
         :param message: The agent-composed outbound text.
         :param target_details: Unused here; available for platform extras.
         :return: The posted message's ts — the thread root a reply must be threaded under
                  to continue this conversation (DMs and channels behave identically: an
                  un-threaded reply starts a new session rather than guessing).
-        :raises TimeoutError: If the Slack calls exceed SEND_TIMEOUT_SECONDS.
         """
         import asyncio
 
@@ -175,10 +154,7 @@ class SlackInitiationHandler(AgentSlackRequestHandler, InitiationSender):
             response = await client.chat_postMessage(channel=channel, text=message)
             return response["ts"]
 
-        async def _send_bounded() -> str:
-            return await asyncio.wait_for(_send(), timeout=SEND_TIMEOUT_SECONDS)
-
-        return asyncio.run(_send_bounded())
+        return asyncio.run(_send())
 
 
 if __name__ == "__main__":

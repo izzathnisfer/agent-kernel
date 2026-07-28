@@ -138,30 +138,6 @@ def test_send_initiation_message_channel_returns_thread_root(initiation_handler)
     assert thread_id == "1111.2222"  # channel replies arrive threaded under the posted ts
 
 
-def test_send_initiation_message_gives_up_instead_of_hanging(initiation_handler, monkeypatch):
-    """
-    A stalled Slack call must fail within the example's own bound.
-
-    Without it the Slack SDK's 30s-per-call default plus its connection-error retries hang the
-    tool call, and with it the agent run and the HTTP request behind it, for minutes.
-    """
-    print("test_send_initiation_message_gives_up_instead_of_hanging")
-    import server
-
-    handler, fake = initiation_handler
-    monkeypatch.setattr(server, "SEND_TIMEOUT_SECONDS", 0.2)
-
-    async def never_returns(channel, text):
-        await asyncio.sleep(30)
-
-    fake.chat_postMessage = never_returns
-
-    started = time.monotonic()
-    with pytest.raises(TimeoutError):
-        handler.send_initiation_message("C42", "Deploy finished")
-    assert time.monotonic() - started < 5  # bounded, not the SDK's multi-minute path
-
-
 def test_reply_agent_is_pinned_not_left_to_the_first_agent_fallback(initiation_handler):
     """
     A recipient's reply is answered by the agent named in config, so it must be named.
