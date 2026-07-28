@@ -138,6 +138,59 @@ def test_send_initiation_message_channel_returns_thread_root(initiation_handler)
     assert thread_id == "1111.2222"  # channel replies arrive threaded under the posted ts
 
 
+def test_send_initiation_message_gives_up_instead_of_hanging(initiation_handler, monkeypatch):
+    """
+    A stalled Slack call must fail within the example's own bound.
+
+    Without it the Slack SDK's 30s-per-call default plus its connection-error retries hang the
+    tool call, and with it the agent run and the HTTP request behind it, for minutes.
+    """
+    print("test_send_initiation_message_gives_up_instead_of_hanging")
+    import server
+
+    handler, fake = initiation_handler
+    monkeypatch.setattr(server, "SEND_TIMEOUT_SECONDS", 0.2)
+
+    async def never_returns(channel, text):
+        await asyncio.sleep(30)
+
+    fake.chat_postMessage = never_returns
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        handler.send_initiation_message("C42", "Deploy finished")
+    assert time.monotonic() - started < 5  # bounded, not the SDK's multi-minute path
+
+
+def test_reply_agent_is_pinned_not_left_to_the_first_agent_fallback(initiation_handler):
+    """
+    A recipient's reply is answered by the agent named in config, so it must be named.
+
+    With slack.agent unset the handler falls back to "the first agent in the list", which happens
+    to be general today — so re-ordering the agents would silently route every reply to notifier,
+    which has no instructions for answering one.
+    """
+    print("test_reply_agent_is_pinned_not_left_to_the_first_agent_fallback")
+    handler, _ = initiation_handler
+    assert handler._slack_agent == "general"
+
+
+def test_background_marker_is_shared_by_both_agents():
+    """
+    Both agents key off the same literal marker, so it must reach both sets of instructions.
+
+    general uses it to tell a recipient's reply from a requester's ask; notifier uses it to know
+    which text is background. A typo in either would silently break the recipient branch.
+    """
+    print("test_background_marker_is_shared_by_both_agents")
+    import server
+
+    assert server.BACKGROUND_MARKER in server.general_agent.instructions
+    assert server.BACKGROUND_MARKER in server.notifier_agent.instructions
+    assert "Withhold unless asked" in server.general_agent.instructions
+    assert "Withhold unless asked" in server.notifier_agent.instructions
+
+
 def test_get_requester_id_reads_slack_user_from_body():
     print("test_get_requester_id_reads_slack_user_from_body")
     from agentkernel.core import AgentRequestAny, AgentRequestText, ToolContext

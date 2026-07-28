@@ -38,6 +38,29 @@ reply continues the same conversation instead of starting a context-less one.
   recipient gets a clear, correctly attributed message instead of assistant
   meta-chatter or a first-person message that reads as if the bot itself is
   the subject.
+- The prompt has a fixed shape, so both agents can rely on it:
+
+  ```
+  NOTIFICATION BACKGROUND — requester <@U0JAMES>, recipient <@U0MONROE>.
+  Share: the deployment failed.
+  Withhold unless asked: the cause was a faulty library import.
+  ```
+
+  `notifier` composes the message from `Share:` only. The `Withhold unless
+  asked:` line is how a fact the requester does not want volunteered still
+  reaches the session — the background is the **only** context an initiated
+  conversation ever gets, so a fact left out here is gone for good, and "don't
+  tell them unless they ask" would otherwise destroy it.
+- **`general`, not `notifier`, answers the recipient's replies.** Reply-side
+  agent selection is request-based: whichever agent `slack.agent` names handles
+  every inbound message, so the agent that composed the conversation never sees
+  the replies to it. `config.yaml` therefore pins `slack.agent: "general"` — it
+  is the default anyway (an unset agent falls back to the first registered one),
+  but leaving it implicit means re-ordering the agents would silently re-route
+  every reply. `general` picks its mode by looking for `NOTIFICATION BACKGROUND`
+  at the top of the history: present means it is talking to the recipient, so it
+  answers from the background and reveals a withheld fact if asked, instead of
+  trying to start another conversation.
 
 ## Setup
 
@@ -95,37 +118,28 @@ the reply to the wrong one.
 name without a mention gets a request to @-mention them, since the agent has
 no way to resolve names to member ids.)
 
+### Withholding a fact until it's asked for
+
+The requester can supply a detail and ask for it not to be volunteered:
+
+> @bot tell @monroe the deployment failed due to a faulty import, but don't
+> tell him the reason unless he asks
+
+`general` puts both parts in the background — the failure under `Share:`, the
+cause under `Withhold unless asked:` — and `notifier` composes from `Share:`
+only, so the DM is just:
+
+> Hi! Just a heads up — <@U0JAMES> reports the deployment failed.
+
+The cause is still in the session, so a threaded reply gets it:
+
+> Monroe: what was the reason?
+> Bot: A faulty library import.
+
+This is the case that breaks if the background drops the withheld fact: the
+prompt is the session's only context, so an agent that reads "don't tell him"
+as "leave it out entirely" has nothing left to answer from.
+
 Uncomment the `thread:` block in `config.yaml` to also record initiated
 conversations as AK conversation threads owned by the recipient (readable via
 `GET /api/v1/threads?user_id=...`).
-
-## Following it in the logs
-
-The server traces the round trip on stdout, one `┃`-prefixed line per step, so you can watch
-the mapping being written and read:
-
-```
-┃ INBOUND  thread_ts=1717000000.001 unmapped -> new session
-┃ ASK      agent=general  session=1717000000.001 prompt='tell <@U0MONROE> I will be late...'
-┃ ASK      agent=notifier session=8f2c-...  prompt='<@U0JAMES> asked you to let...'
-┃ REPLY    agent=notifier session=8f2c-...  text='Hi! Just a heads up — <@U0JAMES> will be late...'
-┃ SEND     target=U0MONROE channel=D0MONROE
-┃ SENT     ts=1717000123.456 — a threaded reply under this ts continues the initiated session
-┃ INBOUND  thread_ts=1717000123.456 mapped -> session=8f2c-...
-```
-
-The last line is the one to watch for: `mapped` means Monroe's reply resolved through the
-Session ID Mapping into the initiated session. If you see `unmapped -> new session` instead,
-the reply was not threaded under the bot's message — the trade-off described above, not a bug.
-`SENT` prints the `ts` a reply must be threaded under, so you can match them up by eye.
-
-`ASK`/`REPLY` come from a `PreHook` and `PostHook` in `server.py`, registered on both agents;
-`INBOUND` from the handler's `resolve_session_id` override; `SEND`/`SENT` from
-`send_initiation_message`. They exist to make the flow observable and are safe to delete.
-
-The lines use AK's own logging: `server.py` logs to `ak.example.slack_initiation`, a child of
-the `ak` logger, so `logging.ak.level` in `config.yaml` controls them and they inherit AK's
-handler and formatter. That level is `INFO` here so these lines are not buried — set it to
-`DEBUG` to see the library's internals alongside them. Note a logger *outside* the `ak.`
-namespace would go to the root logger, which nothing configures unless you also set
-`logging.system.level`, and Python would then drop everything below WARNING.

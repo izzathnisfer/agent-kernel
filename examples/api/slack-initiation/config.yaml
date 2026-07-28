@@ -1,15 +1,17 @@
-# Core settings.
-# INFO rather than DEBUG so this example's own "┃ STEP ..." trace lines stand out instead of
-# being buried in the library's internals — server.py logs them under "ak.example.slack_initiation",
-# a child of the "ak" logger, so they inherit this level and AKLogger's handler and formatter.
-# Switch to DEBUG when you need the library's internals too.
+# Core settings
 logging:
   ak:
-    level: INFO
+    level: DEBUG
 library_version: "0.1.0"
 
 # Slack integration settings
+# "general" handles every inbound Slack message, including a recipient's reply inside a
+# conversation the agent initiated — reply-side agent selection is request-based, so the agent that
+# composed the outbound message is not the one that answers the reply. Pinning it here is what
+# happens by default anyway (no agent configured falls back to the first registered one), but
+# leaving it implicit means re-ordering the agents would silently re-route every reply.
 slack:
+  agent: "general"
   agent_acknowledgement: "I'm processing your request"
 
 # Agent-initiated conversations (the initiate_conversation system tool + reply
