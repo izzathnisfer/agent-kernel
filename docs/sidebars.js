@@ -41,6 +41,7 @@ const sidebars = {
         'architecture/overview',
         'architecture/execution-flow',
         'architecture/memory-management',
+        'architecture/sandbox-internals',
       ],
     },
     {
@@ -53,6 +54,7 @@ const sidebars = {
         'frameworks/langgraph',
         'frameworks/google-adk',
         'frameworks/smolagents',
+        'frameworks/pydantic-ai',
         'frameworks/multi-framework',
       ],
     },

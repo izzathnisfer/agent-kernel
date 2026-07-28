@@ -11,7 +11,7 @@ description: >
 license: Apache-2.0
 metadata:
   author: yaalalabs
-  version: "0.6.1"
+  version: "0.7.0"
   category: user
 ---
 
@@ -32,7 +32,7 @@ Check for an existing Agent Kernel project with `pyproject.toml` and agent defin
 Which capability would you like to add?
 
 1. **Guardrails** — Content safety filters for input and/or output
-2. **Tracing** — Observability and monitoring (Langfuse or OpenLLMetry)
+2. **Tracing** — Observability and monitoring (Langfuse, OpenLLMetry, or Pydantic Logfire)
 3. **Session Persistence** — Durable conversation state (Redis, DynamoDB, Cosmos DB, Firestore)
 4. **Knowledge Base** — Durable cross-session knowledge tools (ChromaDB, Neo4j, Starburst, or custom backend)
 5. **MCP Server** — Expose agents as Model Context Protocol tools
@@ -56,7 +56,7 @@ Which capability would you like to add?
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api]>=0.6.1",
+    "agentkernel[openai,api]>=0.7.0",
     # OpenAI guardrails use the openai extra — already included if using OpenAI framework
 ]
 ```
@@ -110,7 +110,7 @@ guardrail:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,aws]>=0.6.1",
+    "agentkernel[openai,api,aws]>=0.7.0",
 ]
 ```
 
@@ -136,7 +136,7 @@ guardrail:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,walledai]>=0.6.1",
+    "agentkernel[openai,api,walledai]>=0.7.0",
 ]
 ```
 
@@ -166,14 +166,14 @@ export WALLED_API_KEY="your-walledai-api-key"
 
 #### Tracing (Observability)
 
-**Ask:** Which tracing backend — Langfuse or OpenLLMetry (Traceloop)?
+**Ask:** Which tracing backend — Langfuse, OpenLLMetry (Traceloop), or Pydantic Logfire?
 
 **For Langfuse:**
 
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,langfuse]>=0.6.1",
+    "agentkernel[openai,api,langfuse]>=0.7.0",
 ]
 ```
 
@@ -198,7 +198,7 @@ export LANGFUSE_HOST="https://cloud.langfuse.com"   # or self-hosted URL
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,openllmetry]>=0.6.1",
+    "agentkernel[openai,api,openllmetry]>=0.7.0",
 ]
 ```
 
@@ -211,6 +211,29 @@ trace:
 
 3. Set environment variables per the Traceloop documentation.
 
+**For Pydantic Logfire:**
+
+1. Update `pyproject.toml`:
+```toml
+dependencies = [
+    "agentkernel[openai,api,logfire]>=0.7.0",
+]
+```
+
+2. Update `config.yaml`:
+```yaml
+trace:
+  enabled: true
+  type: logfire
+```
+
+3. Set the write token (optional — without it, Logfire runs locally and does not ship traces):
+```bash
+export LOGFIRE_TOKEN="your-write-token"
+```
+
+4. No code changes needed — tracing is automatically applied to all agent executions.
+
 ---
 
 #### Session Persistence
@@ -222,7 +245,7 @@ trace:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,redis]>=0.6.1",
+    "agentkernel[openai,api,redis]>=0.7.0",
 ]
 ```
 
@@ -242,7 +265,7 @@ session:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,aws]>=0.6.1",
+    "agentkernel[openai,api,aws]>=0.7.0",
 ]
 ```
 
@@ -264,7 +287,7 @@ session:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,azure]>=0.6.1",
+    "agentkernel[openai,api,azure]>=0.7.0",
 ]
 ```
 
@@ -286,7 +309,7 @@ session:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,gcp]>=0.6.1",
+    "agentkernel[openai,api,gcp]>=0.7.0",
 ]
 ```
 
@@ -319,9 +342,9 @@ Add durable knowledge tools that your agents can query and update across session
 
 ```toml
 dependencies = [
-  "agentkernel[openai,api,chromadb]>=0.6.1",  # for Chroma
-  # or "agentkernel[openai,api,neo4j]>=0.6.1"
-  # or "agentkernel[openai,api,trino]>=0.6.1"
+  "agentkernel[openai,api,chromadb]>=0.7.0",  # for Chroma
+  # or "agentkernel[openai,api,neo4j]>=0.7.0"
+  # or "agentkernel[openai,api,trino]>=0.7.0"
 ]
 ```
 
@@ -402,7 +425,7 @@ Expose your agents as MCP (Model Context Protocol) tools so other AI systems can
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,mcp]>=0.6.1",
+    "agentkernel[openai,api,mcp]>=0.7.0",
 ]
 ```
 
@@ -428,7 +451,7 @@ Enable Agent-to-Agent communication via Google's A2A protocol.
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,a2a]>=0.6.1",
+    "agentkernel[openai,api,a2a]>=0.7.0",
 ]
 ```
 
@@ -536,7 +559,7 @@ Enable image and file processing in your agents.
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,multimodal]>=0.6.1",
+    "agentkernel[openai,api,multimodal]>=0.7.0",
 ]
 ```
 
@@ -561,7 +584,7 @@ multimodal:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,redis,multimodal]>=0.6.1",
+    "agentkernel[openai,api,redis,multimodal]>=0.7.0",
 ]
 ```
 
@@ -584,7 +607,7 @@ multimodal:
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,aws,multimodal]>=0.6.1",
+    "agentkernel[openai,api,aws,multimodal]>=0.7.0",
 ]
 ```
 
@@ -668,7 +691,7 @@ Enable persistent, named conversation threads keyed by `session_id`.
 1. Update `pyproject.toml`:
 ```toml
 dependencies = [
-    "agentkernel[openai,api]>=0.6.1",
+    "agentkernel[openai,api]>=0.7.0",
 ]
 ```
 
@@ -688,7 +711,7 @@ thread:
 **For LLM-based thread naming**, add the `thread` extra:
 ```toml
 dependencies = [
-    "agentkernel[openai,api,thread]>=0.6.1",
+    "agentkernel[openai,api,thread]>=0.7.0",
 ]
 ```
 ```yaml
@@ -703,7 +726,7 @@ thread:
 
 ```toml
 dependencies = [
-    "agentkernel[openai,api,redis,thread]>=0.6.1",
+    "agentkernel[openai,api,redis,thread]>=0.7.0",
 ]
 ```
 ```yaml
@@ -719,7 +742,7 @@ thread:
 
 ```toml
 dependencies = [
-    "agentkernel[openai,api,aws,thread]>=0.6.1",
+    "agentkernel[openai,api,aws,thread]>=0.7.0",
 ]
 ```
 ```yaml
@@ -868,7 +891,7 @@ the agent's instructions about *what* to do; the sandbox usage is injected.
 For per-user identity (running sandboxed code under the invoking user's identity), set
 `principal_resolver` to a dotted path and a profile's `identity.mode: user`; see the
 [Sandbox guide](https://kernel.yaala.ai/docs/next/advanced/sandbox) and the
-`examples/api/sandbox-identity` example.
+`examples/sandbox/identity` example.
 
 ---
 
