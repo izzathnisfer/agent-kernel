@@ -191,7 +191,8 @@ class SystemToolFactory:
 
             tools.append(AnalyzeAttachmentsTool())
 
-        if AKConfig.get().conversation_initiation_enabled:
+        initiation_config = getattr(getattr(AKConfig.get(), "session", None), "initiation", None)
+        if AKConfig.get().conversation_initiation_enabled and SystemToolFactory._agent_allowed(initiation_config, agent_name):
             from .initiation import InitiateConversationTool
 
             tools.append(InitiateConversationTool())

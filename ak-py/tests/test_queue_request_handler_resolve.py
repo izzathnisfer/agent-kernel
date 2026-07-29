@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from agentkernel.core.initiation import InitiationManager
 from agentkernel.core.model import ExecutionMode
-from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
+from agentkernel.core.session.in_memory import InMemoryMappingStore
 from agentkernel.deployment.common.queue_request_handler import QueueRequestHandler
 
 

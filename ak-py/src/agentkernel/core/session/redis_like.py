@@ -1,19 +1,26 @@
 """
 Client-library-agnostic Session ID Mapping store shared by the Redis and Valkey
-backends. This module must not import ``redis`` or ``valkey``: concrete
-subclasses construct the driver and pass it in.
+backends.
+
+This module must not import ``redis`` or ``valkey``: concrete subclasses
+(``RedisMappingStore`` in ``session/redis.py``, ``ValkeyMappingStore`` in
+``session/valkey.py``) construct the driver and pass it in. Keeping the shared
+base here — rather than in either backend's module — is what lets a
+``agentkernel[valkey]`` install work without the ``redis`` extra, mirroring the
+same split one layer down in ``core/util/driver/redis_like.py``.
 """
 
 import logging
 from typing import Optional
 
-from ...util.driver.redis_like import _RedisLikeDriver
-from ..base import MappingStore
+from ..util.driver.redis_like import _RedisLikeDriver
+from .base import MappingStore
 
 
 class _RedisLikeMappingStore(MappingStore):
     """
-    Redis-compatible implementation of the MappingStore interface.
+    Redis-compatible implementation of the MappingStore interface, shared by the
+    Redis and Valkey backends.
 
     Each mapping direction is a plain string key under the configured prefix;
     the driver applies the configured TTL atomically on every SET.

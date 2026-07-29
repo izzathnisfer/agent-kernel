@@ -22,9 +22,7 @@ os.environ["SLACK_SIGNING_SECRET"] = SIGNING_SECRET
 os.environ["SLACK_BOT_TOKEN"] = "xoxb-test-token"
 
 from agentkernel.core.initiation import InitiationManager  # noqa: E402
-from agentkernel.core.session.mapping.in_memory import (  # noqa: E402
-    InMemoryMappingStore,
-)
+from agentkernel.core.session.in_memory import InMemoryMappingStore  # noqa: E402
 
 # Import the example modules once, at collection time, before any test's monkeypatched
 # AKConfig is in effect. agentkernel.aws (imported transitively by lambda_agent_runner

@@ -1,9 +1,56 @@
 import logging
+from typing import ClassVar, Optional
 
 from ..base import Session
-from .base import MappingStore, SessionStore
-from .mapping import build_mapping_store
-from .mapping.in_memory import InMemoryMappingStore
+from .base import MappingStore, SessionStore, build_mapping_store
+
+
+class InMemoryMappingStore(MappingStore):
+    """
+    InMemoryMappingStore provides an in-memory implementation of the
+    MappingStore interface.
+
+    Storage is shared across all instances via ClassVar so that mappings persist
+    for the lifetime of the process.
+    """
+
+    _records: ClassVar[dict[str, str]] = {}
+    _log = logging.getLogger("ak.core.session.mapping.inmemory")
+
+    def get_session_id(self, messaging_integration_thread_id: str) -> Optional[str]:
+        """
+        Resolves a messaging platform thread id to the session id it was bound to.
+
+        :param messaging_integration_thread_id: The messaging platform's thread identifier.
+        :return: The mapped session id, or None if no mapping exists.
+        """
+        return self._records.get(MappingStore.thread_record_key(messaging_integration_thread_id))
+
+    def get_messaging_integration_thread_id(self, session_id: str) -> Optional[str]:
+        """
+        Resolves a session id to the messaging platform thread id it was bound to.
+
+        :param session_id: The Agent Kernel session id.
+        :return: The mapped messaging platform thread id, or None if no mapping exists.
+        """
+        return self._records.get(MappingStore.session_record_key(session_id))
+
+    def save(self, session_id: str, messaging_integration_thread_id: str) -> None:
+        """
+        Persists the mapping in both directions. Last-writer-wins and idempotent.
+
+        :param session_id: The Agent Kernel session id.
+        :param messaging_integration_thread_id: The messaging platform's thread identifier.
+        """
+        self._log.debug(f"Saving mapping {session_id} <-> {messaging_integration_thread_id}")
+        self._records[MappingStore.thread_record_key(messaging_integration_thread_id)] = session_id
+        self._records[MappingStore.session_record_key(session_id)] = messaging_integration_thread_id
+
+    def clear(self) -> None:
+        """
+        Clears all stored mappings.
+        """
+        self._records.clear()
 
 
 class InMemorySessionStore(SessionStore):

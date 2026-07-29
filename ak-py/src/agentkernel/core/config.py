@@ -95,6 +95,10 @@ class _SessionInitiationConfig(BaseModel):
         "name or key prefix is derived from the session store's own by suffixing '-id-mapping' "
         "(table/collection) or 'id-mapping:' (key prefix), and it reuses the session store's TTL.",
     )
+    agents: Optional[list[str]] = Field(
+        default=None,
+        description="Agent names the initiate_conversation tool and system-prompt guidance attach to; omitted = all agents",
+    )
 
 
 class _SessionStoreConfig(BaseModel):

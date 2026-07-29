@@ -16,10 +16,8 @@ from agentkernel.core.config import AKConfig
 from agentkernel.core.multimodal.storage.base import AttachmentStore
 from agentkernel.core.multimodal.storage.in_memory import InMemoryAttachmentStore
 from agentkernel.core.multimodal.storage.storage_manager import AttachmentStorageManager
-from agentkernel.core.session.base import MappingStore, SessionStore
-from agentkernel.core.session.in_memory import InMemorySessionStore
-from agentkernel.core.session.mapping import build_mapping_store
-from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
+from agentkernel.core.session.base import MappingStore, SessionStore, build_mapping_store
+from agentkernel.core.session.in_memory import InMemoryMappingStore, InMemorySessionStore
 from agentkernel.core.thread.store.base import ThreadStore, ThreadStoreBuilder
 from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
 from agentkernel.core.util.factory import AKConfigError
@@ -228,7 +226,7 @@ def test_mapping_byo_dotted_path_takes_precedence_over_the_pairing():
     """session.initiation.store wins even when the backend supplies its own pairing."""
     with patch.object(AKConfig, "get") as mock_get:
         cfg = Mock()
-        cfg.session.initiation.store = "agentkernel.core.session.mapping.in_memory.InMemoryMappingStore"
+        cfg.session.initiation.store = "agentkernel.core.session.in_memory.InMemoryMappingStore"
         mock_get.return_value = cfg
         store = build_mapping_store(_ByoMappingStore)
     assert isinstance(store, InMemoryMappingStore)

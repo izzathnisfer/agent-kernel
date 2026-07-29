@@ -1,9 +1,14 @@
+import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from threading import RLock
 from typing import ClassVar, Optional
 
 from ..base import Session
+from ..config import AKConfig
+from ..util.factory import resolve_dotted
+
+_log = logging.getLogger("ak.core.session.mapping")
 
 
 class MappingStore(ABC):
@@ -26,8 +31,9 @@ class MappingStore(ABC):
     between the two records (a torn write is repaired by the next bind, which re-saves when
     the forward lookup misses).
 
-    Implementations live in ``core/session/mapping/`` and are paired with a session store
-    backend, which hands its own out via :meth:`SessionStore.get_mapping_store`.
+    Implementations live alongside their paired session store backend (e.g.
+    ``RedisMappingStore`` in ``session/redis.py``), which hands its own out via
+    :meth:`SessionStore.get_mapping_store`.
     """
 
     THREAD_RECORD_PREFIX: ClassVar[str] = "thread#"
@@ -89,6 +95,33 @@ class MappingStore(ABC):
         Clears all stored mappings.
         """
         pass
+
+
+def build_mapping_store(default_factory: type[MappingStore]) -> MappingStore:
+    """
+    Builds the Session ID Mapping store for a session store backend.
+
+    A ``session.initiation.store`` dotted path takes precedence, letting an operator bring
+    their own MappingStore regardless of which session backend is in use; otherwise the
+    backend's own paired store is constructed. Called from each session store's constructor,
+    so a misconfigured dotted path surfaces while the session store is being built — at
+    startup — rather than on the first request that needs a mapping.
+
+    The block is read defensively because session stores are also constructed against
+    minimal stand-in configs in tests; a config that does not expose the block has no
+    bring-your-own override, which is the same outcome as leaving it unset.
+
+    :param default_factory: The MappingStore subclass paired with the calling session store.
+    :return: The bring-your-own store when configured, otherwise ``default_factory()``.
+    :raises AKConfigError: If ``session.initiation.store`` is set but does not resolve to a
+        MappingStore subclass.
+    """
+    session = getattr(AKConfig.get(), "session", None)
+    store_path = getattr(getattr(session, "initiation", None), "store", None)
+    if store_path:
+        _log.info(f"Building session id mapping store from dotted path '{store_path}'")
+        return resolve_dotted(store_path, base=MappingStore)()
+    return default_factory()
 
 
 class SessionStore(ABC):

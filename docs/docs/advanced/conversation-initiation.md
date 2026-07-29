@@ -40,6 +40,7 @@ config needed beyond `execution.queues`. Single-process REST deployments need an
 session:
   initiation:
     enabled: true   # required for single-process REST; queue-mode auto-enables
+    # agents: [notifier]   # optional: only these agents get the tool (omit = all)
     # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own (dotted path)
 ```
 
@@ -60,7 +61,8 @@ session:
 
 With the feature enabled:
 
-- the `initiate_conversation` system tool is registered on **all agents**;
+- the `initiate_conversation` system tool is registered on **all agents** — or only those named in
+  the optional `session.initiation.agents` list, when set;
 - inbound platform messages resolve their thread id through the mapping before selecting a session;
 - response handlers recognize initiation messages (`message_type=INITIATION` queue attribute).
 
@@ -203,12 +205,14 @@ there's no delivery surface for a proactively sent message to arrive on.
 
 ## Deployment notes
 
-- **ECS containerized Terraform**: the mapping store follows `session.type`, so set
-  `conversation_initiation = true` only when the session store itself is DynamoDB
-  (`create_dynamodb_memory_table = true`) — it provisions the `-session-id-mapping` DynamoDB table
-  (hash key `map_key`, TTL attribute `expiry_time`) with IAM grants for the REST/IO service. The
-  Agent Runner gets no grant — it never touches the table. Other session backends (Redis, Valkey,
-  ...) need no extra resource; the mapping rides the same store.
+- **ECS containerized Terraform**: the mapping store follows `session.type`, so the module
+  provisions a mapping table only when the session store itself is DynamoDB
+  (`create_dynamodb_memory_table = true`) — there is no separate flag to set. The table name is
+  derived from the session store's own by suffixing `-id-mapping`
+  (`<product>-<env>-<module>-session_store-id-mapping`), with hash key `map_key`, TTL attribute
+  `expiry_time`, and IAM grants for the REST/IO service. The Agent Runner gets no grant — it never
+  touches the table. Other session backends (Redis, Valkey, ...) need no extra resource; the
+  mapping rides the same store.
 - A reply arriving in the instant between the platform send and the mapping bind resolves to a
   platform-derived session (accepted limitation); the initiated session's history is complete
   before the send, so subsequent replies have full context.

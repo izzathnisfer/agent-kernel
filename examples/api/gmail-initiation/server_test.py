@@ -20,7 +20,7 @@ os.environ["AK_GMAIL__CLIENT_ID"] = "test-client-id"
 os.environ["AK_GMAIL__CLIENT_SECRET"] = "test-client-secret"
 
 from agentkernel.core.initiation import InitiationManager, InitiationMessage  # noqa: E402
-from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore  # noqa: E402
+from agentkernel.core.session.in_memory import InMemoryMappingStore  # noqa: E402
 
 from server import GmailInitiationHandler, register_initiation_dispatcher  # noqa: E402
 

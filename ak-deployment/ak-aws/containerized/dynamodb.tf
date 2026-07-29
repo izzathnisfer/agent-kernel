@@ -20,11 +20,10 @@ resource "aws_dynamodb_table" "response_store" {
   tags = merge(var.tags, { Type = "ResponseStore" })
 }
 
-# ---------- DynamoDB Session ID Mapping (agent-initiated conversations) ----------
-# Keep the name derived: the application computes it the same way (core/session/mapping/dynamodb.py).
+# ---------- DynamoDB Session ID Mapping ----------
 
 resource "aws_dynamodb_table" "session_id_mapping" {
-  count = var.conversation_initiation ? 1 : 0
+  count = var.create_dynamodb_memory_table ? 1 : 0
 
   name         = "${local.dynamodb_memory_table_name}-id-mapping"
   billing_mode = "PAY_PER_REQUEST"

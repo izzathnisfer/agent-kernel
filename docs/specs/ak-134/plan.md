@@ -78,6 +78,7 @@ implementation record and are not updated line-by-line for the new config field 
 - **Files:** `ak-deployment/ak-aws/containerized/{dynamodb.tf,iam.tf,variables.tf}`
 - **Steps:** `aws_dynamodb_table.session_id_mapping` (hash key `map_key`, TTL `expiry_time`) gated by new `var.conversation_initiation`; extend the IAM statement for the IO/output and REST services only — not the agent-runner role (§Terraform changes).
 - **Verify:** `terraform validate` in the module.
+- **Post-review update:** the standalone `var.conversation_initiation` flag was removed — since every session store must pair a mapping store (`SessionStore.get_mapping_store()` is abstract), the mapping table and its IAM grant now gate directly on `var.create_dynamodb_memory_table`, the same flag that provisions the DynamoDB session store itself. No separate opt-in/opt-out exists.
 
 ## Iteration 9: Tests — consolidation
 
@@ -117,3 +118,10 @@ in agreement. Since the mapping store is the session store's companion table, it
   are untouched in the final state.
 - **Verify:** `uv run pytest` (`test_mapping_store.py`, renamed from `test_session_id_mapping.py`)
   and `make lint-check-all`.
+- **Post-review update:** `core/session/mapping/` (one file per backend) was folded one level
+  further, into the paired session-store module itself — e.g. `RedisMappingStore` now lives in
+  `core/session/redis.py` beside `RedisSessionStore`, not a separate `mapping/redis.py`. The
+  Redis/Valkey-shared `_RedisLikeMappingStore` moved into `core/session/redis.py` too (imported
+  by `valkey.py`), and `build_mapping_store()` moved into `core/session/base.py`. This removes the
+  `core/session/mapping/` subpackage entirely, addressing review feedback that a dotted-path
+  split between a session store and its own mapping store added indirection without benefit.

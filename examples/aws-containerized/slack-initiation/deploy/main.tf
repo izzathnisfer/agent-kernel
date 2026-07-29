@@ -47,9 +47,8 @@ module "containerized_agents" {
 
   # ---- Agent-Initiated Conversations ----
   # The Session ID Mapping store follows session.type (Redis here) and rides the same
-  # cluster, so no extra AWS resource is needed — conversation_initiation only provisions
-  # a DynamoDB table, which is for a DynamoDB-backed session store.
-  conversation_initiation = false
+  # cluster, so no extra AWS resource is needed — the module only provisions a mapping
+  # DynamoDB table automatically when create_dynamodb_memory_table = true.
 
   # ---- Queue Mode ----
   queue_mode     = true

@@ -82,8 +82,8 @@ Tests live in `ak-py/tests/` and follow the naming convention `test_<module>.py`
 | `test_factory.py` | Shared pluggable-backend helpers (`resolve_dotted`, `require_extra`, `AKConfigError`) in `core/util/factory.py` |
 | `test_store_builders.py` | Session/thread/multimodal/mapping store builders: fail-loud on unknown type, BYO dotted-path subclass resolution |
 | `test_trace.py` | Trace factory built-in resolution, BYO dotted path, unknown-type error |
-| `test_mapping_store.py` | MappingStore backends, session-store pairing via `get_mapping_store()`, InitiationManager (resolve/bind/complete/dispatch) |
-| `test_initiation_tool.py` | `initiate_conversation` system tool, SystemToolFactory gating, RESTAPI local dispatch |
+| `test_mapping_store.py` | MappingStore backends, session-store pairing via `get_mapping_store()`, InitiationManager (resolve/bind/complete/dispatch), redis/valkey optional-extra isolation (`TestExtraIsolation`) |
+| `test_initiation_tool.py` | `initiate_conversation` system tool, SystemToolFactory gating + `session.initiation.agents` scoping, RESTAPI local dispatch |
 | `test_initiation_response_handlers.py` | Response-handler INITIATION guards, `process_message` override contract, queue dispatcher |
 | `test_queue_request_handler_resolve.py` | QueueRequestHandler session-id resolve rewrite + fallback |
 | `test_slack_session_resolution.py` | Slack inbound session resolution: thread_ts-only, DMs and channels identical, no channel-id fallback |

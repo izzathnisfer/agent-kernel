@@ -23,20 +23,23 @@ ak-py/src/agentkernel/core/initiation/
 ```
 
 The mapping store is **not** part of this package: it belongs to the session store, so the
-`MappingStore` ABC sits beside `SessionStore` and the backends live under `core/session/`.
+`MappingStore` ABC sits beside `SessionStore`, and each backend's `MappingStore` subclass lives
+directly in its paired session-store module — not a separate `mapping/` subpackage, so there is
+no dotted-path resolution between a session store and its mapping store.
 
 ```
 ak-py/src/agentkernel/core/session/
-├── base.py              # SessionStore (ABC, + get_mapping_store) and MappingStore (ABC)
-└── mapping/
-    ├── __init__.py      # build_mapping_store(default_factory) — honours the BYO dotted path
-    ├── in_memory.py     # ClassVar dict, ephemeral
-    ├── redis.py         # reuses session.redis connection config
-    ├── valkey.py        # reuses session.valkey connection config (valkey extra)
-    ├── dynamodb.py      # reuses session.dynamodb connection config
-    ├── cosmosdb.py      # reuses session.cosmosdb connection config
-    └── firestore.py     # reuses session.firestore connection config
+├── base.py       # SessionStore (ABC, + get_mapping_store), MappingStore (ABC), build_mapping_store()
+├── redis_like.py # _RedisLikeMappingStore — shared by redis/valkey; imports no client library
+├── in_memory.py  # InMemorySessionStore + InMemoryMappingStore (ClassVar dict, ephemeral)
+├── redis.py      # RedisSessionStore + RedisMappingStore (reuses session.redis)
+├── valkey.py     # ValkeySessionStore + ValkeyMappingStore(_RedisLikeMappingStore) (reuses session.valkey, valkey extra)
+├── dynamodb.py   # DynamoDBSessionStore + DynamoDBMappingStore (reuses session.dynamodb)
+├── cosmosdb.py   # CosmosDBSessionStore + CosmosDBMappingStore (reuses session.cosmosdb)
+└── firestore.py  # FirestoreSessionStore + FirestoreMappingStore (reuses session.firestore)
 ```
+
+**`redis` and `valkey` are separate extras, so the shared Redis-compatible mapping base cannot live in `redis.py`.** `session/redis.py` imports `RedisDriver`, which does `import redis`; a `valkey.py` that reached into it for the shared class would make `agentkernel[valkey]` unusable (`ModuleNotFoundError: No module named 'redis'`). `_RedisLikeMappingStore` therefore sits in its own client-library-free `session/redis_like.py`, mirroring the identical split one layer down at `core/util/driver/redis_like.py`. `tests/test_mapping_store.py::TestExtraIsolation` pins the contract by blocking `redis` in `sys.modules` — the whole suite stays green otherwise, since the dev venv installs every extra.
 
 ```python
 class InitiationMessage(BaseModel):
@@ -124,7 +127,7 @@ The backends **reuse the shared drivers in `core/util/driver/`** — the same on
 
 ### Initiation tool (`tools.py`)
 
-Registered by `SystemToolFactory.get_all()` (`ak-py/src/agentkernel/core/tool.py:165-179`) when `AKConfig.get().conversation_initiation_enabled` is true, alongside the existing multimodal gate; the description joins the system-prompt suffix via `Agent._setup_system_prompt()` (`ak-py/src/agentkernel/core/base.py:336-353`).
+Registered by `SystemToolFactory.get_all()` (`ak-py/src/agentkernel/core/tool.py:165-179`) when `AKConfig.get().conversation_initiation_enabled` is true and `SystemToolFactory._agent_allowed(session.initiation, agent_name)` (the same per-capability `agents` filter as `multimodal`/`sandbox` — an absent list means all agents); the description joins the system-prompt suffix via `Agent._setup_system_prompt()` (`ak-py/src/agentkernel/core/base.py:336-353`).
 
 ```python
 def _initiate_conversation(target: str, prompt: str,
@@ -204,6 +207,10 @@ class _SessionInitiationConfig(BaseModel):
         default=None,
         description="Dotted path to a MappingStore subclass (bring-your-own).",
     )
+    agents: Optional[list[str]] = Field(
+        default=None,
+        description="Agent names the initiate_conversation tool and system-prompt guidance attach to; omitted = all agents.",
+    )
 
 class _SessionStoreConfig(BaseModel):
     ...                                  # type / cache / per-backend blocks unchanged
@@ -218,8 +225,8 @@ class _SessionStoreConfig(BaseModel):
 
 ### Terraform changes
 
-- `ak-deployment/ak-aws/containerized/dynamodb.tf`: new `aws_dynamodb_table "session_id_mapping"` mirroring `response_store` (`dynamodb.tf:3-21`): `billing_mode = "PAY_PER_REQUEST"`, `hash_key = "map_key"` (S), TTL attribute `expiry_time`, gated by a new `var.conversation_initiation` flag (default `false`) — set only when the session store itself is DynamoDB (`create_dynamodb_memory_table = true`); other session backends need no extra resource since the mapping store rides the same one.
-- **The table name is derived, not literal:** `name = "${local.dynamodb_memory_table_name}-id-mapping"`. That local (`state.tf:13`) is exactly what the module injects as `AK_SESSION__DYNAMODB__TABLE_NAME`, and the application derives its table as `f"{session.dynamodb.table_name}-id-mapping"` — so the two names are paired by construction. A literal built from `local.prefix` would resolve to `${prefix}-session-id-mapping` while the app looks for `${prefix}-session_store-id-mapping` (the session module composes `${prefix}-session_store`), leaving the table and its IAM grant unreachable. `var.conversation_initiation` carries a validation requiring `create_dynamodb_memory_table = true`, since the local is `null` otherwise.
+- `ak-deployment/ak-aws/containerized/dynamodb.tf`: new `aws_dynamodb_table "session_id_mapping"` mirroring `response_store` (`dynamodb.tf:3-21`): `billing_mode = "PAY_PER_REQUEST"`, `hash_key = "map_key"` (S), TTL attribute `expiry_time`, gated by `var.create_dynamodb_memory_table` — the same flag that provisions the DynamoDB session store itself, since every session store must pair a mapping store (`SessionStore.get_mapping_store()` is abstract); other session backends need no extra resource since the mapping store rides the same one. There is no separate opt-out flag.
+- **The table name is derived, not literal:** `name = "${local.dynamodb_memory_table_name}-id-mapping"`. That local (`state.tf:13`) is exactly what the module injects as `AK_SESSION__DYNAMODB__TABLE_NAME`, and the application derives its table as `f"{session.dynamodb.table_name}-id-mapping"` — so the two names are paired by construction. A literal built from `local.prefix` would resolve to `${prefix}-session-id-mapping` while the app looks for `${prefix}-session_store-id-mapping` (the session module composes `${prefix}-session_store`), leaving the table and its IAM grant unreachable.
 - `ak-deployment/ak-aws/containerized/iam.tf`: a separate count-gated `aws_iam_policy.rest_service_session_id_mapping_policy` (+ attachment) scoped to the mapping table ARN, granted to the REST/IO service task role only — the request-handler resolve and the response-handler bind both run there; the agent-runner role gets no grant (the runner needs no mapping-table access, per the design's Agent Runner blindness rule).
 - The serverless module currently defines no DynamoDB tables (verified: `grep aws_dynamodb_table ak-deployment/ak-aws` matches only `containerized/`), so no serverless Terraform change; serverless users provision the table with their session-store tables as today.
 
@@ -230,7 +237,7 @@ All intentional; everything not listed is a non-change.
 1. **`POST /api/v1/chat` (queue deployments) may rewrite `session_id`.** When agent-initiated conversations are enabled and the supplied `session_id` matches a mapped `messaging_integration_thread_id`, the run executes under the mapped session and the response's `session_id` is the mapped one. Callers must poll `GET /api/v1/chat/{session_id}` with the returned id (the existing session-match check at `queue_request_handler.py:161` makes polling with the original thread id return 404 — this is the documented contract, not a bug).
 2. **Integration handlers perform one mapping lookup per inbound message** when the feature is enabled (hot path; O(1) key-value get; on store error the lookup falls back to the platform-derived id, so message handling never blocks on the mapping backend).
 3. **Stock response handlers gain a guard branch on `message_type=INITIATION`**: such messages are never written to the response store nor broadcast — they are logged (WARNING) and dropped unless a user's `process_message` override delivers them and calls `complete()`.
-4. **`initiate_conversation` joins the system tools** on all agents (and the system-prompt suffix grows by its description) in any process where `AKConfig.conversation_initiation_enabled` is true.
+4. **`initiate_conversation` joins the system tools** (and the system-prompt suffix grows by its description) in any process where `AKConfig.conversation_initiation_enabled` is true — on all agents by default, or only those named in `session.initiation.agents` when that list is set.
 5. **`RESTRequestHandler` gains a concrete base method** (`resolve_session_id`), changing it from a pure ABC to an ABC with one default method — no existing subclass overrides anything by that name (verified: no matches in `ak-py/src`).
 
 **Non-changes:** session store data layout and `Session` serialization; thread store layout; `BaseChatRequest`/`BaseRunRequest` schemas; all existing config fields; `ChatService` behavior; the system pre-hook chain (`Runtime._get_system_pre_hooks()` is untouched — prompt-only initiation needs no injection hook); reactive conversations on every platform when the feature is disabled (all guards and branches inert); public exports of `agentkernel.core` (new symbols are added under `agentkernel.core.initiation`, nothing moves).
@@ -254,7 +261,7 @@ Concurrency: `InitiationManager` is a class-level singleton guarded by an `RLock
 
 New test files (`ak-py/tests/`):
 
-- `test_mapping_store.py` — `InMemoryMappingStore` bidirectional save/get/clear and save-if-absent idempotency; each session backend pairs itself with the matching mapping store and derives namespace/TTL from its own settings (monkeypatch `agentkernel.core.config.AKConfig.get` with a `FakeCfg` exposing `session.type` + per-backend blocks + the nested `session.initiation` block, per the established pattern); `session.initiation.store` overrides the pairing; `test_store_builders.py` covers `build_mapping_store` (default pairing, BYO dotted path, precedence, non-MappingStore rejection) and that a session store omitting the abstract `get_mapping_store()` raises `TypeError` as the builder constructs it; `InitiationManager.get()` returns `None` when `conversation_initiation_enabled` is False and a manager when True (`InitiationManager.reset()` in an autouse fixture, mirroring thread-manager tests).
+- `test_mapping_store.py` — `InMemoryMappingStore` bidirectional save/get/clear and save-if-absent idempotency; each session backend pairs itself with the matching mapping store and derives namespace/TTL from its own settings (monkeypatch `agentkernel.core.config.AKConfig.get` with a `FakeCfg` exposing `session.type` + per-backend blocks + the nested `session.initiation` block, per the established pattern); `session.initiation.store` overrides the pairing; `test_store_builders.py` covers `build_mapping_store` (default pairing, BYO dotted path, precedence, non-MappingStore rejection) and that a session store omitting the abstract `get_mapping_store()` raises `TypeError` as the builder constructs it; `InitiationManager.get()` returns `None` when `conversation_initiation_enabled` is False and a manager when True (`InitiationManager.reset()` in an autouse fixture, mirroring thread-manager tests). `TestExtraIsolation` pins the extras contract from §New package: with `redis` blocked in `sys.modules` (`monkeypatch.setitem`, the idiom used by `test_guardrail.py`/`test_trace.py`), `agentkernel.core.session.valkey` still imports and never pulls in `core.util.driver.redis`; the purge uses `monkeypatch.delitem` so the original module objects are restored on teardown, since other tests assert class identity against their own top-level imports.
 - `test_initiation_tool.py` — using `DummyAgent`/`DummyRunner` and an in-memory runtime: the tool creates the session in the store, runs the agent (DummyRunner reply becomes the outbound message, session history persisted), and dispatches an `InitiationMessage` with `user_id` defaulting to `target`; missing dispatcher / missing target / missing prompt return error text without raising.
 - `test_initiation_response_handlers.py` — the riskiest consumers: for `ResponseHandler` (Lambda record shape) and `ECSOutputConsumer` (boto3 record shape), an `INITIATION`-attributed record hitting the **stock** handler is logged and dropped — no response-store write, no broadcast, no raise (same for `on_permanent_failure`); a **subclass** override following the documented contract (parse → fake send → `complete()`) binds the mapping (in-memory store via monkeypatched config) and creates the AK thread + first assistant message when `thread` config is present (`ConversationThreadManager.reset()` + `InitiationManager.reset()` between cases); `complete()` swallows a failing mapping store (logs, never raises); a `CHAT_RESPONSE`-attributed record still follows the existing store/broadcast path (patch targets unchanged from `test_akresponsehandler.py`: `ResponseDBHandler`, `BaseWSHandler`, `SQSHandler.get_message_custom_attributes` inputs).
 - `test_queue_request_handler_resolve.py` — `POST /api/v1/chat` rewrites a mapped `session_id` before enqueue and returns the resolved id (patch `get_queue_handler`/`get_response_store` fakes); identity fallback when unmapped or disabled.

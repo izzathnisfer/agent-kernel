@@ -75,5 +75,5 @@ output "rest_service_task_role_arn" {
 
 output "session_id_mapping_table_name" {
   description = "Name of the DynamoDB Session ID Mapping table (agent-initiated conversations)"
-  value       = var.conversation_initiation ? aws_dynamodb_table.session_id_mapping[0].name : null
+  value       = var.create_dynamodb_memory_table ? aws_dynamodb_table.session_id_mapping[0].name : null
 }

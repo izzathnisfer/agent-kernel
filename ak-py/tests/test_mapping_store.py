@@ -1,14 +1,14 @@
+import importlib
+import sys
 from unittest.mock import MagicMock
 
 import pytest
 
 from agentkernel.core.initiation import InitiationManager, InitiationMessage, SessionIdResolver
 from agentkernel.core.session.base import MappingStore, SessionStore
-from agentkernel.core.session.in_memory import InMemorySessionStore
-from agentkernel.core.session.mapping.dynamodb import PARTITION_KEY, VALUE_ATTRIBUTE, DynamoDBMappingStore
-from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
-from agentkernel.core.session.mapping.redis import RedisMappingStore
-from agentkernel.core.session.redis import RedisSessionStore
+from agentkernel.core.session.dynamodb import MAPPING_PARTITION_KEY, MAPPING_VALUE_ATTRIBUTE, DynamoDBMappingStore
+from agentkernel.core.session.in_memory import InMemoryMappingStore, InMemorySessionStore
+from agentkernel.core.session.redis import RedisMappingStore, RedisSessionStore
 
 
 @pytest.fixture(autouse=True)
@@ -152,7 +152,7 @@ class TestSessionStoreProvenance:
 
     def test_byo_dotted_path_overrides_the_paired_backend(self, monkeypatch):
         """session.initiation.store wins even when the session backend has its own pairing."""
-        path = "agentkernel.core.session.mapping.in_memory.InMemoryMappingStore"
+        path = "agentkernel.core.session.in_memory.InMemoryMappingStore"
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis", initiation_store=path)))
         assert isinstance(RedisSessionStore().get_mapping_store(), InMemoryMappingStore)
 
@@ -204,11 +204,11 @@ class TestDynamoDBStoreOperations:
     def test_save_puts_both_items(self, store):
         store.save("session-1", "thread-1")
         put_items = [call.args[0] for call in store._driver.put.call_args_list]
-        assert {PARTITION_KEY: "thread#thread-1", VALUE_ATTRIBUTE: "session-1"} in put_items
-        assert {PARTITION_KEY: "session#session-1", VALUE_ATTRIBUTE: "thread-1"} in put_items
+        assert {MAPPING_PARTITION_KEY: "thread#thread-1", MAPPING_VALUE_ATTRIBUTE: "session-1"} in put_items
+        assert {MAPPING_PARTITION_KEY: "session#session-1", MAPPING_VALUE_ATTRIBUTE: "thread-1"} in put_items
 
     def test_get_extracts_value_attribute(self, store):
-        store._driver.get.return_value = {PARTITION_KEY: "thread#thread-1", VALUE_ATTRIBUTE: "session-1"}
+        store._driver.get.return_value = {MAPPING_PARTITION_KEY: "thread#thread-1", MAPPING_VALUE_ATTRIBUTE: "session-1"}
         assert store.get_session_id("thread-1") == "session-1"
         store._driver.get.assert_called_with("thread#thread-1")
 
@@ -348,3 +348,48 @@ class TestInitiationMessage:
         initiation = make_initiation()
         assert initiation.type == "initiation"
         assert initiation.target_details is None
+
+
+_REDIS_LIKE_MODULES = (
+    "agentkernel.core.session.valkey",
+    "agentkernel.core.session.redis",
+    "agentkernel.core.util.driver.redis",
+)
+
+
+class TestExtraIsolation:
+    """
+    ``redis`` and ``valkey`` are separate optional extras, so the Valkey backend must import
+    without the ``redis`` package installed. The shared ``_RedisLikeMappingStore`` therefore
+    lives in ``session/redis_like.py`` (client-library-free) rather than in ``session/redis.py``,
+    whose ``RedisDriver`` import pulls in ``redis``.
+
+    Regression guard: an earlier revision had ``session/valkey.py`` import the shared base from
+    ``session/redis.py``, which made ``agentkernel[valkey]`` unusable. The whole suite stayed
+    green because the dev venv installs every extra — hence the explicit ``sys.modules`` block.
+    """
+
+    @pytest.fixture
+    def redis_extra_missing(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "redis", None)  # simulate the redis extra not installed
+        # delitem, not a raw sys.modules.pop: monkeypatch restores the original module objects on
+        # teardown. A pop would leave the re-imported copies in place, and tests asserting class
+        # identity against their own top-level import would then fail (tests/test_runtime.py:100).
+        for name in _REDIS_LIKE_MODULES:
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+    def test_valkey_backend_imports_without_the_redis_extra(self, redis_extra_missing):
+        module = importlib.import_module("agentkernel.core.session.valkey")
+
+        assert module.ValkeySessionStore is not None
+        # Nothing may pull the redis driver (and therefore `import redis`) back in transitively.
+        assert "agentkernel.core.util.driver.redis" not in sys.modules
+
+    def test_shared_base_is_the_same_class_for_both_backends(self):
+        """The split must not fork the implementation — both backends share one base."""
+        from agentkernel.core.session.redis import RedisMappingStore as RedisMapping
+        from agentkernel.core.session.redis_like import _RedisLikeMappingStore
+        from agentkernel.core.session.valkey import ValkeyMappingStore
+
+        assert issubclass(RedisMapping, _RedisLikeMappingStore)
+        assert issubclass(ValkeyMappingStore, _RedisLikeMappingStore)

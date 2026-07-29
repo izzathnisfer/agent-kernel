@@ -366,23 +366,18 @@ auto-enable), see `docs/docs/advanced/conversation-initiation.md`.
 > to the agent and the stock handler drops the message. Set `session.initiation.enabled: false`
 > in `config.yaml` if you do not want the tool advertised yet.
 
-Only set `conversation_initiation`
-below when the session store is DynamoDB (`create_dynamodb_memory_table = true`); other backends
-(Redis, Valkey, ...) need no extra AWS resource since the mapping rides the same session store:
+When the session store is DynamoDB (`create_dynamodb_memory_table = true`), the module
+automatically provisions the paired Session ID Mapping table alongside it — there is no separate
+flag to set. Other backends (Redis, Valkey, ...) need no extra AWS resource since the mapping
+rides the same session store.
 
-```hcl
-conversation_initiation = true
-```
-
-Creates a DynamoDB table named after the session store's own with an `-id-mapping` suffix
+This creates a DynamoDB table named after the session store's own with an `-id-mapping` suffix
 (`<product>-<env>-<module>-session_store-id-mapping`), partition key `map_key` (S), TTL attribute
 `expiry_time`, with read/write IAM grants for the REST/IO service task role only — the Agent
 Runner is messaging-platform blind and never touches the table.
 
 The name is derived rather than fixed because the application looks the table up as
-`{session.dynamodb.table_name}-id-mapping`; the two must agree or every lookup misses. Setting
-`conversation_initiation = true` without `create_dynamodb_memory_table = true` therefore fails
-validation.
+`{session.dynamodb.table_name}-id-mapping`; the two must agree or every lookup misses.
 
 ## Auto Scaling
 
@@ -504,7 +499,7 @@ output "rest_service_name"          # ECS REST service name
 output "agent_runner_service_name"  # ECS agent runner service name (queue mode)
 output "input_queue_url"            # Input queue URL (queue mode)
 output "output_queue_url"           # Output queue URL (queue mode)
-output "session_id_mapping_table_name" # Session ID Mapping table name (conversation_initiation)
+output "session_id_mapping_table_name" # Session ID Mapping table name (set when create_dynamodb_memory_table = true)
 output "vpc_id"                     # VPC ID
 output "private_subnet_ids"         # Private subnet IDs
 

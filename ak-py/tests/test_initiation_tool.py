@@ -7,8 +7,7 @@ from agentkernel.core.initiation import InitiateConversationTool, InitiationMana
 from agentkernel.core.initiation.tool import _initiate_conversation
 from agentkernel.core.model import AgentReplyText, AgentRequestText
 from agentkernel.core.runtime import Runtime
-from agentkernel.core.session.in_memory import InMemorySessionStore
-from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
+from agentkernel.core.session.in_memory import InMemoryMappingStore, InMemorySessionStore
 from agentkernel.core.tool import SystemToolFactory, ToolContext
 
 
@@ -74,7 +73,7 @@ def make_fake_cfg(conversation_initiation_enabled=True):
                 enabled = False
 
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
-    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None)
+    FakeCfg.session.initiation = SimpleNamespace(enabled=conversation_initiation_enabled, store=None, agents=None)
     return FakeCfg
 
 
@@ -191,6 +190,23 @@ class TestSystemToolRegistration:
     def test_not_registered_when_disabled(self, monkeypatch):
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg(conversation_initiation_enabled=False)))
         assert not any(isinstance(tool, InitiateConversationTool) for tool in SystemToolFactory.get_all())
+
+    def test_agents_list_restricts_tool_and_prompt(self, monkeypatch):
+        """session.initiation.agents limits tool attachment and prompt injection to the named
+        agents; anonymous callers (no agent context) are not filtered."""
+        cfg = make_fake_cfg()
+        cfg.session.initiation = SimpleNamespace(enabled=True, store=None, agents=["notifier"])
+        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: cfg))
+
+        assert any(isinstance(tool, InitiateConversationTool) for tool in SystemToolFactory.get_all("notifier"))
+        assert not any(isinstance(tool, InitiateConversationTool) for tool in SystemToolFactory.get_all("other"))
+        assert any(isinstance(tool, InitiateConversationTool) for tool in SystemToolFactory.get_all())  # anonymous: unfiltered
+
+        assert "initiate_conversation" in SystemToolFactory.get_system_prompt_suffix("notifier")
+        assert "initiate_conversation" not in SystemToolFactory.get_system_prompt_suffix("other")
+
+    def test_agents_list_absent_keeps_all_agents(self, enabled_cfg):
+        assert any(isinstance(tool, InitiateConversationTool) for tool in SystemToolFactory.get_all("anyone"))
 
 
 class TestLocalRESTDispatch:

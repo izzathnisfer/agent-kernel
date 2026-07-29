@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from agentkernel.core.initiation import InitiationManager
-from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
+from agentkernel.core.session.in_memory import InMemoryMappingStore
 
 
 @pytest.fixture(autouse=True)

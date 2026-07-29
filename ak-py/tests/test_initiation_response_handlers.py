@@ -6,7 +6,7 @@ import pytest
 
 from agentkernel.core.initiation import INITIATION_MESSAGE_TYPE, InitiationManager, InitiationMessage
 from agentkernel.core.model import ExecutionMode
-from agentkernel.core.session.mapping.in_memory import InMemoryMappingStore
+from agentkernel.core.session.in_memory import InMemoryMappingStore
 from agentkernel.core.thread.manager import ConversationThreadManager
 from agentkernel.core.thread.naming import ThreadNamingStrategy
 from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
