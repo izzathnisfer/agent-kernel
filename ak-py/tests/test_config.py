@@ -207,10 +207,10 @@ class TestInitiationEnabled:
 
     def test_reachable_through_the_nested_session_env_path(self, monkeypatch):
         monkeypatch.setenv("AK_SESSION__INITIATION__ENABLED", "true")
-        monkeypatch.setenv("AK_SESSION__INITIATION__STORE", "my_pkg.MyMappingStore")
+        monkeypatch.setenv("AK_SESSION__INITIATION__AGENTS", '["notifier"]')
         cfg = AKConfig()
         assert cfg.session.initiation.enabled is True
-        assert cfg.session.initiation.store == "my_pkg.MyMappingStore"
+        assert cfg.session.initiation.agents == ["notifier"]
         assert cfg.conversation_initiation_enabled is True
 
 

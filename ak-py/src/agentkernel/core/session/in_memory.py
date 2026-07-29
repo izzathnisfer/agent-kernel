@@ -2,7 +2,7 @@ import logging
 from typing import ClassVar, Optional
 
 from ..base import Session
-from .base import MappingStore, SessionStore, build_mapping_store
+from .base import MappingStore, SessionStore
 
 
 class InMemoryMappingStore(MappingStore):
@@ -64,7 +64,7 @@ class InMemorySessionStore(SessionStore):
         """
         self._sessions = {}
         self._log = logging.getLogger("ak.core.session.inmemory")
-        self._mapping = build_mapping_store(InMemoryMappingStore)
+        self._mapping = InMemoryMappingStore()
 
     def get_mapping_store(self) -> MappingStore:
         """

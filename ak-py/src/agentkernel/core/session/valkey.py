@@ -3,7 +3,7 @@ import logging
 from ..base import Session
 from ..config import AKConfig
 from ..util.driver.valkey import ValkeyDriver
-from .base import MappingStore, SessionCache, SessionStore, build_mapping_store
+from .base import MappingStore, SessionCache, SessionStore
 from .redis_like import _RedisLikeMappingStore
 from .serde import BinarySerde
 
@@ -43,7 +43,7 @@ class ValkeySessionStore(SessionStore):
             raise ValueError("session.valkey config block is required when session.type is 'valkey'")
         self._driver = ValkeyDriver(url=cfg.url, prefix=cfg.prefix, ttl=int(cfg.ttl))
         self._cache = cache
-        self._mapping = build_mapping_store(ValkeyMappingStore)
+        self._mapping = ValkeyMappingStore()
 
     def get_mapping_store(self) -> MappingStore:
         """

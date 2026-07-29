@@ -1,14 +1,9 @@
-import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from threading import RLock
 from typing import ClassVar, Optional
 
 from ..base import Session
-from ..config import AKConfig
-from ..util.factory import resolve_dotted
-
-_log = logging.getLogger("ak.core.session.mapping")
 
 
 class MappingStore(ABC):
@@ -97,33 +92,6 @@ class MappingStore(ABC):
         pass
 
 
-def build_mapping_store(default_factory: type[MappingStore]) -> MappingStore:
-    """
-    Builds the Session ID Mapping store for a session store backend.
-
-    A ``session.initiation.store`` dotted path takes precedence, letting an operator bring
-    their own MappingStore regardless of which session backend is in use; otherwise the
-    backend's own paired store is constructed. Called from each session store's constructor,
-    so a misconfigured dotted path surfaces while the session store is being built — at
-    startup — rather than on the first request that needs a mapping.
-
-    The block is read defensively because session stores are also constructed against
-    minimal stand-in configs in tests; a config that does not expose the block has no
-    bring-your-own override, which is the same outcome as leaving it unset.
-
-    :param default_factory: The MappingStore subclass paired with the calling session store.
-    :return: The bring-your-own store when configured, otherwise ``default_factory()``.
-    :raises AKConfigError: If ``session.initiation.store`` is set but does not resolve to a
-        MappingStore subclass.
-    """
-    session = getattr(AKConfig.get(), "session", None)
-    store_path = getattr(getattr(session, "initiation", None), "store", None)
-    if store_path:
-        _log.info(f"Building session id mapping store from dotted path '{store_path}'")
-        return resolve_dotted(store_path, base=MappingStore)()
-    return default_factory()
-
-
 class SessionStore(ABC):
     """
     SessionStore is the base class for session storage that allows storage and retrieval of session
@@ -174,10 +142,15 @@ class SessionStore(ABC):
 
         Abstract on purpose: every session store must supply one, so adding a backend
         without its mapping counterpart fails at class instantiation rather than silently
-        leaving agent-initiated conversations broken for whoever enables them. Built-in
-        backends construct theirs with ``build_mapping_store()`` so the two share one
-        connection, namespace and TTL; a bring-your-own store must do the same, and this
-        is a breaking change for any that predates the method.
+        leaving agent-initiated conversations broken for whoever enables them. This is also
+        the only way a mapping store is selected — there is no config key for one, because a
+        bring-your-own session store necessarily brings its own mapping store through this
+        method. It is a breaking change for any custom store that predates it.
+
+        Built-in backends construct their pair directly in ``__init__`` from the same
+        ``session.<backend>`` block, so the two always share one connection, namespace and
+        TTL. To pair a built-in session store with a custom mapping store, subclass it and
+        override this method.
 
         :return: The MappingStore paired with this session store.
         """

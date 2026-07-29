@@ -4,7 +4,7 @@ from typing import Optional
 from ..base import Session
 from ..config import AKConfig
 from ..util.driver.firestore import FirestoreDriver
-from .base import MappingStore, SessionCache, SessionStore, build_mapping_store
+from .base import MappingStore, SessionCache, SessionStore
 from .serde import BinarySerde
 
 MAPPING_VALUE_FIELD = "value"
@@ -115,7 +115,7 @@ class FirestoreSessionStore(SessionStore):
             ttl=cfg.ttl,
         )
         self._cache = cache
-        self._mapping = build_mapping_store(FirestoreMappingStore)
+        self._mapping = FirestoreMappingStore()
 
     def get_mapping_store(self) -> MappingStore:
         """

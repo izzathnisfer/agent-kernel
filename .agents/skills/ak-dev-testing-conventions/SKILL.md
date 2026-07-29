@@ -80,7 +80,7 @@ Tests live in `ak-py/tests/` and follow the naming convention `test_<module>.py`
 | `test_sandbox_broker.py` | Broker flavors (embedded/thread) end-to-end, thread loop-identity contract, wait-policy promotion + late-completion recovery, suspend/resume completion ingestion |
 | `test_sandbox_providers.py` | `local_subprocess` (real subprocess) + `docker` (mocked SDK) providers, run against the reusable `SandboxProviderContract` |
 | `test_factory.py` | Shared pluggable-backend helpers (`resolve_dotted`, `require_extra`, `AKConfigError`) in `core/util/factory.py` |
-| `test_store_builders.py` | Session/thread/multimodal/mapping store builders: fail-loud on unknown type, BYO dotted-path subclass resolution |
+| `test_store_builders.py` | Session/thread/multimodal store builders: fail-loud on unknown type, BYO dotted-path subclass resolution; mapping store arrives via `SessionStore.get_mapping_store()` (no builder of its own) |
 | `test_trace.py` | Trace factory built-in resolution, BYO dotted path, unknown-type error |
 | `test_mapping_store.py` | MappingStore backends, session-store pairing via `get_mapping_store()`, InitiationManager (resolve/bind/complete/dispatch), redis/valkey optional-extra isolation (`TestExtraIsolation`) |
 | `test_initiation_tool.py` | `initiate_conversation` system tool, SystemToolFactory gating + `session.initiation.agents` scoping, RESTAPI local dispatch |

@@ -1,9 +1,10 @@
-"""Phase-2 tests: session / thread / multimodal / mapping storage factories on the shared pattern.
+"""Phase-2 tests: session / thread / multimodal storage factories on the shared pattern.
 
 Covers the behaviour change (unknown type now fails loud instead of silently falling back to
 an in-memory default) and the bring-your-own dotted-path hatch with each surface's
 construction contract (session store gets ``cache=``, thread store is no-arg, attachment store
-gets ``session_id``, mapping store is no-arg via ``session.initiation.store``).
+gets ``session_id``). The mapping store has no factory of its own — it comes from the session
+store's abstract ``get_mapping_store()``, so a BYO mapping store arrives with a BYO session store.
 """
 
 import types
@@ -16,7 +17,7 @@ from agentkernel.core.config import AKConfig
 from agentkernel.core.multimodal.storage.base import AttachmentStore
 from agentkernel.core.multimodal.storage.in_memory import InMemoryAttachmentStore
 from agentkernel.core.multimodal.storage.storage_manager import AttachmentStorageManager
-from agentkernel.core.session.base import MappingStore, SessionStore, build_mapping_store
+from agentkernel.core.session.base import MappingStore, SessionStore
 from agentkernel.core.session.in_memory import InMemoryMappingStore, InMemorySessionStore
 from agentkernel.core.thread.store.base import ThreadStore, ThreadStoreBuilder
 from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
@@ -51,7 +52,7 @@ class _ByoSessionStore(SessionStore):
     def clear(self): ...
 
     def get_mapping_store(self):
-        return InMemoryMappingStore()
+        return _ByoMappingStore()
 
 
 class _ByoThreadStore(ThreadStore):
@@ -102,7 +103,6 @@ def test_session_builder_default_in_memory():
         cfg = Mock()
         cfg.session.type = "in_memory"
         cfg.session.cache = None
-        cfg.session.initiation.store = None
         mock_get.return_value = cfg
         assert isinstance(SessionStoreBuilder.build(), InMemorySessionStore)
 
@@ -112,7 +112,6 @@ def test_session_builder_unknown_type_fails_loud():
         cfg = Mock()
         cfg.session.type = "reids"  # typo -> no longer a silent fallback to in_memory
         cfg.session.cache = None
-        cfg.session.initiation.store = None
         mock_get.return_value = cfg
         with pytest.raises(AKConfigError):
             SessionStoreBuilder.build()
@@ -124,8 +123,6 @@ def test_session_builder_byo_dotted_path_gets_cache(monkeypatch):
         cfg = Mock()
         cfg.session.type = "byo_pkg.Store"
         cfg.session.cache = None
-        cfg.session.initiation.store = None
-        cfg.conversation_initiation_enabled = False  # this BYO store supplies no mapping store
         mock_get.return_value = cfg
         store = SessionStoreBuilder.build()
     assert isinstance(store, _ByoSessionStore)
@@ -201,45 +198,32 @@ def test_multimodal_byo_dotted_path_gets_session_id(monkeypatch):
     assert store.session_id == "sess-1"  # builder passed session_id per the multimodal contract
 
 
-# --- mapping store: build_mapping_store + the SessionStoreBuilder gate ------ #
+# --- mapping store: supplied only by the session store ---------------------- #
+#
+# There is no mapping-store config key and no builder: a bring-your-own mapping store
+# arrives with a bring-your-own session store, because get_mapping_store() is abstract.
 
 
-def test_mapping_defaults_to_the_backends_own_pairing():
+def test_builtin_session_store_supplies_its_paired_mapping_store():
     with patch.object(AKConfig, "get") as mock_get:
         cfg = Mock()
-        cfg.session.initiation.store = None
+        cfg.session.type = "in_memory"
+        cfg.session.cache = None
         mock_get.return_value = cfg
-        assert isinstance(build_mapping_store(InMemoryMappingStore), InMemoryMappingStore)
+        assert isinstance(SessionStoreBuilder.build().get_mapping_store(), InMemoryMappingStore)
 
 
-def test_mapping_byo_dotted_path(monkeypatch):
-    _patch_import(monkeypatch, "byo_pkg", types.SimpleNamespace(Store=_ByoMappingStore))
+def test_byo_session_store_brings_its_own_mapping_store(monkeypatch):
+    """The only BYO route: the custom session store returns whatever MappingStore it wants."""
+    _patch_import(monkeypatch, "byo_pkg", types.SimpleNamespace(Store=_ByoSessionStore))
     with patch.object(AKConfig, "get") as mock_get:
         cfg = Mock()
-        cfg.session.initiation.store = "byo_pkg.Store"
+        cfg.session.type = "byo_pkg.Store"
+        cfg.session.cache = None
         mock_get.return_value = cfg
-        store = build_mapping_store(InMemoryMappingStore)
-    assert isinstance(store, _ByoMappingStore)
-
-
-def test_mapping_byo_dotted_path_takes_precedence_over_the_pairing():
-    """session.initiation.store wins even when the backend supplies its own pairing."""
-    with patch.object(AKConfig, "get") as mock_get:
-        cfg = Mock()
-        cfg.session.initiation.store = "agentkernel.core.session.in_memory.InMemoryMappingStore"
-        mock_get.return_value = cfg
-        store = build_mapping_store(_ByoMappingStore)
-    assert isinstance(store, InMemoryMappingStore)
-
-
-def test_mapping_byo_dotted_path_must_be_a_mapping_store(monkeypatch):
-    _patch_import(monkeypatch, "byo_pkg", types.SimpleNamespace(NotAStore=object))
-    with patch.object(AKConfig, "get") as mock_get:
-        cfg = Mock()
-        cfg.session.initiation.store = "byo_pkg.NotAStore"
-        mock_get.return_value = cfg
-        with pytest.raises(AKConfigError):
-            build_mapping_store(InMemoryMappingStore)
+        store = SessionStoreBuilder.build()
+    assert isinstance(store, _ByoSessionStore)
+    assert isinstance(store.get_mapping_store(), _ByoMappingStore)
 
 
 class _StorelessSessionStore(SessionStore):
@@ -268,7 +252,6 @@ def test_session_builder_rejects_a_store_without_a_mapping_store(monkeypatch):
         cfg = Mock()
         cfg.session.type = "byo_sessions.Store"
         cfg.session.cache = None
-        cfg.session.initiation.store = None
         mock_get.return_value = cfg
         with pytest.raises(TypeError, match="get_mapping_store"):
             SessionStoreBuilder.build()

@@ -121,7 +121,14 @@ in agreement. Since the mapping store is the session store's companion table, it
 - **Post-review update:** `core/session/mapping/` (one file per backend) was folded one level
   further, into the paired session-store module itself — e.g. `RedisMappingStore` now lives in
   `core/session/redis.py` beside `RedisSessionStore`, not a separate `mapping/redis.py`. The
-  Redis/Valkey-shared `_RedisLikeMappingStore` moved into `core/session/redis.py` too (imported
-  by `valkey.py`), and `build_mapping_store()` moved into `core/session/base.py`. This removes the
-  `core/session/mapping/` subpackage entirely, addressing review feedback that a dotted-path
-  split between a session store and its own mapping store added indirection without benefit.
+  Redis/Valkey-shared `_RedisLikeMappingStore` moved into `core/session/redis_like.py` (a
+  client-library-free module, so a `valkey`-only install does not need the `redis` extra). This
+  removes the `core/session/mapping/` subpackage entirely, addressing review feedback that a
+  dotted-path split between a session store and its own mapping store added indirection without
+  benefit.
+- **Post-review update 2:** the `session.initiation.store` config key and `build_mapping_store()`
+  were both **removed** (amithad, `core/config.py:90`). With `get_mapping_store()` abstract, a
+  bring-your-own session store necessarily brings its own mapping store, so the key was redundant —
+  and misleading, since a BYO session store implements `get_mapping_store()` itself and would
+  silently ignore it. Each backend now constructs its pair directly, and `core/session/base.py` is
+  a pure ABC module again with no `AKConfig`/`resolve_dotted` imports.

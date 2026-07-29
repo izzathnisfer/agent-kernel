@@ -4,7 +4,7 @@ from typing import Optional
 from ..base import Session
 from ..config import AKConfig
 from ..util.driver.cosmosdb import CosmosDBDriver
-from .base import MappingStore, SessionCache, SessionStore, build_mapping_store
+from .base import MappingStore, SessionCache, SessionStore
 from .serde import BinarySerde
 
 MAPPING_ROW_KEY = "value"
@@ -108,7 +108,7 @@ class CosmosDBSessionStore(SessionStore):
             raise ValueError("AKConfig.session.cosmosdb.table_name must be set to use CosmosDBSessionStore")
         self._driver = CosmosDBDriver(connection_string=cfg.connection_string, table_name=cfg.table_name, ttl=cfg.ttl)
         self._cache = cache
-        self._mapping = build_mapping_store(CosmosDBMappingStore)
+        self._mapping = CosmosDBMappingStore()
 
     def get_mapping_store(self) -> MappingStore:
         """

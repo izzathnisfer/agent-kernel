@@ -41,7 +41,6 @@ session:
   initiation:
     enabled: true   # required for single-process REST; queue-mode auto-enables
     # agents: [notifier]   # optional: only these agents get the tool (omit = all)
-    # store: my_pkg.my_module.MyMappingStore   # optional bring-your-own (dotted path)
 ```
 
 The settings live inside `session:` because the mapping store **is** the session store's: each
@@ -66,16 +65,24 @@ With the feature enabled:
 - inbound platform messages resolve their thread id through the mapping before selecting a session;
 - response handlers recognize initiation messages (`message_type=INITIATION` queue attribute).
 
-Set `session.initiation.enabled: false` to force-disable in queue mode, or bring your own mapping store
-entirely via `session.initiation.store` (a dotted path to a `MappingStore` subclass) — which overrides
-whatever pairing the session backend would otherwise supply.
+Set `session.initiation.enabled: false` to force-disable in queue mode.
 
+There is deliberately **no config key for the mapping store** — it is always the session store's own.
 `get_mapping_store()` is abstract, so a bring-your-own session store (a dotted-path `session.type`)
-**must** implement it — Python refuses to instantiate the class otherwise, so the failure lands at
-startup with a message naming the missing method, never on a user's first message. Implement it by
-returning `build_mapping_store(<YourMappingStore>)`, or point `session.initiation.store` at a
-`MappingStore` and return that. Note this is a breaking change for a custom session store written
-before the method existed.
+**must** implement it; Python refuses to instantiate the class otherwise, so the failure lands at
+startup with a message naming the missing method, never on a user's first message. That also means a
+bring-your-own mapping store needs no separate setting: return it from your session store's
+`get_mapping_store()`. Note this is a breaking change for a custom session store written before the
+method existed.
+
+To pair one of the **built-in** session stores with a custom mapping store, subclass it and override
+the method:
+
+```python
+class MySessionStore(RedisSessionStore):
+    def get_mapping_store(self) -> MappingStore:
+        return MyMappingStore()
+```
 
 :::warning Auto-enable gives you dispatch, not delivery
 

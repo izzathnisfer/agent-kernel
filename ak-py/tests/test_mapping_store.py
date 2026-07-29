@@ -20,7 +20,7 @@ def clear_in_memory_store():
     InitiationManager.reset()
 
 
-def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = True, initiation_store: str = None, redis=True):
+def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = True, redis=True):
     """
     Build a stand-in AKConfig whose ``session`` block carries the nested ``initiation``
     sub-block the real config now uses.
@@ -55,7 +55,6 @@ def make_fake_cfg(session_type: str, conversation_initiation_enabled: bool = Tru
 
             class initiation:
                 enabled = conversation_initiation_enabled
-                store = initiation_store
 
     FakeCfg.conversation_initiation_enabled = conversation_initiation_enabled
     if not redis:
@@ -149,12 +148,6 @@ class TestSessionStoreProvenance:
         monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis", redis=False)))
         with pytest.raises(ValueError, match="session.redis"):
             RedisMappingStore()
-
-    def test_byo_dotted_path_overrides_the_paired_backend(self, monkeypatch):
-        """session.initiation.store wins even when the session backend has its own pairing."""
-        path = "agentkernel.core.session.in_memory.InMemoryMappingStore"
-        monkeypatch.setattr("agentkernel.core.config.AKConfig.get", classmethod(lambda cls: make_fake_cfg("redis", initiation_store=path)))
-        assert isinstance(RedisSessionStore().get_mapping_store(), InMemoryMappingStore)
 
 
 class TestRedisStoreOperations:

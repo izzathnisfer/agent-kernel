@@ -77,8 +77,9 @@ class _FirestoreConfig(BaseModel):
 
 
 class _SessionInitiationConfig(BaseModel):
-    """Configuration for agent-initiated conversations, whose Mapping store is provided by
-    the session store (see ``SessionStore.get_mapping_store``)."""
+    """Configuration for agent-initiated conversations. There is no mapping-store setting here:
+    the Session ID Mapping store is always the session store's own, handed out through the
+    abstract ``SessionStore.get_mapping_store``, so selecting a session store selects both."""
 
     enabled: Optional[bool] = Field(
         default=None,
@@ -86,14 +87,6 @@ class _SessionInitiationConfig(BaseModel):
         "deployments (an execution.queues input URL is configured) since that is the only case where a "
         "queue dispatcher is registered at startup, and stays disabled for single-process REST. Set "
         "explicitly to opt a REST deployment in, or to force-disable in queue mode.",
-    )
-    store: Optional[str] = Field(
-        default=None,
-        description="Dotted path to a MappingStore subclass (bring-your-own), overriding the store the "
-        "session store would otherwise pair itself with. When unset, the session store builds the "
-        "mapping store matching its own backend, sharing its connection settings; the table/collection "
-        "name or key prefix is derived from the session store's own by suffixing '-id-mapping' "
-        "(table/collection) or 'id-mapping:' (key prefix), and it reuses the session store's TTL.",
     )
     agents: Optional[list[str]] = Field(
         default=None,

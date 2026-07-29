@@ -3,7 +3,7 @@ import logging
 from ..base import Session
 from ..config import AKConfig
 from ..util.driver.redis import RedisDriver
-from .base import MappingStore, SessionCache, SessionStore, build_mapping_store
+from .base import MappingStore, SessionCache, SessionStore
 from .redis_like import _RedisLikeMappingStore
 from .serde import BinarySerde
 
@@ -43,7 +43,7 @@ class RedisSessionStore(SessionStore):
             raise ValueError("session.redis config block is required when session.type is 'redis'")
         self._driver = RedisDriver(url=cfg.url, prefix=cfg.prefix, ttl=int(cfg.ttl))
         self._cache = cache
-        self._mapping = build_mapping_store(RedisMappingStore)
+        self._mapping = RedisMappingStore()
 
     def get_mapping_store(self) -> MappingStore:
         """
