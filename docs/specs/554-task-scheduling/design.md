@@ -44,12 +44,11 @@ Four decisions shape the rest of this document:
 ```
 create/update task
   → Scheduler.upsert()
-      → write task row to task table (DynamoDB)
-      → register schedule with timer (EventBridge Scheduler, universal target
-        sqs:sendMessage): recurring (cron/rate) or one-time (at), carrying the
-        message payload and explicit FIFO attributes
+      → write task row to the task store
+      → register schedule with the timer: recurring (cron/rate) or one-time (at),
+        carrying the message payload and delivery attributes
 timer fires
-  → timer puts message on input queue (SQS)
+  → timer puts message on the input queue
   → agent runner consumes → runs the agent (normal path)
   → task table updated: last_run_at, last_run_status = COMPLETED / FAILED
 ```
@@ -57,9 +56,9 @@ timer fires
 ### Why this shape
 
 - **No leader election, no distributed lock, no dedup window.** No replica polls for due work, so
-  there is nothing for replicas to race over. The timer fires once per scheduled time. The FIFO
-  message deduplication id (`<task_id>:<scheduled_time>`) remains as a cheap safety net against
-  timer-side at-least-once delivery.
+  there is nothing for replicas to race over. The timer fires once per scheduled time, and delivery
+  is deduplicated per `(task_id, scheduled_time)` as a cheap safety net against timer-side
+  at-least-once delivery.
 - **No new execution path.** The scheduled run reuses the input queue, so it inherits the retry
   handling, DLQ, concurrency controls, guardrails, hooks and observability that already apply to
   queued requests. Nothing is bypassed.
@@ -116,14 +115,18 @@ timer fires
     There is deliberately no `mark_run_started`: only terminal outcomes are recorded, so the agent
     runner needs no task-store access or IAM grants, and a stuck run is visible from queue metrics
     instead.
-- The AWS `Scheduler` implementation registers schedules with **EventBridge Scheduler**, using a
-  **universal target** (`arn:aws:scheduler:::aws-sdk:sqs:sendMessage`) aimed at the deployment's
-  input SQS queue. The universal target is required, not a preference: the templated SQS target
-  supports only `MessageGroupId`, while the universal target's request-parameter JSON carries
-  `QueueUrl`, `MessageBody`, `MessageGroupId` **and** `MessageDeduplicationId`, with the
-  `<aws.scheduler.scheduled-time>` context attribute substituted into it at fire time.
+- Beyond the method contract, any implementation must guarantee:
+  - **At-most-once delivery per `(task_id, scheduled_time)`** — a duplicate timer-side fire is
+    suppressed before it reaches the agent runner.
+  - **Fires of the same task are serialized** — a fire does not overtake or interleave with an
+    earlier fire of the same task.
+  - **One-time registrations remove themselves after firing** — no separate cleanup process.
+  - **Schedules finer than the provider's minimum granularity are rejected at registration**, not
+    silently rounded.
 - The ABC + factory follow the existing pluggable-backend pattern (`Trace`, `ResponseStore`,
   `QueueHandler`), so a non-AWS timer can be added later without touching the API or config layer.
+  How AWS satisfies each obligation is in *AWS Implementation* below; none of it leaks above this
+  contract.
 
 ### The `TaskStore` abstraction
 
@@ -142,37 +145,31 @@ timer fires
 ### Schedule definition and timing
 
 - A schedule is one of: a cron expression, a fixed rate, or a one-time instant.
-- Minimum granularity is whatever the timer provider supports (EventBridge Scheduler: 1 minute).
-  Schedules finer than that must be rejected at create/update time, not silently rounded.
-- One-time schedules are registered with `ActionAfterCompletion=DELETE`, so EventBridge Scheduler
-  removes the registration itself after the fire — atomically, with no race against a concurrent
-  delete and no scheduler permissions needed downstream. The task row is deleted by the output
-  consumer after it records the run's outcome. The row is not kept around afterward (no indefinite
-  retention, no TTL) — for a one-time task, "did this run, when, and did it succeed" is answered
-  from logs/traces, not the task row.
+- Minimum granularity is whatever the timer provider supports; schedules finer than that are
+  rejected at create/update time (a `Scheduler` obligation — see above).
+- One-time schedules are removed automatically once they have fired: the timer registration removes
+  itself (a `Scheduler` obligation), and the task row is deleted by the output consumer after it
+  records the run's outcome. The row is not kept around afterward (no indefinite retention, no
+  TTL) — for a one-time task, "did this run, when, and did it succeed" is answered from
+  logs/traces, not the task row.
 
 ### Message payload
 
 - The message registered with the timer is a standard input-queue body (`prompt`, `agent`), plus
-  scheduling metadata: `task_id`, `scheduled_time` (substituted from
-  `<aws.scheduler.scheduled-time>` at fire time), the conversation mode and rotation period, and
-  the owning identity. The payload carries the session *policy*, not a final `session_id` — the
-  schedule payload is a static template, so the agent runner derives the session id at consume
-  time (see *Conversation / session handling*).
-- FIFO attributes, set explicitly via the universal target: `message_group_id` = `task_id` —
-  stable across fires regardless of conversation mode, and it serializes concurrent fires of the
-  same task; `message_deduplication_id` = `<task_id>:<scheduled_time>`.
+  scheduling metadata: `task_id`, `scheduled_time` (stamped by the timer at fire time), the
+  conversation mode and rotation period, and the owning identity. The payload carries the session
+  *policy*, not a final `session_id` — the schedule payload is a static template, so the agent
+  runner derives the session id at consume time (see *Conversation / session handling*).
+- Delivery attributes: fires are grouped and serialized by `task_id` — stable across fires
+  regardless of conversation mode — and deduplicated by `<task_id>:<scheduled_time>`.
 
 ### Reliability and duplication prevention
 
 - Exactly one execution per scheduled time, with any number of replicas running. Guaranteed by the
-  timer firing once, backed by the FIFO deduplication id.
+  timer firing once, backed by the `Scheduler`'s at-most-once delivery obligation.
 - No leader server and no distributed lock is required — by construction, not by configuration.
 - Failures after the message reaches the queue are handled by the existing queue retry policy and
   DLQ. A run that exhausts retries is recorded as `FAILED` on the task row.
-- Accepted edge case: SQS's FIFO deduplication window is fixed at 5 minutes, so a timer-side retry
-  delivered later than that would not be deduplicated. Schedules are registered with
-  `MaximumEventAgeInSeconds` ≈ 300 so a retried delivery cannot outlive the dedup window.
 
 ### Missed runs
 
@@ -268,15 +265,14 @@ create-or-replace:
 - **Create / update — `PUT /api/v1/task/{task_id}`**. Body is the normal chat/run body (`prompt`,
   `agent`, ...) extended with a `schedule` object (cron / rate / one-time `at`, plus conversation
   mode and rotation period). The path param is the task's `task_id` (also its idempotency key for
-  config-defined tasks). Calls `Scheduler.upsert(...)`: the task row is written and the EventBridge
-  Scheduler registration is created or replaced, so the next fire reflects the new
-  schedule/prompt/agent. The caller's resolved identity is stamped as the task owner and cannot be
+  config-defined tasks). Calls `Scheduler.upsert(...)`: the task row is written and the timer
+  registration is created or replaced, so the next fire reflects the new schedule/prompt/agent. The caller's resolved identity is stamped as the task owner and cannot be
   supplied in the body. Rejected with 409 if the task is config-defined.
 - **Read — `GET /api/v1/task`** (list, scoped to the caller's own tasks) and
   **`GET /api/v1/task/{task_id}`** (single task definition + last-run status).
-- **Delete — `DELETE /api/v1/task/{task_id}`**. Calls `Scheduler.delete(...)`: the EventBridge
-  Scheduler registration is removed first, then the task row, so a fire can never race a deletion and
-  land on a queue with no corresponding task. Rejected with 409 if the task is config-defined.
+- **Delete — `DELETE /api/v1/task/{task_id}`**. Calls `Scheduler.delete(...)`: the timer
+  registration is removed first, then the task row, so a fire can never race a deletion and land
+  on a queue with no corresponding task. Rejected with 409 if the task is config-defined.
 - All routes require the configured identity resolver (see *Ownership and identity*); update and
   delete additionally check task ownership.
 
@@ -292,6 +288,30 @@ create-or-replace:
 - Registration is gated behind the same applicability rule as the rest of scheduling (AWS, queue
   mode): the tool set is only added to an agent's toolset when scheduling is enabled for the
   deployment.
+
+## AWS Implementation
+
+How the AWS provider satisfies the contract above. Everything in this section is specific to
+EventBridge Scheduler + SQS; none of it is visible to the API, config, `TaskService` or
+reconciliation layers.
+
+### Timer registration
+
+- Schedules are registered with **EventBridge Scheduler**, using a **universal target**
+  (`arn:aws:scheduler:::aws-sdk:sqs:sendMessage`) aimed at the deployment's input SQS queue. The
+  universal target is required, not a preference: the templated SQS target supports only
+  `MessageGroupId`, while the universal target's request-parameter JSON carries `QueueUrl`,
+  `MessageBody`, `MessageGroupId` **and** `MessageDeduplicationId`, with the
+  `<aws.scheduler.scheduled-time>` context attribute substituted into it at fire time.
+- The delivery attributes map onto SQS FIFO: `MessageGroupId` = `task_id` (serialization);
+  `MessageDeduplicationId` = `<task_id>:<scheduled_time>` (at-most-once per scheduled time).
+- Minimum granularity: 1 minute, for both cron and rate expressions.
+- One-time schedules are registered with `ActionAfterCompletion=DELETE`, so EventBridge Scheduler
+  removes the registration itself after the fire — atomically, with no race against a concurrent
+  delete and no scheduler permissions needed downstream.
+- Accepted edge case: SQS's FIFO deduplication window is fixed at 5 minutes, so a timer-side retry
+  delivered later than that would not be deduplicated. Schedules are registered with
+  `MaximumEventAgeInSeconds` ≈ 300 so a retried delivery cannot outlive the dedup window.
 
 ### Deployment changes
 
