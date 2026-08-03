@@ -132,7 +132,7 @@ timer fires
 
 - The task table itself is a separate, pluggable concern from the timer, mirroring the existing
   `ResponseStore` ABC (`deployment/common/response_store.py`) and its backends
-  (`deployment/aws/core/response_store/{dynamodb,redis,valkey}.py`): a `TaskStore` ABC with
+  (`deployment/aws/core/response_store/{dynamodb.py,redis.py,valkey.py}`): a `TaskStore` ABC with
   DynamoDB, Redis and Valkey implementations.
 - The backend is not configured separately: the task store uses the **same backend type as the
   session store** (`session.type`). DynamoDB sessions → a dedicated DynamoDB task table; Redis or
