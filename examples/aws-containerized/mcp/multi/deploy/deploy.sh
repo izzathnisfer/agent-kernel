@@ -46,9 +46,36 @@ function wait_for_ecs_stable() {
 	echo "ECS services are stable and serving traffic."
 }
 
+function wait_for_endpoint() {
+	local url="$1"
+	local timeout="${2:-300}"
+	local interval="${3:-10}"
+	local deadline=$((SECONDS + timeout))
+	local status
+
+	echo "Waiting for endpoint to become ready: ${url}"
+	while ((SECONDS < deadline)); do
+		status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url" || echo "000")
+		if [[ "$status" != "000" && "$status" -lt 500 ]]; then
+			echo "Endpoint ready (HTTP ${status})"
+			return 0
+		fi
+		echo "Endpoint returned HTTP ${status}, retrying in ${interval}s..."
+		sleep "$interval"
+	done
+
+	echo "Endpoint did not become ready within ${timeout}s"
+	return 1
+}
+
 create_deployment_package $1
 
 terraform init
 terraform apply
 
-wait_for_ecs_stable
+wait_for_ecs_stable || exit 1
+
+invoke_url=$(terraform output -raw agent_invoke_url)
+wait_for_endpoint "$invoke_url" || exit 1
+mcp_url="${invoke_url/\/api\/v1\/chat//api/v1/mcp}"
+wait_for_endpoint "$mcp_url" || exit 1
