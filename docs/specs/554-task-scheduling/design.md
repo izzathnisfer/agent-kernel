@@ -11,35 +11,37 @@ Add time-triggered agent invocation to Agent Kernel.
 
 ## Problem Description
 
-Agent Kernel cannot invoke an agent on a schedule. Every existing entry point — REST
-(`/api/v1/chat`), queue-based ingestion, A2A, MCP — requires an external caller to initiate the
-request. Nothing in the system can trigger agent work on its own.
-
-Some agent work is triggered by time, not by a user or an upstream system: a recurring report, a
-periodic cleanup, a scheduled check. That work needs to run on a cron-like schedule and deliver a
-prompt to the appropriate agent with no human or calling system in the loop.
+- Agent Kernel cannot invoke an agent on a schedule: every existing entry point — REST
+  (`/api/v1/chat`), queue-based ingestion, A2A, MCP — requires an external caller to initiate the
+  request. Nothing in the system can trigger agent work on its own.
+- Some agent work is triggered by time, not by a user or an upstream system: a recurring report, a
+  periodic cleanup, a scheduled check.
+- That work needs to run on a cron-like schedule and deliver a prompt to the appropriate agent with
+  no human or calling system in the loop.
 
 ## Design Choices
 
 Four decisions shape the rest of this document:
 
-1. **AWS only.** The only implementation delivered is the AWS one: a pluggable task table
-   (DynamoDB, Redis or Valkey, following the session store type — see *The `TaskStore`
-   abstraction*), EventBridge Scheduler for the timer, SQS for delivery. Azure and GCP deployments do not get task scheduling in this version —
-   the `Scheduler` ABC exists so those can be added later, not because a second provider is being
-   written now.
-2. **Queue mode only.** Within AWS, scheduling is delivered exclusively for scalable deployments that
-   run with `queue_mode = true`: scalable serverless (Lambda) and scalable containerized (ECS).
-   Non-queue deployments (single-Lambda serverless, plain REST container, local runs) do not get
-   task scheduling in this version.
-3. **Timing is delegated to an external timer, not to an in-process poller.** A `Scheduler` ABC owns
-   the task table and the registration of schedules with a platform timer. On AWS the timer is
-   **EventBridge Scheduler**.
-4. **The timer's target is the input queue, not the agent.** When a schedule fires, the timer
-   delivers the pre-built message to the input queue (SQS). From that point the request is
-   indistinguishable from any other queued request and flows through the existing agent runner,
-   guardrails, hooks, tracing, retries and DLQ. After execution, the task table row is updated to
-   record that the run completed.
+1. **AWS only.**
+   - The only implementation delivered: a pluggable task table (DynamoDB, Redis or Valkey,
+     following the session store type — see *The `TaskStore` abstraction*), EventBridge Scheduler
+     for the timer, SQS for delivery.
+   - Azure and GCP do not get task scheduling in this version; the `Scheduler` ABC exists so those
+     can be added later, not because a second provider is being written now.
+2. **Queue mode only.**
+   - Within AWS, scheduling is delivered exclusively for scalable deployments running with
+     `queue_mode = true`: scalable serverless (Lambda) and scalable containerized (ECS).
+   - Non-queue deployments (single-Lambda serverless, plain REST container, local runs) do not get
+     task scheduling in this version.
+3. **Timing is delegated to an external timer, not to an in-process poller.**
+   - A `Scheduler` ABC owns the task table and the registration of schedules with a platform timer.
+   - On AWS the timer is **EventBridge Scheduler**.
+4. **The timer's target is the input queue, not the agent.**
+   - When a schedule fires, the timer delivers the pre-built message to the input queue (SQS).
+   - From that point the request is indistinguishable from any other queued request and flows
+     through the existing agent runner, guardrails, hooks, tracing, retries and DLQ.
+   - After execution, the task table row is updated to record that the run completed.
 
 ### Flow
 
@@ -72,8 +74,8 @@ timer fires
 - Define tasks that run on a schedule — recurring (cron or rate) or one-time (at a given instant).
 - Have those tasks automatically place a prompt for an AI agent on the input queue when due.
 - Manage scheduled tasks (create, view, update, delete) through both configuration files and an API.
-- Run a task exactly once per scheduled time, including when the deployment is running many
-  replicas.
+- Enqueue a task exactly once per scheduled time, including when the deployment is running many
+  replicas; execution then follows the existing at-least-once queue retry semantics.
 - Record each run's outcome on the task row.
 
 ## Out of Scope
@@ -103,6 +105,10 @@ timer fires
   it is detected by `execution.queues.input.url` being set — so the startup check is:
   `scheduler.enabled` with `execution.queues.input.url` unset raises `AKConfigError`. A non-queue
   deployment fails loudly, not silently.
+- **Precondition: the input queue is FIFO.** The duplication-prevention and serialization guarantees
+  below depend on it. The containerized terraform hardcodes `fifo_queue = true` and serverless
+  defaults it to `true`, but serverless exposes it as a toggle — disabling it silently breaks
+  dedup, so FIFO is stated here as an explicit requirement of enabling scheduling.
 
 ### The `Scheduler` abstraction
 
@@ -127,7 +133,7 @@ timer fires
     silently rounded.
 - The ABC + factory follow the existing pluggable-backend pattern (`Trace`, `ResponseStore`,
   `QueueHandler`), so a non-AWS timer can be added later without touching the API or config layer.
-  How AWS satisfies each obligation is in *AWS Implementation* below; none of it leaks above this
+  How AWS satisfies each obligation is in *AWS Feasibility* below; none of it leaks above this
   contract.
 
 ### The `TaskStore` abstraction
@@ -167,8 +173,11 @@ timer fires
 
 ### Reliability and duplication prevention
 
-- Exactly one execution per scheduled time, with any number of replicas running. Guaranteed by the
+- Exactly one **enqueue** per scheduled time, with any number of replicas running. Guaranteed by the
   timer firing once, backed by the `Scheduler`'s at-most-once delivery obligation.
+- After enqueue, execution follows the existing at-least-once queue semantics: a consumer crash
+  after the agent's side effects but before message deletion redelivers and re-executes the run.
+  Agents whose actions must not repeat need to be idempotent, as with any queued request today.
 - No leader server and no distributed lock is required — by construction, not by configuration.
 - Failures after the message reaches the queue are handled by the existing queue retry policy and
   DLQ. A run that exhausts retries is recorded as `FAILED` on the task row.
@@ -178,7 +187,7 @@ timer fires
 - If the timer cannot deliver (queue throttling, transient failure) it retries per its own retry
   policy and, on exhaustion, delivers to the timer's DLQ.
 - Agent Kernel does not reconstruct or replay missed fires from the task table. **This is a
-  deliberate reduction from the original requirement** for configurable catch-up of missed runs: with
+  deliberate reduction from the original requirement** (listed for sign-off in *Open Questions*) for configurable catch-up of missed runs: with
   timing delegated to infrastructure, there is no Agent Kernel process guaranteed to be awake to
   perform catch-up, and reconstructing fires would reintroduce the polling and locking this design
   removes.
@@ -190,11 +199,15 @@ timer fires
 - Each task chooses whether every run starts a fresh conversation or continues a long-running one.
   The schedule payload carries the mode and rotation period only; the **agent runner derives the
   actual `session_id` at consume time** with a small pure helper:
-  - **Per-run session** — `<task_id>:<scheduled_time>`.
-  - **Continuous session** — `<task_id>`.
-  - **Continuous with rotation** — `<task_id>:<floor(scheduled_time / rotation_period)>`; the
+  - **Per-run session** — `task:<task_id>:<scheduled_time>`.
+  - **Continuous session** — `task:<task_id>`.
+  - **Continuous with rotation** — `task:<task_id>:<floor(scheduled_time / rotation_period)>`; the
     bucket index changes only when the rotation window rolls over, so a conversation does not grow
     without bound.
+- Derived session ids carry the reserved `task:` prefix because `task_id` is client-chosen
+  (`PUT /api/v1/task/{task_id}`) and lives in the same session-id namespace as user-supplied
+  session ids — without the prefix, a user session whose id equals a task's id would share
+  conversation state with the scheduled runs.
 
 ### Output and logging
 
@@ -219,12 +232,15 @@ timer fires
   need no resolver.
 - The identity is written to the task row by the server and stamped into the timer's message payload;
   it is never read from client input, so it cannot be forged or overridden.
-- By default, scheduled task activity is kept out of the user's regular activity/conversation history.
+- Scheduled task activity is kept out of the user's regular conversation history: sessions created
+  for scheduled runs skip `ConversationThreadManager` thread auto-creation, so scheduled runs never
+  appear in the owner's thread listings. This is fixed behaviour, not configurable.
 
 ### How tasks get run
 
 - One execution path only: the timer places the message on the input queue and the existing agent
-  runner executes it. **This replaces the original two-path requirement** — the "run the agent
+  runner executes it. **This replaces the original two-path requirement** (listed for sign-off in
+  *Open Questions*) — the "run the agent
   directly inside the scheduling process" option is dropped, because in queue mode there is no
   long-lived scheduler process to run it in, and the direct path would bypass the retry and DLQ
   behaviour the queue path already provides.
@@ -280,8 +296,8 @@ create-or-replace:
 
 ### Agent-callable tool
 
-- A `SystemTool` set (mirroring the sandbox capability's `get_sandbox_tools()` /
-  `SystemToolFactory` pattern in `sandbox/tools.py`) exposes task management to the agent itself, so a
+- A `SystemTool` set (mirroring the sandbox capability's `get_sandbox_tools()` pattern in
+  `sandbox/tools.py`, built on `SystemToolFactory` in `core/tool.py`) exposes task management to the agent itself, so a
   conversation can create, update, delete or list its own scheduled tasks without a separate API call:
   `schedule_task`, `update_scheduled_task`, `delete_scheduled_task`, `list_scheduled_tasks`.
 - These tools go through the same `TaskService` as the REST routes — no parallel code path. A task
@@ -291,44 +307,47 @@ create-or-replace:
   mode): the tool set is only added to an agent's toolset when scheduling is enabled for the
   deployment.
 
-## AWS Implementation
+## AWS Feasibility
 
-How the AWS provider satisfies the contract above. Everything in this section is specific to
-EventBridge Scheduler + SQS; none of it is visible to the API, config, `TaskService` or
-reconciliation layers.
+How the AWS provider satisfies the `Scheduler` contract — only the claims a design reviewer needs
+to judge the reliability guarantees. Field-level configuration (exact target ARNs, IAM policies,
+Terraform changes) is deferred to `spec.md`. None of this is visible to the API, config,
+`TaskService` or reconciliation layers.
 
-### Timer registration
-
-- Schedules are registered with **EventBridge Scheduler**, using a **universal target**
-  (`arn:aws:scheduler:::aws-sdk:sqs:sendMessage`) aimed at the deployment's input SQS queue. The
-  universal target is required, not a preference: the templated SQS target supports only
-  `MessageGroupId`, while the universal target's request-parameter JSON carries `QueueUrl`,
-  `MessageBody`, `MessageGroupId` **and** `MessageDeduplicationId`, with the
-  `<aws.scheduler.scheduled-time>` context attribute substituted into it at fire time.
+- Schedules are registered with **EventBridge Scheduler**, delivering directly to the input SQS
+  queue via its universal target. The universal target is required, not a preference: it is the
+  only SQS target that can set both `MessageGroupId` and `MessageDeduplicationId`, and it stamps
+  the scheduled time into the payload at fire time.
 - The delivery attributes map onto SQS FIFO: `MessageGroupId` = `task_id` (serialization);
-  `MessageDeduplicationId` = `<task_id>:<scheduled_time>` (at-most-once per scheduled time).
+  `MessageDeduplicationId` = `<task_id>:<scheduled_time>` (at-most-once per scheduled time). No
+  queue changes: the dedup id is set explicitly, so content-based deduplication stays off and
+  existing chat traffic is untouched.
 - Minimum granularity: 1 minute, for both cron and rate expressions.
-- One-time schedules are registered with `ActionAfterCompletion=DELETE`, so EventBridge Scheduler
-  removes the registration itself after the fire — atomically, with no race against a concurrent
-  delete and no scheduler permissions needed downstream.
+- One-time schedules delete their own registration after firing (`ActionAfterCompletion=DELETE`) —
+  atomically, with no race against a concurrent delete and no scheduler permissions needed
+  downstream.
 - Accepted edge case: SQS's FIFO deduplication window is fixed at 5 minutes, so a timer-side retry
-  delivered later than that would not be deduplicated. Schedules are registered with
-  `MaximumEventAgeInSeconds` ≈ 300 so a retried delivery cannot outlive the dedup window.
+  delivered later than that would not be deduplicated. Schedules cap event age at ~300 s so a
+  retried delivery cannot outlive the dedup window.
+- Per supported target, the `ak-deployment` modules gain: a task table following the session store
+  type (dedicated DynamoDB table, or a separate table/keyspace on the existing Redis/Valkey
+  cluster — no new infrastructure); an EventBridge Scheduler schedule group per deployment (for
+  namespacing and destroy-time cleanup); an execution role allowing the timer to send to the input
+  queue; and the IAM grants for task-table and scheduler access (enumerated in `spec.md`).
 
-### Deployment changes
+## Open Questions
 
-Per supported target, the `ak-deployment` modules gain:
+Two deliberate reductions from the original requirements in issue #554 need explicit sign-off
+rather than implicit approval with the rest of the design:
 
-- A task table following the session store type: a dedicated DynamoDB table when sessions are on
-  DynamoDB; a separate table/keyspace on the existing cluster when sessions are on Redis/Valkey
-  (no new infrastructure).
-- An EventBridge Scheduler **schedule group** per deployment, namespacing its schedules and giving
-  destroy-time bulk cleanup.
-- A Scheduler **execution role** with `sqs:SendMessage` on the input queue.
-- IAM: the REST service and the agent runner get scheduler CRUD (`CreateSchedule`,
-  `UpdateSchedule`, `DeleteSchedule`, `GetSchedule`) plus `iam:PassRole` on the execution role and
-  task-table read/write — the runner needs this for the agent-callable tools. The output consumer /
-  response handler gets task-table write only: one-time registrations delete themselves via
-  `ActionAfterCompletion`, so no scheduler permissions are needed there.
-- No queue changes: the universal target sets the FIFO deduplication id explicitly, so
-  content-based deduplication stays off and existing chat traffic is untouched.
+1. **Configurable catch-up of missed runs is dropped** (see *Missed runs*). The original
+   requirement asked for configurable catch-up; this design delegates missed-fire recovery entirely
+   to the timer's retry policy and DLQ. Proposed resolution: accept the reduction — with timing
+   delegated to infrastructure there is no Agent Kernel process guaranteed to be awake to perform
+   catch-up, recurring tasks self-heal at the next fire, and reconstructing fires would reintroduce
+   the polling and locking this design removes.
+2. **The direct in-process execution path is dropped** (see *How tasks get run*). The original
+   requirement described two execution paths — via the queue, or directly inside the scheduling
+   process; this design ships only the queue path. Proposed resolution: accept the reduction — in
+   queue mode there is no long-lived scheduler process to host a direct run, and the direct path
+   would bypass the retry/DLQ behaviour the queue path provides.
