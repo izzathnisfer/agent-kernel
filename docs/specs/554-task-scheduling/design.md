@@ -1,11 +1,13 @@
 # #554: Agent Kernel Task Scheduling
 
-Add time-triggered agent invocation to Agent Kernel. A scheduled task is stored in a task table and
-registered with an external **timer** service; when the timer fires it places a normal agent message
-onto the existing **input queue**, and the existing agent runner consumes and executes it exactly as
-it would any other queued request. Scheduling is therefore only available in **queue-mode scalable
-AWS deployments** — scalable serverless (Lambda) and scalable containerized (ECS). **AWS is the only
-cloud implemented in this version**; Azure and GCP are not covered.
+Add time-triggered agent invocation to Agent Kernel.
+
+- Store a scheduled task in a task table and register it with an external **timer** service.
+- When the timer fires, it enqueues a normal agent message onto the existing **input queue**.
+- The existing agent runner consumes and executes it exactly as it would any other queued request.
+- Availability (this version):
+  - **AWS only**; Azure and GCP are not covered.
+  - **Queue-mode scalable AWS deployments only** (scalable serverless Lambda and scalable containerized ECS).
 
 ## Problem Description
 
