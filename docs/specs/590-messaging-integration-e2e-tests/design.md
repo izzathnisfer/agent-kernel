@@ -22,8 +22,9 @@ agent's real reply back from the platform.
   (ECS + HTTPS API Gateway via VPC link), with two custom `gateway_endpoints` exposing
   `/slack/events` and `/telegram/webhook`. Webhook URLs are terraform outputs. Secrets live in a
   gitignored `e2e/app/.env` that `deploy.sh` loads and exports as `TF_VAR_*`.
-- **Test harness** (`e2e/tests/`): plain pytest, run **manually on demand**. Credentials come from
-  env vars (same mechanism as existing e2e tests); tests skip when creds are missing.
+- **Test harness** (`e2e/tests/`): plain pytest, run by the `e2e-messaging` job in the weekly
+  integration test workflow (schedule + manual dispatch) or locally on demand. Credentials come
+  from env vars (same mechanism as existing e2e tests); tests skip when creds are missing.
   - Slack: send as a real user via a user token (`xoxp-`) — required because the handler reads
     `body["user"]`, absent on bot-authored messages — then poll `conversations.replies` for the
     bot's threaded reply.
@@ -43,7 +44,7 @@ agent's real reply back from the platform.
 
 ## Non-goals
 
-- No CI/nightly wiring — manual on-demand only.
+- No per-PR/nightly wiring — weekly schedule plus manual dispatch only.
 - No content/quality assertions on agent replies.
 - Does not replace the previously drafted in-process nightly send tests (cheap outbound-only
   coverage, no deployment); that remains a possible complementary follow-up.

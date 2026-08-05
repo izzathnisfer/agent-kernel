@@ -62,17 +62,19 @@ often as needed.
 
 ### 3. Deploy to AWS ECS
 
-The primary deploy path is the **E2E Messaging Deploy** GitHub Actions workflow
-(`.github/workflows/e2e-deploy.yaml`, manual `workflow_dispatch`). It must run on a Linux
-runner: the container image vendors Python dependencies at build time, and building from
-a Mac ships macOS native extensions that crash the linux/amd64 container.
+The primary deploy path is the `e2e-messaging` job in the **Weekly Integration Tests**
+workflow (`.github/workflows/integration-test-weekly.yaml` — scheduled weekly, and
+manually triggerable via `workflow_dispatch`). It must run on a Linux runner: the
+container image vendors Python dependencies at build time, and building from a Mac ships
+macOS native extensions that crash the linux/amd64 container.
 
 One-time: add these secrets to the repo's `ci-tests` environment (Settings → Environments
 → ci-tests): `E2E_SLACK_BOT_TOKEN`, `E2E_SLACK_SIGNING_SECRET`, `E2E_TELEGRAM_BOT_TOKEN`,
-`E2E_TELEGRAM_WEBHOOK_SECRET` (`OPENAI_API_KEY` already exists). Then run the workflow
-from the Actions tab (choose `plan` to preview, `apply` to deploy). The job waits for the
-ECS service to stabilize, probes the deployed webhook endpoint, and prints the webhook
-URLs in the run summary.
+`E2E_TELEGRAM_WEBHOOK_SECRET` (`OPENAI_API_KEY` already exists). The job applies the
+terraform in place (the deployment is long-lived — no destroy step, so the API Gateway
+URL and the Slack Event Subscriptions registration stay stable), waits for the ECS
+service to stabilize, probes the deployed webhook endpoint, re-registers the Telegram
+webhook, and runs the test suite.
 
 Terraform state is remote (`backend.tf` → the shared dev state bucket), so local applies
 with `deploy/deploy.sh` (+ `app/.env`, see `.env.example`) operate on the same deployment
@@ -97,12 +99,12 @@ existing VPC, set `vpc_id` and `private_subnet_ids`; otherwise the module create
 
 ## Running the tests
 
-**Via GitHub Actions (default):** the E2E Messaging Deploy workflow's `test` job runs
-automatically after every `apply` — it registers the Telegram webhook and runs the full
-pytest suite on the runner. It needs these in the `ci-tests` environment, in addition to
-the deploy secrets above: secrets `E2E_SLACK_USER_TOKEN`, `E2E_TELEGRAM_API_ID`,
-`E2E_TELEGRAM_API_HASH`, `E2E_TELEGRAM_SESSION`; variables `E2E_SLACK_CHANNEL_ID`,
-`E2E_TELEGRAM_BOT_USERNAME`.
+**Via GitHub Actions (default):** the `e2e-messaging` job in the Weekly Integration
+Tests workflow deploys, registers the Telegram webhook, and runs the full pytest suite —
+weekly on schedule, or on demand via workflow_dispatch. It needs these in the `ci-tests`
+environment, in addition to the deploy secrets above: secrets `E2E_SLACK_USER_TOKEN`,
+`E2E_TELEGRAM_API_ID`, `E2E_TELEGRAM_API_HASH`, `E2E_TELEGRAM_SESSION`; variables
+`E2E_SLACK_CHANNEL_ID`, `E2E_TELEGRAM_BOT_USERNAME`.
 
 **Locally:**
 
