@@ -37,10 +37,14 @@ agent's real reply back from the platform.
 
 ## Scope
 
-- First cut: **Slack + Telegram**. WhatsApp/Messenger/Instagram/Gmail follow the same pattern once
-  sender accounts/numbers exist.
+- Covered: **Slack + Telegram + Gmail**. WhatsApp/Messenger/Instagram follow the same pattern once
+  sender accounts/numbers exist (with a weaker no-read-back assertion for the Meta platforms).
+- Gmail: polling-based (no webhook route); the app starts the poll loop in a background thread.
+  Two Gmail accounts (bot + tester — send-to-self would loop); OAuth token.pickle is generated
+  interactively once and injected base64 via env; sender filter restricts processing to the
+  tester address.
 - Requester supplies the real accounts: Slack app + tester user token + channel, Telegram bot +
-  tester user's MTProto credentials.
+  tester user's MTProto credentials, Google OAuth client + two Gmail accounts.
 
 ## Non-goals
 

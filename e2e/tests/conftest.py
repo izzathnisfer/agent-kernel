@@ -1,6 +1,7 @@
 import os
 
 import pytest
+
 REPLY_TIMEOUT_SECONDS = 180
 POLL_INTERVAL_SECONDS = 5
 

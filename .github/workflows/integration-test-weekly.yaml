@@ -17,6 +17,11 @@ on:
         required: false
         type: boolean
         default: false
+      provision_e2e_messaging:
+        description: 'Provision Or Refresh e2e Messaging Deployment'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   setup:
@@ -331,7 +336,8 @@ jobs:
             ${{ matrix.path }}/**/pytest-report.xml
           retention-days: 30
 
-  e2e-messaging:
+  e2e-messaging-deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.provision_e2e_messaging
     runs-on: ubuntu-latest
     environment: ci-tests
     defaults:
@@ -380,23 +386,64 @@ jobs:
           TF_VAR_slack_signing_secret: ${{ secrets.E2E_SLACK_SIGNING_SECRET }}
           TF_VAR_telegram_bot_token: ${{ secrets.E2E_TELEGRAM_BOT_TOKEN }}
           TF_VAR_telegram_webhook_secret: ${{ secrets.E2E_TELEGRAM_WEBHOOK_SECRET }}
+          TF_VAR_gmail_client_id: ${{ secrets.E2E_GMAIL_CLIENT_ID }}
+          TF_VAR_gmail_client_secret: ${{ secrets.E2E_GMAIL_CLIENT_SECRET }}
+          TF_VAR_gmail_token_b64: ${{ secrets.E2E_GMAIL_BOT_TOKEN_B64 }}
+          TF_VAR_gmail_sender_filter: ${{ vars.E2E_GMAIL_TESTER_ADDRESS }}
         run: |
           terraform init -input=false
           terraform apply -input=false -auto-approve
 
-      - name: Wait for ECS service and probe endpoint
-        working-directory: e2e/app/deploy
+      - name: Wait for ECS service to stabilize
         run: |
           cluster="ak-e2e-dev-messaging"
           services=$(aws ecs list-services --cluster "$cluster" --region us-east-2 --query 'serviceArns' --output text)
           aws ecs wait services-stable --cluster "$cluster" --services $services --region us-east-2
+  e2e-messaging-test:
+    needs: [e2e-messaging-deploy]
+    if: always() && (needs.e2e-messaging-deploy.result == 'success' || needs.e2e-messaging-deploy.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: ci-tests
+    defaults:
+      run:
+        shell: bash -e {0}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID_DEV }}:role/${{ vars.AWS_ROLE_NAME }}
+          aws-region: us-east-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Read webhook URL and probe endpoint
+        id: webhook
+        working-directory: e2e/app/deploy
+        run: |
+          terraform init -input=false
           url=$(terraform output -raw telegram_webhook_url)
+          echo "telegram_webhook_url=$url" >> "$GITHUB_OUTPUT"
           code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$url" -H "Content-Type: application/json" -d '{}')
           echo "POST $url -> HTTP $code"
           # 200 (no webhook secret) or 403 (secret enforced) both prove a healthy container;
           # 503 means no healthy ECS task behind the ALB.
           if [[ "$code" == "503" || "$code" == "500" ]]; then
-            echo "e2e messaging service is not healthy" >&2
+            echo "e2e messaging service is not healthy — dispatch this workflow with provision_e2e_messaging enabled to (re)deploy it" >&2
             exit 1
           fi
 
@@ -411,7 +458,7 @@ jobs:
           E2E_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.E2E_TELEGRAM_WEBHOOK_SECRET }}
         run: |
           uv run python scripts/set_telegram_webhook.py \
-            --url "$(terraform -chdir=../app/deploy output -raw telegram_webhook_url)"
+            --url "${{ steps.webhook.outputs.telegram_webhook_url }}"
 
       - name: Run e2e messaging tests
         working-directory: e2e/tests
@@ -423,4 +470,6 @@ jobs:
           E2E_TELEGRAM_API_HASH: ${{ secrets.E2E_TELEGRAM_API_HASH }}
           E2E_TELEGRAM_SESSION: ${{ secrets.E2E_TELEGRAM_SESSION }}
           E2E_TELEGRAM_BOT_USERNAME: ${{ vars.E2E_TELEGRAM_BOT_USERNAME }}
+          E2E_GMAIL_TESTER_TOKEN_B64: ${{ secrets.E2E_GMAIL_TESTER_TOKEN_B64 }}
+          E2E_GMAIL_BOT_ADDRESS: ${{ vars.E2E_GMAIL_BOT_ADDRESS }}
         run: uv run pytest -v -rs

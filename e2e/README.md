@@ -7,9 +7,9 @@ reply is read back from the platform. This covers the full transport layer (API 
 webhook routing, Slack signature verification, Telegram secret token) that in-process
 tests cannot.
 
-Current coverage: **Slack** and **Telegram**. The harness is designed so further
-platforms (WhatsApp, Messenger, Instagram, Gmail) can be added as senders/readers become
-available.
+Current coverage: **Slack**, **Telegram**, and **Gmail**. The harness is designed so
+further platforms (WhatsApp, Messenger, Instagram) can be added as senders/readers
+become available.
 
 ## Layout
 
@@ -60,11 +60,41 @@ often as needed.
 4. Open a chat with the bot from the tester account and send `/start` once (Telegram
    only lets bots message users who initiated a conversation).
 
+### 2b. Gmail (optional)
+
+Needs **two** Gmail accounts: the bot account (the deployment polls its inbox and
+replies) and a tester account (the test sends from it and reads the reply). Send-to-self
+cannot work — the bot would reply to its own replies in a loop.
+
+1. In [Google Cloud console](https://console.cloud.google.com): create a project, enable
+   the **Gmail API**, configure the OAuth consent screen, and create an OAuth client of
+   type **Desktop app** — note the client ID and secret.
+   - Add both Gmail addresses as test users, and **set the consent screen's publishing
+     status to "In production"** — tokens minted while in "Testing" status expire after
+     7 days, which silently kills the deployment's Gmail auth.
+2. Generate a token for each account (browser opens — pick the right account each time):
+
+   ```bash
+   cd e2e/tests
+   E2E_GMAIL_CLIENT_ID=... E2E_GMAIL_CLIENT_SECRET=... uv run python scripts/gmail_login.py
+   ```
+
+   - Bot account's output → `GMAIL_TOKEN_B64` in `app/.env` (and CI secret
+     `E2E_GMAIL_BOT_TOKEN_B64`)
+   - Tester account's output → `E2E_GMAIL_TESTER_TOKEN_B64` (test-side env / CI secret)
+3. Set `GMAIL_SENDER_FILTER` to the tester's address so the bot ignores stray mail, and
+   use a fresh/dedicated bot inbox — on startup the handler processes **all unread
+   INBOX mail** passing the filter.
+
+The Gmail integration is optional: when its variables are empty the deployed app runs
+Slack + Telegram only.
+
 ### 3. Deploy to AWS ECS
 
-The primary deploy path is the `e2e-messaging` job in the **Weekly Integration Tests**
-workflow (`.github/workflows/integration-test-weekly.yaml` — scheduled weekly, and
-manually triggerable via `workflow_dispatch`). It must run on a Linux runner: the
+The primary deploy path is the `e2e-messaging-deploy` job in the **Weekly Integration
+Tests** workflow (`.github/workflows/integration-test-weekly.yaml`) — dispatch it
+manually with the `provision_e2e_messaging` input enabled. It must run on a Linux
+runner: the
 container image vendors Python dependencies at build time, and building from a Mac ships
 macOS native extensions that crash the linux/amd64 container.
 
@@ -99,12 +129,15 @@ existing VPC, set `vpc_id` and `private_subnet_ids`; otherwise the module create
 
 ## Running the tests
 
-**Via GitHub Actions (default):** the `e2e-messaging` job in the Weekly Integration
-Tests workflow deploys, registers the Telegram webhook, and runs the full pytest suite —
-weekly on schedule, or on demand via workflow_dispatch. It needs these in the `ci-tests`
-environment, in addition to the deploy secrets above: secrets `E2E_SLACK_USER_TOKEN`,
-`E2E_TELEGRAM_API_ID`, `E2E_TELEGRAM_API_HASH`, `E2E_TELEGRAM_SESSION`; variables
-`E2E_SLACK_CHANNEL_ID`, `E2E_TELEGRAM_BOT_USERNAME`.
+**Via GitHub Actions (default):** the `e2e-messaging-test` job in the Weekly Integration
+Tests workflow probes the deployment, registers the Telegram webhook, and runs the full
+pytest suite — weekly on schedule, or on demand via workflow_dispatch. Deployment is a
+separate, optional job (`e2e-messaging-deploy`) that runs only when the workflow is
+dispatched with `provision_e2e_messaging` enabled; scheduled runs test the existing
+deployment as-is. The tests need these in the `ci-tests` environment, in addition to the
+deploy secrets above: secrets `E2E_SLACK_USER_TOKEN`, `E2E_TELEGRAM_API_ID`,
+`E2E_TELEGRAM_API_HASH`, `E2E_TELEGRAM_SESSION`; variables `E2E_SLACK_CHANNEL_ID`,
+`E2E_TELEGRAM_BOT_USERNAME`.
 
 **Locally:**
 
@@ -159,6 +192,9 @@ environment variables.
 | `E2E_TELEGRAM_SESSION` | tests | Telethon StringSession of the tester account |
 | `E2E_TELEGRAM_BOT_USERNAME` | tests | Deployed bot's username |
 | `E2E_TELEGRAM_BOT_TOKEN` / `E2E_TELEGRAM_WEBHOOK_SECRET` | webhook script | One-time Telegram webhook registration |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_TOKEN_B64` / `GMAIL_SENDER_FILTER` | deploy (`app/.env`) | Bot Gmail account OAuth + sender allowlist (CI: `E2E_GMAIL_CLIENT_ID`, `E2E_GMAIL_CLIENT_SECRET`, `E2E_GMAIL_BOT_TOKEN_B64`, variable `E2E_GMAIL_TESTER_ADDRESS`) |
+| `E2E_GMAIL_TESTER_TOKEN_B64` | tests | Tester Gmail account token (base64 pickle) |
+| `E2E_GMAIL_BOT_ADDRESS` | tests | Bot Gmail address the deployment polls (CI: variable) |
 
 ## Troubleshooting
 

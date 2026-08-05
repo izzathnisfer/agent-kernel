@@ -12,6 +12,10 @@ load_env() {
 	map_tf_var TF_VAR_slack_signing_secret "${SLACK_SIGNING_SECRET-}"
 	map_tf_var TF_VAR_telegram_bot_token "${TELEGRAM_BOT_TOKEN-}"
 	map_tf_var TF_VAR_telegram_webhook_secret "${TELEGRAM_WEBHOOK_SECRET-}"
+	map_tf_var TF_VAR_gmail_client_id "${GMAIL_CLIENT_ID-}"
+	map_tf_var TF_VAR_gmail_client_secret "${GMAIL_CLIENT_SECRET-}"
+	map_tf_var TF_VAR_gmail_token_b64 "${GMAIL_TOKEN_B64-}"
+	map_tf_var TF_VAR_gmail_sender_filter "${GMAIL_SENDER_FILTER-}"
 }
 
 map_tf_var() {
@@ -30,7 +34,7 @@ create_deployment_package() {
       uv pip install -r requirements.txt --target=dist/data
     else
       uv pip install -r requirements.txt --target=dist/data --find-links ../../ak-py/dist
-      uv pip install --force-reinstall --no-deps --no-index --target=dist/data --find-links ../../ak-py/dist agentkernel[api,openai,slack,telegram] || true
+      uv pip install --force-reinstall --no-deps --no-index --target=dist/data --find-links ../../ak-py/dist agentkernel[api,openai,slack,telegram,gmail] || true
     fi
     cp -r app.py config.yaml dist/data
     popd || exit 1

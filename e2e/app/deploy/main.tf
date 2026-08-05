@@ -40,6 +40,10 @@ module "e2e_agents" {
       SLACK_SIGNING_SECRET        = var.slack_signing_secret
       AK_TELEGRAM__BOT_TOKEN      = var.telegram_bot_token
       AK_TELEGRAM__WEBHOOK_SECRET = var.telegram_webhook_secret
+      AK_GMAIL__CLIENT_ID         = var.gmail_client_id
+      AK_GMAIL__CLIENT_SECRET     = var.gmail_client_secret
+      AK_GMAIL__TOKEN_B64         = var.gmail_token_b64
+      AK_GMAIL__SENDER_FILTER     = var.gmail_sender_filter
     }
   }
 }

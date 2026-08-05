@@ -67,3 +67,30 @@ variable "telegram_webhook_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "gmail_client_id" {
+  description = "Google OAuth client ID for the bot Gmail account. Empty disables the Gmail integration"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "gmail_client_secret" {
+  description = "Google OAuth client secret for the bot Gmail account"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "gmail_token_b64" {
+  description = "Base64-encoded token.pickle of the bot Gmail account (generate with e2e/tests/scripts/gmail_login.py)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "gmail_sender_filter" {
+  description = "Only process emails from these comma-separated senders (set to the tester address so stray mail is ignored)"
+  type        = string
+  default     = ""
+}

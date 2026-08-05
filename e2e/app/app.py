@@ -1,3 +1,9 @@
+import asyncio
+import base64
+import logging
+import os
+import threading
+
 from agentkernel.api import RESTAPI
 from agentkernel.openai import OpenAIModule
 from agentkernel.slack import AgentSlackRequestHandler
@@ -13,8 +19,42 @@ general_agent = OpenAIAgent(
 
 OpenAIModule([general_agent])
 
+_log = logging.getLogger("ak.e2e")
+
+
+def _maybe_start_gmail():
+    """Start the Gmail polling handler in a background thread, if configured.
+
+    Gmail's OAuth flow is interactive, so the container cannot authenticate from
+    scratch: a pre-generated token.pickle is injected base64-encoded via
+    AK_GMAIL__TOKEN_B64 (see e2e/tests/scripts/gmail_login.py) and written to the
+    configured token file before the handler starts. When the Gmail env vars are
+    absent the app simply runs without the Gmail integration.
+    """
+    token_b64 = os.environ.get("AK_GMAIL__TOKEN_B64")
+    if not (os.environ.get("AK_GMAIL__CLIENT_ID") and os.environ.get("AK_GMAIL__CLIENT_SECRET") and token_b64):
+        _log.info("Gmail credentials not configured - Gmail integration disabled")
+        return
+
+    from agentkernel.core import Config
+    from agentkernel.gmail import AgentGmailRequestHandler
+
+    token_file = Config.get().gmail.token_file
+    with open(token_file, "wb") as f:
+        f.write(base64.b64decode(token_b64))
+
+    handler = AgentGmailRequestHandler()
+    handler.authenticate()
+
+    def _run():
+        asyncio.run(handler.start_polling())
+
+    threading.Thread(target=_run, name="gmail-polling", daemon=True).start()
+    _log.info("Gmail polling started in background thread")
+
 
 def main():
+    _maybe_start_gmail()
     RESTAPI.run([AgentSlackRequestHandler(), AgentTelegramRequestHandler()])
 
 
