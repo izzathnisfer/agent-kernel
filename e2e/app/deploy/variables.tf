@@ -1,0 +1,69 @@
+variable "region" {
+  type        = string
+  description = "Region"
+  default     = "us-east-2"
+}
+
+variable "product_alias" {
+  type        = string
+  description = "Product alias"
+}
+
+variable "env_alias" {
+  type        = string
+  description = "Environment alias"
+}
+
+variable "module_name" {
+  type        = string
+  description = "module name"
+}
+
+variable "is_production" {
+  description = "Is production"
+  type        = bool
+  default     = false
+}
+
+variable "vpc_id" {
+  description = "VPC ID for ECS deployment. If null, a new VPC is created"
+  type        = string
+  default     = null
+}
+
+variable "private_subnet_ids" {
+  description = "List of private subnet IDs for ECS deployment (required when vpc_id is set)"
+  type        = list(string)
+  default     = null
+}
+
+variable "openai_api_key" {
+  description = "OpenAI API Key"
+  type        = string
+  sensitive   = true
+}
+
+variable "slack_bot_token" {
+  description = "Slack bot token (xoxb-...) of the e2e test Slack app"
+  type        = string
+  sensitive   = true
+}
+
+variable "slack_signing_secret" {
+  description = "Slack signing secret of the e2e test Slack app"
+  type        = string
+  sensitive   = true
+}
+
+variable "telegram_bot_token" {
+  description = "Telegram bot token (from BotFather) of the e2e test bot"
+  type        = string
+  sensitive   = true
+}
+
+variable "telegram_webhook_secret" {
+  description = "Secret token passed to Telegram setWebhook and verified on every webhook delivery. Empty disables verification"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

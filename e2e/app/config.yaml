@@ -1,0 +1,10 @@
+
+logging:
+  ak:
+    level: DEBUG
+
+slack:
+  agent: "general"
+telegram:
+  agent: "general"
+  api_version: "bot"
