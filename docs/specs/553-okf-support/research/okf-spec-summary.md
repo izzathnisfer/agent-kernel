@@ -56,8 +56,8 @@ bundle-root/
 - **Actor convention**: `<producer>/<version>` for agents/tools
   (e.g. `reference_agent/gemini-2.5-pro`), `human:<id>` for people, `process:<id>` for
   automated processes.
-- **Extensions**: arbitrary additional keys are allowed; consumers must preserve unknown
-  keys on round-trip and must not reject documents containing them.
+- **Extensions**: arbitrary additional keys are allowed; consumers SHOULD preserve unknown
+  keys on round-trip (§4.1) and MUST NOT reject documents containing them.
 
 ## Cross-linking
 
@@ -119,8 +119,9 @@ visualizer), and sample bundles (GA4 e-commerce, Stack Overflow, Bitcoin dataset
    frontmatter → `metadata`.
 3. Writes must keep the bundle conformant (frontmatter + non-empty `type`) and can stamp
    `generated` provenance using the actor convention.
-4. The MUST-tolerate rules (broken links, unknown keys/types, missing index) and the
-   round-trip key-preservation rule are hard requirements on our consumer/writer.
+4. The MUST-tolerate rules (broken links, unknown keys/types, missing index) are hard
+   requirements on our consumer/writer; round-trip key preservation is a spec SHOULD
+   (§4.1) — value-level preservation satisfies it.
 5. Lifecycle (`status`, `stale_after`) and trust tiers are cheap, spec-sanctioned metadata
    to surface to the agent.
 6. Attested Computation execution is deferred in the spec itself — safe to exclude from
