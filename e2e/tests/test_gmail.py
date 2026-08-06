@@ -18,6 +18,7 @@ import uuid
 from email.mime.text import MIMEText
 
 from conftest import POLL_INTERVAL_SECONDS, require_env
+
 GMAIL_REPLY_TIMEOUT_SECONDS = 300
 
 

@@ -7,13 +7,17 @@ reply is read back from the platform. This covers the full transport layer (API 
 webhook routing, Slack signature verification, Telegram secret token) that in-process
 tests cannot.
 
-Current coverage: **Slack**, **Telegram**, **Gmail**, and **WhatsApp**. The harness is
-designed so further platforms (Messenger, Instagram) can be added as senders/readers
+Current coverage: **Slack**, **Telegram**, **Gmail**, **WhatsApp**, and **Messenger**. The
+harness is designed so further platforms (Instagram) can be added as senders/readers
 become available.
 
-Verification depth differs by platform: Slack/Telegram/Gmail read the agent's reply back
-from the platform (full round-trip proof). WhatsApp has no read-back API, so its test
-verifies via the deployment's CloudWatch logs that the Graph API accepted the reply.
+Verification depth differs by platform:
+- **Slack / Telegram / Gmail** — read the agent's reply back from the platform (full
+  round-trip proof), fully automated in CI.
+- **WhatsApp** — no read-back API; verified via CloudWatch logs. Automated test is opt-in
+  (`E2E_WHATSAPP_AUTOMATED=1`) and needs a production sender number; otherwise manual.
+- **Messenger** — cannot be automated at all (no API to message a Page as a user);
+  manual verification only, with a log-based opt-in check (`E2E_MESSENGER_AUTOMATED=1`).
 
 ## Layout
 
@@ -140,6 +144,33 @@ when `E2E_WHATSAPP_AUTOMATED=1`, which requires a **production** sender number
 Use a permanent **system-user** access token (Business Settings → System users), not the
 dashboard's temporary 24h token, or the deployment's WhatsApp auth dies within a day.
 
+### 2d. Messenger (optional)
+
+Needs a Facebook **Page** and a Meta app with the **Messenger** product. There is no way
+to send a message to a Page as a user programmatically, so this is manual-verify only —
+you DM the Page from your own Facebook account and confirm the bot replies.
+
+1. Create/choose a Facebook Page for the bot.
+2. In a Meta app (the WhatsApp bot app can be reused, or a fresh one) → Add product
+   **Messenger** → **Generate** a **Page access token** for that Page.
+3. Choose a **verify token** (any random string).
+4. Fill `app/.env` (`MESSENGER_ACCESS_TOKEN` = Page token, `MESSENGER_VERIFY_TOKEN`,
+   optionally `MESSENGER_APP_SECRET`) and redeploy.
+5. Register the webhook: Messenger → Settings → Webhooks → Callback URL =
+   `messenger_webhook_url` terraform output, Verify token = step 3, subscribe the Page to
+   the **messages** field.
+6. Verify manually: from your personal Facebook account, send the Page a message. Watch
+   the logs — you should see the inbound message, agent response, and a successful send,
+   and receive the reply in Messenger:
+   ```bash
+   aws logs tail /aws/ecs/ak-e2e-dev-messaging-service/ak-e2e-dev-messaging-app \
+     --region us-east-2 --since 5m | grep -i messenger
+   ```
+
+CI: add secrets `E2E_MESSENGER_ACCESS_TOKEN`, `E2E_MESSENGER_VERIFY_TOKEN`,
+`E2E_MESSENGER_APP_SECRET`. The automated test skips unless `E2E_MESSENGER_AUTOMATED=1`
+(and even then it only confirms a *recent human-triggered* round trip via logs).
+
 ### 3. Deploy to AWS ECS
 
 The primary deploy path is the `e2e-messaging-deploy` job in the **Weekly Integration
@@ -249,6 +280,8 @@ environment variables.
 | `WHATSAPP_ACCESS_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_VERIFY_TOKEN` / `WHATSAPP_APP_SECRET` | deploy (`app/.env`) | Bot Meta app credentials (CI: `E2E_WHATSAPP_BOT_ACCESS_TOKEN`, `E2E_WHATSAPP_VERIFY_TOKEN`, `E2E_WHATSAPP_APP_SECRET` secrets; `E2E_WHATSAPP_BOT_PHONE_NUMBER_ID` variable) |
 | `E2E_WHATSAPP_SENDER_ACCESS_TOKEN` | tests | Sender Meta app Cloud API token (CI: secret) |
 | `E2E_WHATSAPP_SENDER_PHONE_NUMBER_ID` / `E2E_WHATSAPP_BOT_NUMBER` / `E2E_WHATSAPP_SENDER_NUMBER` | tests | Sender phone number ID + both numbers in digits-only international format (CI: variables) |
+| `MESSENGER_ACCESS_TOKEN` / `MESSENGER_VERIFY_TOKEN` / `MESSENGER_APP_SECRET` | deploy (`app/.env`) | Bot Page access token + webhook verify token + app secret (CI: `E2E_MESSENGER_*` secrets) |
+| `E2E_MESSENGER_AUTOMATED` | tests | Set to `1` to run the Messenger log-based check (default: skip) |
 
 ## Troubleshooting
 

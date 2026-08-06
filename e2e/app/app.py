@@ -55,12 +55,20 @@ def _maybe_start_gmail():
 
 def _handlers():
     handlers = [AgentSlackRequestHandler(), AgentTelegramRequestHandler()]
+    # WhatsApp is optional: the handler refuses to construct without credentials.
     if os.environ.get("AK_WHATSAPP__ACCESS_TOKEN"):
         from agentkernel.whatsapp import AgentWhatsAppRequestHandler
 
         handlers.append(AgentWhatsAppRequestHandler())
     else:
         _log.info("WhatsApp credentials not configured - WhatsApp integration disabled")
+    # Messenger is optional: the handler refuses to construct without credentials.
+    if os.environ.get("AK_MESSENGER__ACCESS_TOKEN"):
+        from agentkernel.messenger import AgentMessengerRequestHandler
+
+        handlers.append(AgentMessengerRequestHandler())
+    else:
+        _log.info("Messenger credentials not configured - Messenger integration disabled")
     return handlers
 
 

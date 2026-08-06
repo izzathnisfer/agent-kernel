@@ -38,6 +38,9 @@ gmail = [
     { name = "google-auth-httplib2" },
     { name = "google-auth-oauthlib" },
 ]
+messenger = [
+    { name = "httpx" },
+]
 openai = [
     { name = "openai-agents" },
     { name = "openai-guardrails" },
@@ -181,7 +184,7 @@ name = "ak-e2e-messaging-app"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "agentkernel", extra = ["api", "gmail", "openai", "slack", "telegram", "whatsapp"] },
+    { name = "agentkernel", extra = ["api", "gmail", "messenger", "openai", "slack", "telegram", "whatsapp"] },
     { name = "aiohttp" },
 ]
 
@@ -193,7 +196,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentkernel", extras = ["api", "openai", "slack", "telegram", "gmail", "whatsapp"], specifier = ">=0.8.0" },
+    { name = "agentkernel", extras = ["api", "openai", "slack", "telegram", "gmail", "whatsapp", "messenger"], specifier = ">=0.8.0" },
     { name = "aiohttp", specifier = ">=3.14.1" },
 ]
 

@@ -38,6 +38,17 @@ module "e2e_agents" {
       path           = "whatsapp/webhook",
       method         = "POST",
       overwrite_path = "/whatsapp/webhook"
+    },
+    {
+      # Messenger webhook verification (Meta sends GET with hub.* query params)
+      path           = "messenger/webhook",
+      method         = "GET",
+      overwrite_path = "/messenger/webhook"
+    },
+    {
+      path           = "messenger/webhook",
+      method         = "POST",
+      overwrite_path = "/messenger/webhook"
     }
   ]
 
@@ -58,6 +69,9 @@ module "e2e_agents" {
       AK_WHATSAPP__PHONE_NUMBER_ID = var.whatsapp_phone_number_id
       AK_WHATSAPP__VERIFY_TOKEN   = var.whatsapp_verify_token
       AK_WHATSAPP__APP_SECRET     = var.whatsapp_app_secret
+      AK_MESSENGER__ACCESS_TOKEN  = var.messenger_access_token
+      AK_MESSENGER__VERIFY_TOKEN  = var.messenger_verify_token
+      AK_MESSENGER__APP_SECRET    = var.messenger_app_secret
     }
   }
 }

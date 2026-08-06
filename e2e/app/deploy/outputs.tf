@@ -21,3 +21,8 @@ output "whatsapp_webhook_url" {
   description = "Callback URL to register under the Meta app's WhatsApp webhook configuration"
   value       = "${local.webhook_base_url}/api/v1/whatsapp/webhook"
 }
+
+output "messenger_webhook_url" {
+  description = "Callback URL to register under the Meta app's Messenger webhook configuration"
+  value       = "${local.webhook_base_url}/api/v1/messenger/webhook"
+}

@@ -121,3 +121,24 @@ variable "whatsapp_app_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "messenger_access_token" {
+  description = "Facebook Page access token for the bot Page. Empty disables the Messenger integration"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "messenger_verify_token" {
+  description = "Self-chosen token entered when registering the Messenger webhook in the Meta app dashboard"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "messenger_app_secret" {
+  description = "Meta app secret for Messenger webhook signature verification. Empty disables signature checks"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
