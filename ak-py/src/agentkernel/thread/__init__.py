@@ -8,10 +8,6 @@ This package provides:
 - ThreadNamingStrategy overridable naming strategy for auto-created threads
 - Authoriser pluggable base class for thread route authorization
 - ThreadRESTRequestHandler exposing the thread read endpoints over REST
-
-``ThreadRESTRequestHandler`` needs FastAPI, which ships in the optional ``api`` extra — the same
-arrangement as ``AgentSlackRequestHandler`` in ``agentkernel.slack``. Importing this package
-therefore requires that extra, so nothing in the kernel may import it at module load time.
 """
 
 from .authoriser import Authoriser
