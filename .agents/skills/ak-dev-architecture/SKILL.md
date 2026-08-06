@@ -444,6 +444,19 @@ The containerized deployment runs on ECS Fargate and uses a two-container archit
 | `ECSWebSocketRequestHandler` | `containerized/core/api/websocket_api.py` | Application routes: built-in chat route + custom routes. Framework-managed (not a subclassing extension point) and **not publicly exported** — `AWSWebsocketAPI` constructs it; custom routes are added via `AWSWebsocketAPI.register(route)` and passed in as `custom_routes`. Needs **no** `AuthValidator` (user resolved from the connection store) |
 | `AWSWebsocketAPI` | `containerized/core/api/websocket_api.py` | Extends `RESTAPI`; `run()` (no params) **always builds** exactly two handlers — the system handler (built lazily from the validator registered via `set_auth_handler`) plus one `ECSWebSocketRequestHandler` carrying every route registered via the `register(route)` decorator. Lazy build keeps importing the module safe when WebSocket mode isn't configured |
 
+Everything under `containerized/core/api/` imports FastAPI, which ships only in the optional `api`
+extra. `AWSRestAPI`, `AWSWebsocketAPI` and `ECSWebSocketSystemRequestHandler` are therefore
+re-exported **lazily** (PEP 562 `__getattr__`) at all three levels of the chain —
+`containerized/__init__.py`, `deployment/aws/__init__.py`, `agentkernel/aws.py` — because
+`import agentkernel.aws` is the entrypoint for the serverless Lambdas too, and they install
+`agentkernel[aws,...]` with no `api` extra. An eager import at any level fails all three Lambda
+handlers at init with `Runtime.ImportModuleError: No module named 'fastapi'`, before any request.
+Two traps when editing this chain: `deployment/aws/__init__.py` must **not** declare `__all__`
+(`agentkernel/aws.py` star-imports it, and `import *` resolves every `__all__` entry eagerly), and
+each `__getattr__` must answer only for the names in `_LAZY_API_EXPORTS` — a blanket
+`getattr(child, name)` also answers the `__all__` lookup that `import *` performs and re-triggers
+the eager resolution it was meant to avoid. `tests/test_aws_optional_extras.py` guards all of this.
+
 ### Shared WebSocket Transport (Serverless + Containerized)
 
 Containerized (ECS) and serverless (Lambda) WebSocket modes share the same AWS transport class,
