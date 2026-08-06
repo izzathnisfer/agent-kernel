@@ -25,7 +25,7 @@ Four decisions shape the rest of this document:
 
 1. **AWS only.**
    - The only implementation delivered: a pluggable task table (DynamoDB, Redis or Valkey,
-     following the session store type — see *The `TaskStore` abstraction*), EventBridge Scheduler
+     following the session store type — see *The `ScheduleTaskStore` abstraction*), EventBridge Scheduler
      for the timer, SQS for delivery.
    - Azure and GCP do not get task scheduling in this version; the `Scheduler` ABC exists so those
      can be added later, not because a second provider is being written now.
@@ -76,7 +76,8 @@ timer fires
 - Manage scheduled tasks (create, view, update, delete) through both configuration files and an API.
 - Enqueue a task exactly once per scheduled time, including when the deployment is running many
   replicas; execution then follows the existing at-least-once queue retry semantics.
-- Record each run's outcome on the task row.
+- Record each run's outcome on the task row (with one documented exception: retry-exhausted runs —
+  see *Reliability and duplication prevention*).
 
 ## Out of Scope
 
@@ -87,6 +88,9 @@ timer fires
 - Non-queue AWS deployments (single-Lambda serverless, plain REST container, local development runs).
 - An Agent Kernel-owned catch-up mechanism for missed runs. Recovery of delayed or missed fires is
   the timer's responsibility (see *Missed runs* below).
+- DLQ processing to reconcile retry-exhausted executions. A run that exhausts input-queue retries
+  is not reflected on the task row in this version (see the known limitation under *Reliability
+  and duplication prevention*); a future iteration may add it.
 - Long-term storage of scheduled run results.
 
 ## Key Requirements
@@ -101,14 +105,20 @@ timer fires
     service + agent runner ECS tasks over SQS.
 - Scheduling is switched on by a new `scheduler` config block (`scheduler.enabled: true`). The
   task-store backend is not part of this block — it follows the session store type (see *The
-  `TaskStore` abstraction*). Queue mode has no config flag of its own — in code
-  it is detected by `execution.queues.input.url` being set — so the startup check is:
-  `scheduler.enabled` with `execution.queues.input.url` unset raises `AKConfigError`. A non-queue
+  `ScheduleTaskStore` abstraction*). Queue mode has no config flag of its own — in code it is detected by
+  both `execution.queues.input.url` and `execution.queues.output.url` being set — so the enablement
+  check is: `scheduler.enabled` with either queue URL unset raises `AKConfigError`. A non-queue
   deployment fails loudly, not silently.
-- **Precondition: the input queue is FIFO.** The duplication-prevention and serialization guarantees
-  below depend on it. The containerized terraform hardcodes `fifo_queue = true` and serverless
-  defaults it to `true`, but serverless exposes it as a toggle — disabling it silently breaks
-  dedup, so FIFO is stated here as an explicit requirement of enabling scheduling.
+- Configuration validation runs during **component initialization**: process startup on
+  long-running services (ECS), cold start on serverless — in both cases before the first request
+  or scheduled execution is processed. "At initialization" throughout this document means this.
+- **Precondition: the input queue is FIFO — enforced at initialization.** The
+  duplication-prevention and serialization guarantees below depend on it. The containerized
+  terraform hardcodes `fifo_queue = true` and serverless defaults it to `true`, but serverless
+  exposes it as a toggle — disabling it would silently break dedup. Since FIFO queue URLs always
+  end in `.fifo`, the enablement check above is extended to enforce this: `scheduler.enabled` with
+  an input queue URL not ending in `.fifo` also raises `AKConfigError`, keeping the "fails loudly,
+  not silently" principle uniform.
 
 ### The `Scheduler` abstraction
 
@@ -117,9 +127,11 @@ timer fires
   config or reconciliation layers. Only the AWS implementation is built and shipped in this version:
   - `upsert(task)` — persist the task row and register (or re-register) its schedule with the timer,
     carrying the message body the timer should deliver.
-  - `delete(task_id)` — remove the timer registration and the task row.
+  - `delete(task_id)` — remove the timer registration and soft-delete the task row (see *Deletion
+    lifecycle*).
   - `get(task_id)` / `list(...)` — read task definitions and their last-run state.
-  - `mark_run_completed(task_id, scheduled_time, status)` — record run outcome on the task row.
+  - `mark_run_completed(task_id, scheduled_time, status, last_error=None)` — record run outcome
+    (status plus optional error detail) on the task row.
     There is deliberately no `mark_run_started`: only terminal outcomes are recorded, so the agent
     runner needs no task-store access or IAM grants, and a stuck run is visible from queue metrics
     instead.
@@ -136,38 +148,65 @@ timer fires
   How AWS satisfies each obligation is in *AWS Feasibility* below; none of it leaks above this
   contract.
 
-### The `TaskStore` abstraction
+### The `ScheduleTaskStore` abstraction
 
 - The task table itself is a separate, pluggable concern from the timer, mirroring the existing
   `ResponseStore` ABC (`deployment/common/response_store.py`) and its backends
-  (`deployment/aws/core/response_store/{dynamodb.py,redis.py,valkey.py}`): a `TaskStore` ABC with
+  (`deployment/aws/core/response_store/{dynamodb.py,redis.py,valkey.py}`): a `ScheduleTaskStore` ABC with
   DynamoDB, Redis and Valkey implementations.
 - The backend is not configured separately: the task store uses the **same backend type as the
   session store** (`session.type`). DynamoDB sessions → a dedicated DynamoDB task table; Redis or
   Valkey sessions → the **same cluster** the sessions use, with a separate table/keyspace — no new
-  infrastructure is provisioned. Any other session type (e.g. in-memory) fails the startup check,
+  infrastructure is provisioned. Any other session type (e.g. in-memory) fails the enablement
+  check at initialization,
   since scheduling needs a durable store shared by all replicas.
 - The task table is always a **new table/keyspace** dedicated to tasks — it is never a partition of
   an existing session or response-store table, even when the underlying cluster is shared.
+- The task row carries: the task definition (schedule plus the `ScheduledTaskRequest` template),
+  the owner identity, `managed_by` (`config` | `api`, stamped at creation — reconciliation and the
+  API's config-task rejections key off it), `status` (`ACTIVE` | `COMPLETED`), `last_run_at` /
+  `last_run_status` / `last_error`, `completed_at` (one-time tasks), and the soft-delete fields
+  `deleted` / `deleted_at` / `ttl` (see *Deletion lifecycle*).
 
 ### Schedule definition and timing
 
 - A schedule is one of: a cron expression, a fixed rate, or a one-time instant.
 - Minimum granularity is whatever the timer provider supports; schedules finer than that are
   rejected at create/update time (a `Scheduler` obligation — see above).
-- One-time schedules are removed automatically once they have fired: the timer registration removes
-  itself (a `Scheduler` obligation), and the task row is deleted by the output consumer after it
-  records the run's outcome. The row is not kept around afterward (no indefinite retention, no
-  TTL) — for a one-time task, "did this run, when, and did it succeed" is answered from
-  logs/traces, not the task row.
+- One-time schedules: the timer registration removes itself after firing (a `Scheduler`
+  obligation), but the task row is **kept** — the output consumer records the run's outcome and
+  sets `status = COMPLETED` / `completed_at`. `GET` keeps answering "did this run, when, and did
+  it succeed" after the fire, and there is no orphan-row problem: the row is removed only by an
+  explicit delete (see *Deletion lifecycle*). Recurring task rows are likewise never deleted
+  except by an explicit delete.
+
+### Deletion lifecycle
+
+- Deleting a task — via the API or config reconciliation — is a **soft delete**, not an immediate
+  physical removal: the timer registration is removed first, then the row is marked
+  `deleted = true` with `deleted_at` and a TTL of ~10 minutes; the store expires the row afterwards
+  (DynamoDB TTL; key expiry on Redis/Valkey).
+- **A deleted task is terminal.** It cannot be restored or transitioned back to an active state,
+  and while the deleted row still exists `PUT` on the same `task_id` is rejected — after TTL
+  expiry the id can be reused as a brand-new task.
+- The soft delete closes the delete/fire race without locking or immediate physical deletion:
+  removing the registration stops future fires, and a fire already on the queue when the delete
+  lands still executes, but the output consumer loads the row, sees `deleted = true`, and discards
+  the outcome — a queued execution can never recreate or mutate state for a deleted task.
 
 ### Message payload
 
-- The message registered with the timer is a standard input-queue body (`prompt`, `agent`), plus
-  scheduling metadata: `task_id`, `scheduled_time` (stamped by the timer at fire time), the
-  conversation mode and rotation period, and the owning identity. The payload carries the session
-  *policy*, not a final `session_id` — the schedule payload is a static template, so the agent
-  runner derives the session id at consume time (see *Conversation / session handling*).
+- Scheduling traffic travels in dedicated message models, not loose metadata on the chat body, so
+  correlation is explicit end to end and the fields pass unchanged through the whole pipeline
+  (scheduler → request → runner → response → output consumer):
+  - **`ScheduledTaskRequest`** — the body registered with the timer: the standard input-queue
+    fields (`prompt`, `agent`, ...) plus `task_id`, `scheduled_time` and `run_id` (both stamped by
+    the timer at fire time), the conversation mode and rotation period, and the owning identity.
+  - **`ScheduledTaskResponse`** — placed on the output queue by the agent runner: `task_id`,
+    `scheduled_time`, `run_id`, `status`, `error`.
+- The request carries the session *policy*, not a final `session_id` — the schedule payload is a
+  static template, so the agent runner derives the session id at consume time (see *Conversation /
+  session handling*).
 - Delivery attributes: fires are grouped and serialized by `task_id` — stable across fires
   regardless of conversation mode — and deduplicated by `<task_id>:<scheduled_time>`.
 
@@ -180,17 +219,24 @@ timer fires
   Agents whose actions must not repeat need to be idempotent, as with any queued request today.
 - No leader server and no distributed lock is required — by construction, not by configuration.
 - Failures after the message reaches the queue are handled by the existing queue retry policy and
-  DLQ. A run that exhausts retries is recorded as `FAILED` on the task row.
+  DLQ. A failure the runner observes and reports on the output queue (`ScheduledTaskResponse` with
+  `status = FAILED`) is recorded on the task row.
+- **Known limitation — retry-exhausted runs are not recorded on the task row.** A message that
+  exhausts input-queue retries moves to the DLQ and never reaches the output queue where outcomes
+  are recorded, so the task row keeps its previous last-run state. This is an intentional
+  limitation of the initial design, accepted to keep the architecture simple; such runs are
+  detected from DLQ metrics and alarms, not the task row. A future iteration may introduce DLQ
+  processing to reconcile retry-exhausted executions (see *Out of Scope*).
 
 ### Missed runs
 
 - If the timer cannot deliver (queue throttling, transient failure) it retries per its own retry
   policy and, on exhaustion, delivers to the timer's DLQ.
 - Agent Kernel does not reconstruct or replay missed fires from the task table. **This is a
-  deliberate reduction from the original requirement** (listed for sign-off in *Open Questions*) for configurable catch-up of missed runs: with
-  timing delegated to infrastructure, there is no Agent Kernel process guaranteed to be awake to
-  perform catch-up, and reconstructing fires would reintroduce the polling and locking this design
-  removes.
+  deliberate scope reduction** (listed for sign-off in *Open Questions*): configurable catch-up of
+  missed runs is not provided — with timing delegated to infrastructure, there is no Agent Kernel
+  process guaranteed to be awake to perform catch-up, and reconstructing fires would reintroduce
+  the polling and locking this design removes.
 - A fire that arrives outside an acceptable staleness window is logged as a warning and still
   executed; operators can detect gaps from the task row's `last_run_at` and from timer-side metrics.
 
@@ -218,8 +264,13 @@ timer fires
   correlated by `task_id` and `scheduled_time`.
 - The run-completion write happens in the **output consumer** (response handler on serverless,
   output consumer on ECS), not the agent runner: it is the component that observes the terminal
-  outcome of a run (success or failure) on the output queue, so it is the natural place to update
-  `last_run_at` / `last_run_status` / `last_error` on the task row.
+  outcome of a run on the output queue. For each `ScheduledTaskResponse` it resolves the
+  `ScheduleTaskStore`, loads the task row, respects the deleted state (a deleted task's outcome is
+  discarded — see *Deletion lifecycle*), updates `last_run_at` / `last_run_status` / `last_error`
+  via `mark_run_completed`, and for a one-time task sets `status = COMPLETED` and `completed_at`.
+- This gives the output consumer explicit new responsibilities and infrastructure on both targets:
+  task-store wiring plus IAM grants to **read and update the task table** (see *AWS Feasibility*).
+  The agent runner still needs neither.
 
 ### Ownership and identity
 
@@ -228,8 +279,8 @@ timer fires
 - Unforgeability is a precondition, not an aspiration: exposing the task API surface (REST routes
   and agent-callable tools) requires a configured identity resolver — the `Authoriser` on the
   FastAPI surface, the API Gateway authorizer on serverless. Enabling scheduling without one fails
-  at startup, like the queue-mode check. Config-defined tasks run under the system identity and
-  need no resolver.
+  at initialization, with the same timing as the queue-mode check. Config-defined tasks run under
+  the system identity and need no resolver.
 - The identity is written to the task row by the server and stamped into the timer's message payload;
   it is never read from client input, so it cannot be forged or overridden.
 - Scheduled task activity is kept out of the user's regular conversation history: sessions created
@@ -239,11 +290,10 @@ timer fires
 ### How tasks get run
 
 - One execution path only: the timer places the message on the input queue and the existing agent
-  runner executes it. **This replaces the original two-path requirement** (listed for sign-off in
-  *Open Questions*) — the "run the agent
-  directly inside the scheduling process" option is dropped, because in queue mode there is no
-  long-lived scheduler process to run it in, and the direct path would bypass the retry and DLQ
-  behaviour the queue path already provides.
+  runner executes it. **This is a deliberate scope reduction** (listed for sign-off in *Open
+  Questions*) — the "run the agent directly inside the scheduling process" option is dropped,
+  because in queue mode there is no long-lived scheduler process to run it in, and the direct path
+  would bypass the retry and DLQ behaviour the queue path already provides.
 - A scheduled run goes through the same guardrails, hooks, logging and monitoring as any other agent
   run. No shortcuts.
 
@@ -254,28 +304,24 @@ timer fires
 - Config-defined tasks reconcile against the config file as an explicit **deploy-time step**, not
   an "at startup" hook — a scaled-to-zero Lambda deployment has no startup moment. On ECS it runs
   once during container startup; on serverless it is a post-deploy invocation (Terraform-triggered
-  or a deploy-script step). Added entries are upserted, removed entries are deleted from both the
-  task table and the timer.
+  or a deploy-script step). Added entries are upserted; removed entries have their timer
+  registration removed and their rows soft-deleted (see *Deletion lifecycle*).
 - Reconciliation is idempotent (keyed by `task_id`) and cheap to repeat: a hash of the config task
   set is stored on a sentinel row in the task table, so a run no-ops when nothing changed and
   concurrent ECS replicas need no coordination.
-- Config-defined tasks are not editable or deletable through the API; such attempts are rejected with
-  a clear error.
+- Config-defined tasks (`managed_by = config`) are not editable or deletable through the API; such
+  attempts are rejected with a clear error.
+- API visibility follows ownership: the `GET` routes return only tasks owned by the authenticated
+  caller. Config-defined tasks run under the system identity and are not returned by the API —
+  they are inspected through the config file and logs/traces.
 - All API-based task management goes through the existing authorization system.
 
 ### REST API surface
 
 All task-management logic lives in a shared **`TaskService`** (analogous to `ChatService`):
-request validation, identity stamping, and the `Scheduler.upsert / delete / get / list` calls. The
-route layers are thin, and there is one per deployment style — the supported queue-mode targets do
-not serve FastAPI's `AgentRESTRequestHandler`:
-
-- **ECS containerized** — a new `TaskRESTRequestHandler` (a `RESTRequestHandler`, mirroring how
-  `ThreadRESTRequestHandler` sits beside the chat handler in `api/thread.py`), mounted by
-  `ECSIOHandler` alongside `ECSQueueRequestHandler` when scheduling is enabled.
-- **Scalable serverless** — the same routes registered on the Lambda router via the existing
-  `Lambda.register(route, method)` custom-route mechanism (`aklambda.py`), delegating to the same
-  `TaskService`.
+request validation, identity stamping, and the `Scheduler.upsert / delete / get / list` calls.
+Each supported deployment style mounts a thin route layer over the same `TaskService` — the
+handler classes and mounting mechanics per target are implementation detail deferred to `spec.md`.
 
 The routes — create and update are a single operation, because `Scheduler.upsert` is
 create-or-replace:
@@ -284,13 +330,16 @@ create-or-replace:
   `agent`, ...) extended with a `schedule` object (cron / rate / one-time `at`, plus conversation
   mode and rotation period). The path param is the task's `task_id` (also its idempotency key for
   config-defined tasks). Calls `Scheduler.upsert(...)`: the task row is written and the timer
-  registration is created or replaced, so the next fire reflects the new schedule/prompt/agent. The caller's resolved identity is stamped as the task owner and cannot be
-  supplied in the body. Rejected with 409 if the task is config-defined.
+  registration is created or replaced, so the next fire reflects the new schedule/prompt/agent.
+  Updates affect future scheduled executions only: an execution already enqueued continues to use
+  the task definition that existed when it was enqueued (accepted behaviour). The caller's
+  resolved identity is stamped as the task owner and cannot be supplied in the body. Rejected with
+  409 if the task is config-defined or soft-deleted (see *Deletion lifecycle*).
 - **Read — `GET /api/v1/task`** (list, scoped to the caller's own tasks) and
   **`GET /api/v1/task/{task_id}`** (single task definition + last-run status).
 - **Delete — `DELETE /api/v1/task/{task_id}`**. Calls `Scheduler.delete(...)`: the timer
-  registration is removed first, then the task row, so a fire can never race a deletion and land
-  on a queue with no corresponding task. Rejected with 409 if the task is config-defined.
+  registration is removed, then the row is soft-deleted (see *Deletion lifecycle*). Rejected with
+  409 if the task is config-defined.
 - All routes require the configured identity resolver (see *Ownership and identity*); update and
   delete additionally check task ownership.
 
@@ -317,7 +366,7 @@ Terraform changes) is deferred to `spec.md`. None of this is visible to the API,
 - Schedules are registered with **EventBridge Scheduler**, delivering directly to the input SQS
   queue via its universal target. The universal target is required, not a preference: it is the
   only SQS target that can set both `MessageGroupId` and `MessageDeduplicationId`, and it stamps
-  the scheduled time into the payload at fire time.
+  the scheduled time and a unique execution id (the `run_id`) into the payload at fire time.
 - The delivery attributes map onto SQS FIFO: `MessageGroupId` = `task_id` (serialization);
   `MessageDeduplicationId` = `<task_id>:<scheduled_time>` (at-most-once per scheduled time). No
   queue changes: the dedup id is set explicitly, so content-based deduplication stays off and
@@ -330,24 +379,25 @@ Terraform changes) is deferred to `spec.md`. None of this is visible to the API,
   delivered later than that would not be deduplicated. Schedules cap event age at ~300 s so a
   retried delivery cannot outlive the dedup window.
 - Per supported target, the `ak-deployment` modules gain: a task table following the session store
-  type (dedicated DynamoDB table, or a separate table/keyspace on the existing Redis/Valkey
-  cluster — no new infrastructure); an EventBridge Scheduler schedule group per deployment (for
-  namespacing and destroy-time cleanup); an execution role allowing the timer to send to the input
-  queue; and the IAM grants for task-table and scheduler access (enumerated in `spec.md`).
+  type (dedicated DynamoDB table with TTL enabled for soft-delete expiry, or a separate
+  table/keyspace on the existing Redis/Valkey cluster — no new infrastructure); an EventBridge
+  Scheduler schedule group per deployment (for namespacing and destroy-time cleanup); an execution
+  role allowing the timer to send to the input queue; and the IAM grants for task-table and
+  scheduler access — including read/update grants on the task table for the response handler /
+  output consumer, which now writes run outcomes (enumerated in `spec.md`).
 
 ## Open Questions
 
-Two deliberate reductions from the original requirements in issue #554 need explicit sign-off
-rather than implicit approval with the rest of the design:
+Open design questions are tracked directly in this document. Two deliberate scope reductions need
+explicit sign-off rather than implicit approval with the rest of the design:
 
-1. **Configurable catch-up of missed runs is dropped** (see *Missed runs*). The original
-   requirement asked for configurable catch-up; this design delegates missed-fire recovery entirely
-   to the timer's retry policy and DLQ. Proposed resolution: accept the reduction — with timing
-   delegated to infrastructure there is no Agent Kernel process guaranteed to be awake to perform
-   catch-up, recurring tasks self-heal at the next fire, and reconstructing fires would reintroduce
-   the polling and locking this design removes.
-2. **The direct in-process execution path is dropped** (see *How tasks get run*). The original
-   requirement described two execution paths — via the queue, or directly inside the scheduling
-   process; this design ships only the queue path. Proposed resolution: accept the reduction — in
-   queue mode there is no long-lived scheduler process to host a direct run, and the direct path
-   would bypass the retry/DLQ behaviour the queue path provides.
+1. **Configurable catch-up of missed runs is dropped** (see *Missed runs*). This design delegates
+   missed-fire recovery entirely to the timer's retry policy and DLQ. Proposed resolution: accept
+   the reduction — with timing delegated to infrastructure there is no Agent Kernel process
+   guaranteed to be awake to perform catch-up, recurring tasks self-heal at the next fire, and
+   reconstructing fires would reintroduce the polling and locking this design removes.
+2. **The direct in-process execution path is dropped** (see *How tasks get run*). Two execution
+   paths were considered — via the queue, or directly inside the scheduling process; this design
+   ships only the queue path. Proposed resolution: accept the reduction — in queue mode there is
+   no long-lived scheduler process to host a direct run, and the direct path would bypass the
+   retry/DLQ behaviour the queue path provides.
