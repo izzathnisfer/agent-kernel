@@ -2,8 +2,9 @@
 
 This package contains a demo of Agent Kernel Conversation Thread Support with an agent built using the OpenAI
 Agents SDK. Adding a `thread` block to `config.yaml` turns on persistent conversation threads: every chat request
-must then carry a `user_id`, a thread is auto-created for each new `session_id`, and the full conversation history
-becomes readable over REST.
+must then carry a `user_id` and a thread is auto-created for each new `session_id`. The block configures storage
+only — the history becomes readable over REST because `app.py` passes a `ThreadRESTRequestHandler` to
+`RESTAPI.run()`.
 
 Threads created without an explicit `thread_name` are named by the default LLM naming strategy: a single
 LiteLLM call (`gpt-4o-mini`, using `OPENAI_API_KEY` from the environment) derives a concise title from the

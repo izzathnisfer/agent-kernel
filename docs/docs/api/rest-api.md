@@ -72,7 +72,7 @@ Health check endpoint.
 
 ### Conversation Thread Endpoints
 
-When [conversation threads](../advanced/threads.md) are enabled (a `thread:` block is present in `config.yaml`), two read-only routes are mounted automatically:
+A `thread:` block in `config.yaml` configures [conversation thread](../advanced/threads.md) storage only. Passing a `ThreadRESTRequestHandler` to `RESTAPI.run(handlers=[...])` mounts two read-only routes:
 
 **`GET /api/v1/threads`** lists threads, filterable by `user_id`/`group_id`, cursor-paginated (`limit`, `cursor`):
 

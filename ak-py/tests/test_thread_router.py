@@ -203,10 +203,21 @@ class TestThreadPackageExports:
         result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
 
-    def test_rest_handler_still_importable_from_package(self):
-        from agentkernel.thread import ThreadRESTRequestHandler as lazily_exported
+    def test_lazy_export_is_the_real_class(self):
+        # Compared against the defining module, not another package-level import, so the
+        # assertion cannot pass by both sides going through the same __getattr__.
+        from agentkernel.thread.rest import ThreadRESTRequestHandler as defined_in_rest
 
-        assert lazily_exported is ThreadRESTRequestHandler
+        assert ThreadRESTRequestHandler is defined_in_rest
+
+    def test_lazy_export_stays_discoverable(self):
+        # __getattr__ alone hides the name from both of these — they read the module dict.
+        import agentkernel.thread as thread_package
+
+        assert "ThreadRESTRequestHandler" in dir(thread_package)
+        namespace: dict = {}
+        exec("from agentkernel.thread import *", namespace)
+        assert "ThreadRESTRequestHandler" in namespace
 
     def test_unknown_attribute_raises_attribute_error(self):
         import agentkernel.thread as thread_package

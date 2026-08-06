@@ -735,10 +735,10 @@ thread:
   type: in_memory  # other supported backends: redis | valkey | dynamodb | firestore | cosmosdb
 ```
 
-3. No further code changes needed. When enabled:
+3. Storage needs no further code changes. When enabled:
    - `user_id` becomes required on every chat request
    - A thread is auto-created on a session's first request
-   - `GET /api/v1/threads` and `GET /api/v1/threads/{session_id}` become available for reading thread history (open by default, or protected by a pluggable `Authoriser`)
+   - `GET /api/v1/threads` and `GET /api/v1/threads/{session_id}` read thread history, but only once a `ThreadRESTRequestHandler` is passed to `RESTAPI.run(handlers=[...])` — the `thread` block alone never publishes them (open by default, or protected by a pluggable `Authoriser` — see below)
    - Threads are auto-named by an LLM call deriving a concise title from the first prompt (falls back to a truncated prompt prefix without `litellm`/an API key)
    - Sending `thread_name` on any chat request sets/renames the thread and locks it against automatic naming
 

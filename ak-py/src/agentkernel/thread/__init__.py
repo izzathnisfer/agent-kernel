@@ -27,6 +27,30 @@ from .store import ThreadStore, ThreadStoreBuilder
 if TYPE_CHECKING:
     from .rest import ThreadRESTRequestHandler
 
+# Declared so the lazily exported name survives ``from agentkernel.thread import *`` and ``dir()``,
+# neither of which consults __getattr__ on its own.
+__all__ = [
+    "Authoriser",
+    "ConversationThreadManager",
+    "MessagePage",
+    "Thread",
+    "ThreadAttachment",
+    "ThreadMessage",
+    "ThreadNamingStrategy",
+    "ThreadPage",
+    "ThreadRESTRequestHandler",
+    "ThreadStore",
+    "ThreadStoreBuilder",
+]
+
+
+def __dir__() -> list[str]:
+    """
+    List the package's contents including lazily exported names.
+    :return: Sorted attribute names, adding the lazy exports to what is already imported.
+    """
+    return sorted(set(globals()) | set(__all__))
+
 
 def __getattr__(name: str) -> Any:
     """
