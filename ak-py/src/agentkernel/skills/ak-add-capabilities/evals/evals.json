@@ -271,12 +271,12 @@
       ]
     },
     {
-      "id": "cap-thread-memory",
+      "id": "cap-thread-in-memory",
       "name": "Enable conversation thread support",
       "input": "Add conversation thread support to my project",
       "expected_outputs": [
         "thread:",
-        "type: memory",
+        "type: in_memory",
         "user_id",
         "session_id",
         "GET /api/v1/threads"

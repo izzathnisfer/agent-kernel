@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..api import RESTRequestHandler
+from ..api.handler import RESTRequestHandler
 from .authoriser import Authoriser
 from .manager import ConversationThreadManager
 

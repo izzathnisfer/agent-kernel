@@ -401,8 +401,9 @@ available on AWS ElastiCache at a lower price point than the Redis OSS engine:
 
 Adding a `thread` block to the configuration turns on persistent, named conversation threads keyed by
 `session_id`. Once enabled, `user_id` becomes required on every chat request, a thread is auto-created on a
-session's first request, and history becomes readable over REST (`GET /api/v1/threads` and
-`GET /api/v1/threads/{session_id}` — optionally protected by a pluggable `Authoriser`). Sending
+session's first request. The block configures storage only — to make history readable over REST
+(`GET /api/v1/threads` and `GET /api/v1/threads/{session_id}` — optionally protected by a pluggable
+`Authoriser`), pass a `ThreadRESTRequestHandler` to `RESTAPI.run(handlers=[...])`. Sending
 `thread_name` on any chat request sets or renames the thread's display name and locks it against automatic
 naming. Threads created without an explicit `thread_name` are
 named by a pluggable naming strategy — by default an LLM call derives a concise title from the first prompt
@@ -413,8 +414,8 @@ mode additionally require `multimodal.enabled: true` with a shared attachment st
 
 - **Field**: `thread.type`
 - **Type**: string
-- **Options**: `memory`, `redis`, `valkey`, `dynamodb` (AWS), `firestore` (GCP), `cosmosdb` (Azure)
-- **Default**: `memory`
+- **Options**: `in_memory`, `redis`, `valkey`, `dynamodb` (AWS), `firestore` (GCP), `cosmosdb` (Azure)
+- **Default**: `in_memory`
 - **Environment Variable**: `AK_THREAD__TYPE`
 
 - **Naming Model**

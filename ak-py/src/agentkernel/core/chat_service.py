@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 from collections.abc import AsyncGenerator, Generator
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from .config import AKConfig
 from .model import (
@@ -19,6 +19,9 @@ from .model import (
     StreamChunk,
 )
 from .service import AgentService
+
+if TYPE_CHECKING:
+    from ..thread import ConversationThreadManager
 
 
 class RequestBuilder:
@@ -494,9 +497,10 @@ class ChatService:
         """Return the shared ConversationThreadManager when thread support is
         enabled, enforcing the user_id requirement. Returns None when disabled.
 
-        Imported here rather than at module scope: ``agentkernel.thread`` pulls in the REST
-        handler and therefore FastAPI, which only ships in the optional ``api`` extra. A
-        module-level import would make that extra mandatory for ``import agentkernel``.
+        Imported here rather than at module scope to break an import cycle: ``agentkernel.core``
+        imports this module, and ``agentkernel.thread`` imports back into ``core.config`` and
+        ``core.model``. The TYPE_CHECKING import at the top of this module keeps the annotation
+        resolvable for type checkers without running at import time.
 
         :param req: Chat request to validate
         :return: The shared manager, or None when thread support is disabled

@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from typing import Optional
 
 import pytest
@@ -187,3 +189,27 @@ class TestThreadRouterAuthorised:
         # None is checked before the type check, so rejection is unaffected.
         response = _client(ClaimsDictAuthoriser()).get("/api/v1/threads", headers={"Authorization": "Bearer bad-token"})
         assert response.status_code == 401
+
+
+class TestThreadPackageExports:
+    """The REST handler is exported lazily so threads stay usable without the `api` extra."""
+
+    def test_import_does_not_pull_in_fastapi(self):
+        # A fresh interpreter is the only honest check: fastapi is installed in the dev env, so an
+        # eager import succeeds here and fails only on a deployment without the `api` extra —
+        # e.g. serverless installing agentkernel[openai,redis] with a thread: block, which hits
+        # ChatService._validate_thread on its first chat request.
+        code = "import sys\nimport agentkernel.thread\nassert 'fastapi' not in sys.modules, 'agentkernel.thread imported fastapi eagerly'\n"
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    def test_rest_handler_still_importable_from_package(self):
+        from agentkernel.thread import ThreadRESTRequestHandler as lazily_exported
+
+        assert lazily_exported is ThreadRESTRequestHandler
+
+    def test_unknown_attribute_raises_attribute_error(self):
+        import agentkernel.thread as thread_package
+
+        with pytest.raises(AttributeError):
+            thread_package.NoSuchName
