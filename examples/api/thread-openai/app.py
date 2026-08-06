@@ -32,7 +32,7 @@ class DemoAuthoriser(Authoriser):
 OpenAIModule([assistant_agent])
 
 if __name__ == "__main__":
-    # Passing a ThreadRESTRequestHandler explicitly replaces the default open
-    # (unauthorised) thread routes that Agent Kernel would otherwise mount
-    # automatically when a `thread` block is present in config.yaml.
+    # The thread routes are served only because ThreadRESTRequestHandler is passed here —
+    # a `thread` block in config.yaml configures storage alone. Dropping the authoriser
+    # argument would leave those routes open.
     RESTAPI.run(handlers=[AgentRESTRequestHandler(), ThreadRESTRequestHandler(authoriser=DemoAuthoriser())])
