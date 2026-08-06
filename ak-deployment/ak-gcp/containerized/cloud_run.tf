@@ -44,6 +44,35 @@ resource "null_resource" "network_route_cleanup" {
   }
 }
 
+resource "null_resource" "egress_address_cleanup" {
+  triggers = {
+    project_id = var.project_id
+    region     = var.region
+    subnetwork = element(reverse(split("/", local.private_subnet_id)), 0)
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-EOT
+      for i in $(seq 1 18); do
+        addrs=$(gcloud compute addresses list \
+          --project=${self.triggers.project_id} \
+          --regions=${self.triggers.region} \
+          --filter="name~^serverless-ipv4 AND subnetwork~/${self.triggers.subnetwork}$" \
+          --format="value(name)" 2>/dev/null)
+        [ -z "$addrs" ] && break
+        for a in $addrs; do
+          echo "Deleting lingering Direct VPC egress address: $a"
+          gcloud compute addresses delete "$a" \
+            --project=${self.triggers.project_id} \
+            --region=${self.triggers.region} --quiet 2>/dev/null || true
+        done
+        sleep 10
+      done
+    EOT
+  }
+}
+
 
 # The Cloud Run service — this replaces ECS Fargate + ALB + Target Group
 # Cloud Run handles all of that in one resource
@@ -144,7 +173,8 @@ resource "google_cloud_run_v2_service" "service" {
 
   depends_on = [
     google_project_iam_member.run_logging,
-    module.docker_image
+    module.docker_image,
+    null_resource.egress_address_cleanup
   ]
 }
 
