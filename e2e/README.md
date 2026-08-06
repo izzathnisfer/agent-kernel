@@ -117,8 +117,28 @@ shared one app the bot would answer its own replies in a loop.
 6. Heads-up: Meta test-number access tokens are temporary (~24h) by default — for a
    long-lived deployment generate a system-user token or refresh before runs.
 
-The test sends the pre-approved `hello_world` template from the sender number (business-
-initiated messages must be templates) and verifies via CloudWatch logs.
+**Automation ceiling (important):** two WhatsApp Cloud API *test* numbers cannot message
+each other — the bot number can't be verified into the sender's allowed-recipient list
+because the verification OTP is undeliverable to a test number (confirmed: sender→bot
+always returns error `131030`). So `test_whatsapp.py` **skips by default** and only runs
+when `E2E_WHATSAPP_AUTOMATED=1`, which requires a **production** sender number
+(business-verified + payment method). The deployment and handler are otherwise verified
+**manually**:
+
+1. Add your real phone to the **bot** app's recipient allowlist (real OTP, arrives in
+   your WhatsApp app).
+2. Register the bot webhook (done via the Graph API — see the WhatsApp section of the
+   webhook step below).
+3. From your phone, message the bot number (e.g. "Hello"). Watch the deployment logs:
+   ```bash
+   aws logs tail /aws/ecs/ak-e2e-dev-messaging-service/ak-e2e-dev-messaging-app \
+     --region us-east-2 --since 5m | grep -i whatsapp
+   ```
+   You should see the inbound message, the agent response, and a successful send back —
+   and receive the reply on your phone.
+
+Use a permanent **system-user** access token (Business Settings → System users), not the
+dashboard's temporary 24h token, or the deployment's WhatsApp auth dies within a day.
 
 ### 3. Deploy to AWS ECS
 
