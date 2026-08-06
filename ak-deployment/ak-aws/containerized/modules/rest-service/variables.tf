@@ -11,6 +11,12 @@ variable "env_alias" {
 variable "module_name" {
   type        = string
   description = "Module name for resource naming"
+
+  validation {
+    # + 6 accounts for the "-alb"/"-nlb" suffix and its 2 joining hyphens
+    condition     = length(var.product_alias) + length(var.env_alias) + length(var.module_name) + 6 <= 32
+    error_message = "product_alias + env_alias + module_name must be at most 26 characters combined, so that the \"${var.product_alias}-${var.env_alias}-${var.module_name}-alb\"/\"-nlb\" load balancer name stays within AWS's 32-character limit."
+  }
 }
 
 variable "region" {
