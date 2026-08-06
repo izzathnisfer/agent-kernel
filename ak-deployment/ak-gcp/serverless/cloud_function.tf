@@ -20,29 +20,16 @@ resource "google_project_iam_member" "function_firestore" {
   member  = "serviceAccount:${google_service_account.function_sa.email}"
 }
 
-# Cleanup script that runs on destroy to delete phantom firewall rules left
-# behind by GCP when the VPC connector is deleted. Without this, the VPC
-# cannot be deleted and terraform destroy gets stuck.
-resource "null_resource" "connector_cleanup" {
+resource "null_resource" "network_route_cleanup" {
   triggers = {
-    project_id     = var.project_id
-    connector_name = local.connector_name
-    network_name   = local.network_name != null ? local.network_name : ""
+    project_id   = var.project_id
+    network_name = local.network_name != null ? local.network_name : ""
   }
 
   provisioner "local-exec" {
     when    = destroy
     command = <<-EOT
-      # Delete phantom firewall rules left by the VPC connector
-      for fw in $(gcloud compute firewall-rules list \
-        --project=${self.triggers.project_id} \
-        --filter="name~${self.triggers.connector_name}" \
-        --format="value(name)" 2>/dev/null); do
-        echo "Deleting phantom firewall rule: $fw"
-        gcloud compute firewall-rules delete "$fw" \
-          --project=${self.triggers.project_id} --quiet 2>/dev/null || true
-      done
-      # Delete auto-generated default routes that block VPC deletion
+      # Delete auto-generated default routes that can block VPC deletion
       if [ -n "${self.triggers.network_name}" ]; then
         for rt in $(gcloud compute routes list \
           --project=${self.triggers.project_id} \
@@ -58,32 +45,6 @@ resource "null_resource" "connector_cleanup" {
 }
 
 
-# VPC connector — lets Cloud Run talk to private resources (Redis, etc.)
-resource "google_vpc_access_connector" "connector" {
-  name          = local.connector_name
-  project       = var.project_id
-  region        = var.region
-  network       = local.network_id
-  ip_cidr_range = local.connector_cidr_computed
-
-  min_instances = 2
-  max_instances = var.is_production ? 10 : 3
-}
-
-# Firewall rule — allow traffic from the VPC connector to reach private resources
-# (e.g. Redis/Memorystore). Without this, Cloud Run → connector → Redis is blocked.
-resource "google_compute_firewall" "allow_connector" {
-  name    = local.firewall_name
-  project = var.project_id
-  network = local.network_id
-
-  allow {
-    protocol = "tcp"
-    ports    = ["0-65535"]
-  }
-
-  source_ranges = [local.connector_cidr_computed]
-}
 
 # Cloud Run service — GCP equivalent of AWS Lambda Image type.
 # Scales to zero by default (min_instance_count = 0) giving serverless behaviour:
@@ -107,8 +68,11 @@ resource "google_cloud_run_v2_service" "service" {
     }
 
     vpc_access {
-      connector = google_vpc_access_connector.connector.id
-      egress    = "PRIVATE_RANGES_ONLY"
+      network_interfaces {
+        network    = local.network_id
+        subnetwork = local.private_subnet_id
+      }
+      egress = "PRIVATE_RANGES_ONLY"
     }
 
     containers {

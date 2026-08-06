@@ -124,7 +124,7 @@ variable "health_check_endpoint" {
 # This CIDR must also be allowed by VPC firewall rules (created automatically).
 variable "connector_cidr" {
   type        = string
-  description = "CIDR block for the VPC Access Connector. If null, auto-computed to avoid conflicts (e.g. '10.9.0.0/28')"
+  description = "Deprecated and unused since the module moved to Cloud Run Direct VPC egress (no VPC Access Connector). Retained for backward compatibility."
   default     = null
 }
 

@@ -4,10 +4,6 @@ resource "random_id" "deployment" {
   byte_length = 4
 }
 
-resource "random_id" "connector" {
-  byte_length = 2
-}
-
 locals {
   network_id        = var.network_id != null ? var.network_id : module.vpc[0].network_id
   network_name      = var.network_id != null ? null : module.vpc[0].network_name
@@ -18,11 +14,6 @@ locals {
   # Unique deployment identifier (8 hex chars)
   deployment_id = random_id.deployment.hex
 
-  # Compute unique connector CIDR to avoid conflicts across deployments
-  # Use last byte of deployment_id hash to generate unique /28 subnet in 10.9.0.0/16 range
-  # This gives us 256 possible /28 subnets (10.9.0.0/28, 10.9.0.16/28, ..., 10.9.255.240/28)
-  connector_cidr_computed = var.connector_cidr != null ? var.connector_cidr : "10.9.${floor(random_id.deployment.dec / 16777216) % 256}.${(floor(random_id.deployment.dec / 65536) % 16) * 16}/28"
-
   # Naming prefix — used everywhere
   prefix       = "${var.product_alias}-${var.env_alias}-${var.module_name}"
   service_name = "${local.prefix}-svc" #service name cannot exceed 49
@@ -31,15 +22,6 @@ locals {
   # Truncate the prefix to 27 chars max, then append "-run" (= 31... use 26 + "-run" = 30).
   sa_prefix = "${var.product_alias}-${var.env_alias}-${var.module_name}"
   sa_id     = "${substr(local.sa_prefix, 0, min(length(local.sa_prefix), 26))}-run"
-
-  # VPC Access Connector name must match ^[a-z][-a-z0-9]{0,23}[a-z0-9]$ (max 25 chars).
-  # Must start with letter, end with alphanumeric, contain only lowercase letters, numbers, hyphens
-  # Strategy: use first letter of product_alias + deployment_id + letter suffix
-  # Format: a<7hex>-<8hex>-c = 1+7+1+8+1+1 = 19 chars (safe)
-  connector_name = "a${substr(local.deployment_id, 0, 7)}-${local.deployment_id}-c"
-
-  # Firewall name with unique deployment ID
-  firewall_name = "${substr(local.prefix, 0, min(length(local.prefix), 45))}-${local.deployment_id}-fw"
 
   # API Gateway names with unique deployment ID (max 49 chars for gateway, 63 for API)
   # Gateway regex: ^[a-z0-9]([a-z0-9-]{0,47}[a-z0-9])?$ = max 49 chars
