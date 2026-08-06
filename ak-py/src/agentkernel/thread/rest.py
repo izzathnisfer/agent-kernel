@@ -37,9 +37,14 @@ class ThreadRESTRequestHandler(RESTRequestHandler):
     def _resolve_user(self, request: Request) -> Optional[str]:
         """
         Resolve the caller's user_id via the configured Authoriser.
+        A non-string return is a bug in the Authoriser subclass, not an authentication failure, so
+        it raises rather than degrading to a 401. Left unchecked it would be used as the user_id
+        filter, which silently returns an empty listing and a wrong 403 on threads the caller owns.
+
         :param request: The incoming FastAPI request.
         :return: The resolved user_id, or None when no Authoriser is configured.
         :raises HTTPException: 401 when a token is missing or rejected.
+        :raises TypeError: If the Authoriser returns something other than a string or None.
         """
         if self._authoriser is None:
             return None
@@ -53,6 +58,8 @@ class ThreadRESTRequestHandler(RESTRequestHandler):
         user_id = self._authoriser.authorise(token)
         if user_id is None:
             raise HTTPException(status_code=401, detail="Unauthorized")
+        if not isinstance(user_id, str):
+            raise TypeError(f"{type(self._authoriser).__name__}.authorise must return a user_id string or None, got {type(user_id).__name__}")
         return user_id
 
     def get_router(self) -> APIRouter:

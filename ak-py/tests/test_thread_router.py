@@ -38,6 +38,13 @@ class StaticAuthoriser(Authoriser):
         return "u1" if token == "good-token" else None
 
 
+class ClaimsDictAuthoriser(Authoriser):
+    """Miswritten authoriser: returns the whole claims dict instead of the user_id."""
+
+    def authorise(self, token: str) -> Optional[str]:
+        return {"user_id": "u1", "roles": ["admin"]} if token == "good-token" else None
+
+
 def _client(authoriser: Optional[Authoriser] = None) -> TestClient:
     app = FastAPI()
     app.include_router(ThreadRESTRequestHandler(authoriser=authoriser).get_router())
@@ -165,3 +172,18 @@ class TestThreadRouterAuthorised:
         thread_enabled.get_or_create_thread("s1", "u2", first_prompt="a")
         response = _client(StaticAuthoriser()).get("/api/v1/threads/s1", headers={"Authorization": "Bearer good-token"})
         assert response.status_code == 403
+
+    def test_non_string_return_raises_type_error(self, thread_enabled):
+        # Without the type check this silently returned an empty listing and a wrong 403 on
+        # threads the caller does own, which reads as "auth works, no data" rather than a bug.
+        thread_enabled.get_or_create_thread("s1", "u1", first_prompt="a")
+        client = _client(ClaimsDictAuthoriser())
+
+        for path in ("/api/v1/threads", "/api/v1/threads/s1"):
+            with pytest.raises(TypeError, match="ClaimsDictAuthoriser.authorise must return a user_id string or None, got dict"):
+                client.get(path, headers={"Authorization": "Bearer good-token"})
+
+    def test_non_string_return_still_rejects_bad_token(self, thread_enabled):
+        # None is checked before the type check, so rejection is unaffected.
+        response = _client(ClaimsDictAuthoriser()).get("/api/v1/threads", headers={"Authorization": "Bearer bad-token"})
+        assert response.status_code == 401

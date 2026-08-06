@@ -152,8 +152,9 @@ curl -X POST http://localhost:8000/api/v1/chat \
 ## Authorization
 
 Thread routes are **open** until you supply an `Authoriser`, a small base class you subclass to validate the
-Bearer token against your own authentication provider. `authorise()` returns the caller's `user_id` when the
-token is valid, or `None` to reject it:
+Bearer token against your own authentication provider. `authorise()` must return the caller's `user_id` as a
+string when the token is valid, or `None` to reject it — those are the only two valid returns, and anything
+else raises a `TypeError`:
 
 ```python
 from typing import Optional
