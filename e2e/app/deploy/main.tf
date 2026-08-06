@@ -28,6 +28,16 @@ module "e2e_agents" {
       path           = "telegram/webhook",
       method         = "POST",
       overwrite_path = "/telegram/webhook"
+    },
+    {
+      path           = "whatsapp/webhook",
+      method         = "GET",
+      overwrite_path = "/whatsapp/webhook"
+    },
+    {
+      path           = "whatsapp/webhook",
+      method         = "POST",
+      overwrite_path = "/whatsapp/webhook"
     }
   ]
 
@@ -44,6 +54,10 @@ module "e2e_agents" {
       AK_GMAIL__CLIENT_SECRET     = var.gmail_client_secret
       AK_GMAIL__TOKEN_B64         = var.gmail_token_b64
       AK_GMAIL__SENDER_FILTER     = var.gmail_sender_filter
+      AK_WHATSAPP__ACCESS_TOKEN   = var.whatsapp_access_token
+      AK_WHATSAPP__PHONE_NUMBER_ID = var.whatsapp_phone_number_id
+      AK_WHATSAPP__VERIFY_TOKEN   = var.whatsapp_verify_token
+      AK_WHATSAPP__APP_SECRET     = var.whatsapp_app_secret
     }
   }
 }

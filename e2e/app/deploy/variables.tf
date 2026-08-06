@@ -94,3 +94,30 @@ variable "gmail_sender_filter" {
   type        = string
   default     = ""
 }
+
+variable "whatsapp_access_token" {
+  description = "WhatsApp Cloud API access token of the BOT Meta app. Empty disables the WhatsApp integration"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "whatsapp_phone_number_id" {
+  description = "Phone number ID of the bot's WhatsApp business number"
+  type        = string
+  default     = ""
+}
+
+variable "whatsapp_verify_token" {
+  description = "Self-chosen token entered when registering the webhook in the Meta app dashboard"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "whatsapp_app_secret" {
+  description = "Meta app secret for webhook signature verification. Empty disables signature checks"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

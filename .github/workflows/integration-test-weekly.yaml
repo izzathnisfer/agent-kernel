@@ -390,6 +390,10 @@ jobs:
           TF_VAR_gmail_client_secret: ${{ secrets.E2E_GMAIL_CLIENT_SECRET }}
           TF_VAR_gmail_token_b64: ${{ secrets.E2E_GMAIL_BOT_TOKEN_B64 }}
           TF_VAR_gmail_sender_filter: ${{ vars.E2E_GMAIL_TESTER_ADDRESS }}
+          TF_VAR_whatsapp_access_token: ${{ secrets.E2E_WHATSAPP_BOT_ACCESS_TOKEN }}
+          TF_VAR_whatsapp_phone_number_id: ${{ vars.E2E_WHATSAPP_BOT_PHONE_NUMBER_ID }}
+          TF_VAR_whatsapp_verify_token: ${{ secrets.E2E_WHATSAPP_VERIFY_TOKEN }}
+          TF_VAR_whatsapp_app_secret: ${{ secrets.E2E_WHATSAPP_APP_SECRET }}
         run: |
           terraform init -input=false
           terraform apply -input=false -auto-approve
@@ -472,4 +476,8 @@ jobs:
           E2E_TELEGRAM_BOT_USERNAME: ${{ vars.E2E_TELEGRAM_BOT_USERNAME }}
           E2E_GMAIL_TESTER_TOKEN_B64: ${{ secrets.E2E_GMAIL_TESTER_TOKEN_B64 }}
           E2E_GMAIL_BOT_ADDRESS: ${{ vars.E2E_GMAIL_BOT_ADDRESS }}
+          E2E_WHATSAPP_SENDER_ACCESS_TOKEN: ${{ secrets.E2E_WHATSAPP_SENDER_ACCESS_TOKEN }}
+          E2E_WHATSAPP_SENDER_PHONE_NUMBER_ID: ${{ vars.E2E_WHATSAPP_SENDER_PHONE_NUMBER_ID }}
+          E2E_WHATSAPP_BOT_NUMBER: ${{ vars.E2E_WHATSAPP_BOT_NUMBER }}
+          E2E_WHATSAPP_SENDER_NUMBER: ${{ vars.E2E_WHATSAPP_SENDER_NUMBER }}
         run: uv run pytest -v -rs

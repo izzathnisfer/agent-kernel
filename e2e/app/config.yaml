@@ -12,3 +12,5 @@ gmail:
   agent: "general"
   poll_interval: 15
   label_filter: "INBOX"
+whatsapp:
+  agent: "general"

@@ -16,6 +16,10 @@ load_env() {
 	map_tf_var TF_VAR_gmail_client_secret "${GMAIL_CLIENT_SECRET-}"
 	map_tf_var TF_VAR_gmail_token_b64 "${GMAIL_TOKEN_B64-}"
 	map_tf_var TF_VAR_gmail_sender_filter "${GMAIL_SENDER_FILTER-}"
+	map_tf_var TF_VAR_whatsapp_access_token "${WHATSAPP_ACCESS_TOKEN-}"
+	map_tf_var TF_VAR_whatsapp_phone_number_id "${WHATSAPP_PHONE_NUMBER_ID-}"
+	map_tf_var TF_VAR_whatsapp_verify_token "${WHATSAPP_VERIFY_TOKEN-}"
+	map_tf_var TF_VAR_whatsapp_app_secret "${WHATSAPP_APP_SECRET-}"
 }
 
 map_tf_var() {
@@ -34,7 +38,7 @@ create_deployment_package() {
       uv pip install -r requirements.txt --target=dist/data
     else
       uv pip install -r requirements.txt --target=dist/data --find-links ../../ak-py/dist
-      uv pip install --force-reinstall --no-deps --no-index --target=dist/data --find-links ../../ak-py/dist agentkernel[api,openai,slack,telegram,gmail] || true
+      uv pip install --force-reinstall --no-deps --no-index --target=dist/data --find-links ../../ak-py/dist agentkernel[api,openai,slack,telegram,gmail,whatsapp] || true
     fi
     cp -r app.py config.yaml dist/data
     popd || exit 1

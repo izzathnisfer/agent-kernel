@@ -7,9 +7,13 @@ reply is read back from the platform. This covers the full transport layer (API 
 webhook routing, Slack signature verification, Telegram secret token) that in-process
 tests cannot.
 
-Current coverage: **Slack**, **Telegram**, and **Gmail**. The harness is designed so
-further platforms (WhatsApp, Messenger, Instagram) can be added as senders/readers
+Current coverage: **Slack**, **Telegram**, **Gmail**, and **WhatsApp**. The harness is
+designed so further platforms (Messenger, Instagram) can be added as senders/readers
 become available.
+
+Verification depth differs by platform: Slack/Telegram/Gmail read the agent's reply back
+from the platform (full round-trip proof). WhatsApp has no read-back API, so its test
+verifies via the deployment's CloudWatch logs that the Graph API accepted the reply.
 
 ## Layout
 
@@ -88,6 +92,33 @@ cannot work — the bot would reply to its own replies in a loop.
 
 The Gmail integration is optional: when its variables are empty the deployed app runs
 Slack + Telegram only.
+
+### 2c. WhatsApp (optional)
+
+Needs **two Meta developer apps**, each with the WhatsApp product and its own test
+business number: one is the bot, the other is the sender. They must be separate apps —
+the handler replies to every message its app's webhook delivers, so if both numbers
+shared one app the bot would answer its own replies in a loop.
+
+1. Create both apps at <https://developers.facebook.com> → Add product **WhatsApp**.
+   Each gets a free test number; note each app's **access token** and **phone number ID**
+   (WhatsApp → API Setup).
+2. Register each number in the *other* app's allowed-recipients list (API Setup → "To"
+   dropdown → Manage phone number list) — test numbers can only message registered
+   recipients.
+3. Choose a **verify token** (any random string) for the bot app.
+4. Fill `app/.env` (`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
+   `WHATSAPP_VERIFY_TOKEN`, optionally `WHATSAPP_APP_SECRET`) with the **bot** app's
+   values and redeploy.
+5. Register the webhook in the **bot** app: WhatsApp → Configuration → Webhook →
+   Callback URL = the `whatsapp_webhook_url` terraform output, Verify token = the value
+   from step 3 → Verify and save → subscribe to the **messages** webhook field.
+   Do **not** configure a webhook on the sender app.
+6. Heads-up: Meta test-number access tokens are temporary (~24h) by default — for a
+   long-lived deployment generate a system-user token or refresh before runs.
+
+The test sends the pre-approved `hello_world` template from the sender number (business-
+initiated messages must be templates) and verifies via CloudWatch logs.
 
 ### 3. Deploy to AWS ECS
 
@@ -195,6 +226,9 @@ environment variables.
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_TOKEN_B64` / `GMAIL_SENDER_FILTER` | deploy (`app/.env`) | Bot Gmail account OAuth + sender allowlist (CI: `E2E_GMAIL_CLIENT_ID`, `E2E_GMAIL_CLIENT_SECRET`, `E2E_GMAIL_BOT_TOKEN_B64`, variable `E2E_GMAIL_TESTER_ADDRESS`) |
 | `E2E_GMAIL_TESTER_TOKEN_B64` | tests | Tester Gmail account token (base64 pickle) |
 | `E2E_GMAIL_BOT_ADDRESS` | tests | Bot Gmail address the deployment polls (CI: variable) |
+| `WHATSAPP_ACCESS_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_VERIFY_TOKEN` / `WHATSAPP_APP_SECRET` | deploy (`app/.env`) | Bot Meta app credentials (CI: `E2E_WHATSAPP_BOT_ACCESS_TOKEN`, `E2E_WHATSAPP_VERIFY_TOKEN`, `E2E_WHATSAPP_APP_SECRET` secrets; `E2E_WHATSAPP_BOT_PHONE_NUMBER_ID` variable) |
+| `E2E_WHATSAPP_SENDER_ACCESS_TOKEN` | tests | Sender Meta app Cloud API token (CI: secret) |
+| `E2E_WHATSAPP_SENDER_PHONE_NUMBER_ID` / `E2E_WHATSAPP_BOT_NUMBER` / `E2E_WHATSAPP_SENDER_NUMBER` | tests | Sender phone number ID + both numbers in digits-only international format (CI: variables) |
 
 ## Troubleshooting
 

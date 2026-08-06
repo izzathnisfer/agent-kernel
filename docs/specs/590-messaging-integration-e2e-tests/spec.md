@@ -16,6 +16,7 @@ e2e/
     test_slack.py         User-token send → poll conversations.replies for threaded bot reply
     test_telegram.py      Telethon user-session send → poll chat for bot reply
     test_gmail.py         Tester-account send → poll tester's thread for bot reply (300s budget)
+    test_whatsapp.py      Sender-app template send → poll CloudWatch logs for send-success (no read-back API)
     scripts/telegram_login.py        One-time StringSession generation
     scripts/set_telegram_webhook.py  One-time setWebhook registration
     scripts/gmail_login.py           One-time OAuth token generation (bot + tester accounts)

@@ -16,3 +16,8 @@ output "telegram_webhook_url" {
   description = "URL to register with the Telegram Bot API setWebhook method"
   value       = "${local.webhook_base_url}/api/v1/telegram/webhook"
 }
+
+output "whatsapp_webhook_url" {
+  description = "Callback URL to register under the Meta app's WhatsApp webhook configuration"
+  value       = "${local.webhook_base_url}/api/v1/whatsapp/webhook"
+}

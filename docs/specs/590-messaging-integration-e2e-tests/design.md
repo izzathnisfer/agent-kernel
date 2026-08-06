@@ -37,8 +37,14 @@ agent's real reply back from the platform.
 
 ## Scope
 
-- Covered: **Slack + Telegram + Gmail**. WhatsApp/Messenger/Instagram follow the same pattern once
-  sender accounts/numbers exist (with a weaker no-read-back assertion for the Meta platforms).
+- Covered: **Slack + Telegram + Gmail + WhatsApp**. Messenger/Instagram follow once senders exist
+  (real-user senders have no official API — hardest).
+- WhatsApp: sender is a second business number in a **separate Meta app** (shared app → the bot
+  answers its own replies in a loop); inbound is the pre-approved `hello_world` template
+  (business-initiated messages must be templates). No read-back API exists, so verification polls
+  the deployment's CloudWatch logs for the handler's Graph-API send-success line (contains the
+  recipient wa_id) and fails on an agent-error log — proves webhook → agent → accepted send, not
+  human receipt.
 - Gmail: polling-based (no webhook route); the app starts the poll loop in a background thread.
   Two Gmail accounts (bot + tester — send-to-self would loop); OAuth token.pickle is generated
   interactively once and injected base64 via env; sender filter restricts processing to the

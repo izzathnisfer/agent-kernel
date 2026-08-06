@@ -53,9 +53,20 @@ def _maybe_start_gmail():
     _log.info("Gmail polling started in background thread")
 
 
+def _handlers():
+    handlers = [AgentSlackRequestHandler(), AgentTelegramRequestHandler()]
+    if os.environ.get("AK_WHATSAPP__ACCESS_TOKEN"):
+        from agentkernel.whatsapp import AgentWhatsAppRequestHandler
+
+        handlers.append(AgentWhatsAppRequestHandler())
+    else:
+        _log.info("WhatsApp credentials not configured - WhatsApp integration disabled")
+    return handlers
+
+
 def main():
     _maybe_start_gmail()
-    RESTAPI.run([AgentSlackRequestHandler(), AgentTelegramRequestHandler()])
+    RESTAPI.run(_handlers())
 
 
 if __name__ == "__main__":
