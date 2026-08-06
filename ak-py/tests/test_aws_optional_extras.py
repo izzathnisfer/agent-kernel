@@ -1,10 +1,9 @@
 """
 ``agentkernel.aws`` must import without the optional ``api`` extra.
 
-The serverless Lambda handlers install ``agentkernel[aws,...]`` with no ``api`` extra and serve no
-routes of their own, so a FastAPI import anywhere on the ``agentkernel.aws`` path kills them at
-init with ``Runtime.ImportModuleError``, before a single request is handled. The containerized
-package re-exports the FastAPI-backed API classes lazily to keep that path clean.
+The serverless Lambda handlers install ``agentkernel[aws,...]`` with no ``api`` extra and serve no routes, so
+a FastAPI import anywhere on the ``agentkernel.aws`` path kills them at init with ``Runtime.ImportModuleError``.
+The containerized package re-exports the FastAPI-backed API classes lazily to keep that path clean.
 """
 
 import subprocess
