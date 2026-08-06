@@ -37,15 +37,16 @@ agent's real reply back from the platform.
 
 ## Scope
 
-- Covered: **Slack + Telegram + Gmail + WhatsApp + Messenger**. Instagram follows the same
-  Meta-webhook pattern once added.
-- Messenger: constructible and deployable, but its inbound leg can NEVER be automated — the
-  Messenger Platform has no API to send a message to a Page as a user, so only a real human DM
-  triggers it (worse than WhatsApp, which a production sender number would unlock). Verified
-  manually; the automated test skips unless `E2E_MESSENGER_AUTOMATED=1` (a log-based check of a
-  recent human-triggered round trip).
+- Covered: **Slack + Telegram + Gmail + WhatsApp + Messenger + Instagram** — every messaging
+  platform Agent Kernel can construct today.
+- Messenger and Instagram: constructible and deployable, but their inbound leg can NEVER be
+  automated — the Meta Messaging APIs have no way to send a message to a Page/account as a user,
+  so only a real human DM triggers them (worse than WhatsApp, which a production sender number
+  would unlock). Verified manually; the automated tests skip unless
+  `E2E_MESSENGER_AUTOMATED=1` / `E2E_INSTAGRAM_AUTOMATED=1` (a log-based check of a recent
+  human-triggered round trip).
 - Teams remains blocked: `core/config.py` still has no `_TeamsConfig` / `teams:` field, so its
-  handler cannot be constructed.
+  handler cannot be constructed — it would need a small core change first.
 - WhatsApp: sender is a second business number in a **separate Meta app** (shared app → the bot
   answers its own replies in a loop); inbound is the pre-approved `hello_world` template
   (business-initiated messages must be templates). No read-back API exists, so verification polls

@@ -26,3 +26,8 @@ output "messenger_webhook_url" {
   description = "Callback URL to register under the Meta app's Messenger webhook configuration"
   value       = "${local.webhook_base_url}/api/v1/messenger/webhook"
 }
+
+output "instagram_webhook_url" {
+  description = "Callback URL to register under the Meta app's Instagram webhook configuration"
+  value       = "${local.webhook_base_url}/api/v1/instagram/webhook"
+}

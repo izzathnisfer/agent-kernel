@@ -7,17 +7,19 @@ reply is read back from the platform. This covers the full transport layer (API 
 webhook routing, Slack signature verification, Telegram secret token) that in-process
 tests cannot.
 
-Current coverage: **Slack**, **Telegram**, **Gmail**, **WhatsApp**, and **Messenger**. The
-harness is designed so further platforms (Instagram) can be added as senders/readers
-become available.
+Current coverage: **Slack**, **Telegram**, **Gmail**, **WhatsApp**, **Messenger**, and
+**Instagram** — every messaging platform Agent Kernel can construct today. (Teams is
+excluded: `core/config.py` has no `_TeamsConfig`/`teams:` field, so its handler can't be
+constructed.)
 
 Verification depth differs by platform:
 - **Slack / Telegram / Gmail** — read the agent's reply back from the platform (full
   round-trip proof), fully automated in CI.
 - **WhatsApp** — no read-back API; verified via CloudWatch logs. Automated test is opt-in
   (`E2E_WHATSAPP_AUTOMATED=1`) and needs a production sender number; otherwise manual.
-- **Messenger** — cannot be automated at all (no API to message a Page as a user);
-  manual verification only, with a log-based opt-in check (`E2E_MESSENGER_AUTOMATED=1`).
+- **Messenger / Instagram** — cannot be automated at all (no API to message a Page/account
+  as a user); manual verification only, with a log-based opt-in check
+  (`E2E_MESSENGER_AUTOMATED=1` / `E2E_INSTAGRAM_AUTOMATED=1`).
 
 ## Layout
 
@@ -171,6 +173,35 @@ CI: add secrets `E2E_MESSENGER_ACCESS_TOKEN`, `E2E_MESSENGER_VERIFY_TOKEN`,
 `E2E_MESSENGER_APP_SECRET`. The automated test skips unless `E2E_MESSENGER_AUTOMATED=1`
 (and even then it only confirms a *recent human-triggered* round trip via logs).
 
+### 2e. Instagram (optional)
+
+Needs an **Instagram Business/Creator account** and a Meta app with the **Instagram**
+product (Business Login for Instagram). Like Messenger, there is no API to DM an account
+as a user, so this is manual-verify only.
+
+1. Convert the bot's Instagram account to a **Business** or **Creator** account (in the
+   Instagram app → Settings → Account type).
+2. In a Meta app (reuse the WhatsApp/Messenger bot app or a fresh one) → Add product
+   **Instagram** → set up **API with Instagram login** → connect the IG account and
+   **generate an Instagram access token**. Note the token and the **IG account ID**.
+3. Choose a **verify token** (any random string).
+4. Fill `app/.env` (`INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_VERIFY_TOKEN`,
+   `INSTAGRAM_ACCOUNT_ID`, optionally `INSTAGRAM_APP_SECRET`) and redeploy.
+5. Register the webhook: Instagram → webhooks → Callback URL = `instagram_webhook_url`
+   terraform output, Verify token = step 3, subscribe to the **messages** field. (I can
+   also register this via the Graph API, same as WhatsApp/Messenger.)
+6. Verify manually: from a *different* Instagram account, DM the bot account. Watch the
+   logs:
+   ```bash
+   aws logs tail /aws/ecs/ak-e2e-dev-messaging-service/ak-e2e-dev-messaging-app \
+     --region us-east-2 --since 5m | grep -i instagram
+   ```
+
+CI: add secrets `E2E_INSTAGRAM_ACCESS_TOKEN`, `E2E_INSTAGRAM_VERIFY_TOKEN`,
+`E2E_INSTAGRAM_APP_SECRET`; variable `E2E_INSTAGRAM_ACCOUNT_ID`. The automated test skips
+unless `E2E_INSTAGRAM_AUTOMATED=1` (and even then only confirms a *recent human-triggered*
+round trip via logs).
+
 ### 3. Deploy to AWS ECS
 
 The primary deploy path is the `e2e-messaging-deploy` job in the **Weekly Integration
@@ -282,6 +313,8 @@ environment variables.
 | `E2E_WHATSAPP_SENDER_PHONE_NUMBER_ID` / `E2E_WHATSAPP_BOT_NUMBER` / `E2E_WHATSAPP_SENDER_NUMBER` | tests | Sender phone number ID + both numbers in digits-only international format (CI: variables) |
 | `MESSENGER_ACCESS_TOKEN` / `MESSENGER_VERIFY_TOKEN` / `MESSENGER_APP_SECRET` | deploy (`app/.env`) | Bot Page access token + webhook verify token + app secret (CI: `E2E_MESSENGER_*` secrets) |
 | `E2E_MESSENGER_AUTOMATED` | tests | Set to `1` to run the Messenger log-based check (default: skip) |
+| `INSTAGRAM_ACCESS_TOKEN` / `INSTAGRAM_VERIFY_TOKEN` / `INSTAGRAM_APP_SECRET` / `INSTAGRAM_ACCOUNT_ID` | deploy (`app/.env`) | IG business token + verify token + app secret + account ID (CI: `E2E_INSTAGRAM_*` secrets/variable) |
+| `E2E_INSTAGRAM_AUTOMATED` | tests | Set to `1` to run the Instagram log-based check (default: skip) |
 
 ## Troubleshooting
 

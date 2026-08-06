@@ -23,6 +23,10 @@ load_env() {
 	map_tf_var TF_VAR_messenger_access_token "${MESSENGER_ACCESS_TOKEN-}"
 	map_tf_var TF_VAR_messenger_verify_token "${MESSENGER_VERIFY_TOKEN-}"
 	map_tf_var TF_VAR_messenger_app_secret "${MESSENGER_APP_SECRET-}"
+	map_tf_var TF_VAR_instagram_access_token "${INSTAGRAM_ACCESS_TOKEN-}"
+	map_tf_var TF_VAR_instagram_verify_token "${INSTAGRAM_VERIFY_TOKEN-}"
+	map_tf_var TF_VAR_instagram_app_secret "${INSTAGRAM_APP_SECRET-}"
+	map_tf_var TF_VAR_instagram_account_id "${INSTAGRAM_ACCOUNT_ID-}"
 }
 
 map_tf_var() {
@@ -41,7 +45,7 @@ create_deployment_package() {
       uv pip install -r requirements.txt --target=dist/data
     else
       uv pip install -r requirements.txt --target=dist/data --find-links ../../ak-py/dist
-      uv pip install --force-reinstall --no-deps --no-index --target=dist/data --find-links ../../ak-py/dist agentkernel[api,openai,slack,telegram,gmail,whatsapp,messenger] || true
+      uv pip install --force-reinstall --no-deps --no-index --target=dist/data --find-links ../../ak-py/dist agentkernel[api,openai,slack,telegram,gmail,whatsapp,messenger,instagram] || true
     fi
     cp -r app.py config.yaml dist/data
     popd || exit 1

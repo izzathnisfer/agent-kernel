@@ -397,6 +397,10 @@ jobs:
           TF_VAR_messenger_access_token: ${{ secrets.E2E_MESSENGER_ACCESS_TOKEN }}
           TF_VAR_messenger_verify_token: ${{ secrets.E2E_MESSENGER_VERIFY_TOKEN }}
           TF_VAR_messenger_app_secret: ${{ secrets.E2E_MESSENGER_APP_SECRET }}
+          TF_VAR_instagram_access_token: ${{ secrets.E2E_INSTAGRAM_ACCESS_TOKEN }}
+          TF_VAR_instagram_verify_token: ${{ secrets.E2E_INSTAGRAM_VERIFY_TOKEN }}
+          TF_VAR_instagram_app_secret: ${{ secrets.E2E_INSTAGRAM_APP_SECRET }}
+          TF_VAR_instagram_account_id: ${{ vars.E2E_INSTAGRAM_ACCOUNT_ID }}
         run: |
           terraform init -input=false
           terraform apply -input=false -auto-approve

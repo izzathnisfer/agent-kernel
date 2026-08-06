@@ -142,3 +142,30 @@ variable "messenger_app_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "instagram_access_token" {
+  description = "Instagram Business access token. Empty disables the Instagram integration"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "instagram_verify_token" {
+  description = "Self-chosen token entered when registering the Instagram webhook in the Meta app dashboard"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "instagram_app_secret" {
+  description = "Meta app secret for Instagram webhook signature verification. Empty disables signature checks"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "instagram_account_id" {
+  description = "Instagram Business Account ID (optional; not required to send)"
+  type        = string
+  default     = ""
+}

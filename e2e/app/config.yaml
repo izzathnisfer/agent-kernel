@@ -16,3 +16,5 @@ whatsapp:
   agent: "general"
 messenger:
   agent: "general"
+instagram:
+  agent: "general"

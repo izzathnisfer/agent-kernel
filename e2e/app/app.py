@@ -69,6 +69,13 @@ def _handlers():
         handlers.append(AgentMessengerRequestHandler())
     else:
         _log.info("Messenger credentials not configured - Messenger integration disabled")
+    # Instagram is optional: the handler refuses to construct without credentials.
+    if os.environ.get("AK_INSTAGRAM__ACCESS_TOKEN"):
+        from agentkernel.instagram import AgentInstagramRequestHandler
+
+        handlers.append(AgentInstagramRequestHandler())
+    else:
+        _log.info("Instagram credentials not configured - Instagram integration disabled")
     return handlers
 
 

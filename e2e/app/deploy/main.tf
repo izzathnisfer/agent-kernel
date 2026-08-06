@@ -49,6 +49,17 @@ module "e2e_agents" {
       path           = "messenger/webhook",
       method         = "POST",
       overwrite_path = "/messenger/webhook"
+    },
+    {
+      # Instagram webhook verification (Meta sends GET with hub.* query params)
+      path           = "instagram/webhook",
+      method         = "GET",
+      overwrite_path = "/instagram/webhook"
+    },
+    {
+      path           = "instagram/webhook",
+      method         = "POST",
+      overwrite_path = "/instagram/webhook"
     }
   ]
 
@@ -72,6 +83,10 @@ module "e2e_agents" {
       AK_MESSENGER__ACCESS_TOKEN  = var.messenger_access_token
       AK_MESSENGER__VERIFY_TOKEN  = var.messenger_verify_token
       AK_MESSENGER__APP_SECRET    = var.messenger_app_secret
+      AK_INSTAGRAM__ACCESS_TOKEN  = var.instagram_access_token
+      AK_INSTAGRAM__VERIFY_TOKEN  = var.instagram_verify_token
+      AK_INSTAGRAM__APP_SECRET    = var.instagram_app_secret
+      AK_INSTAGRAM__INSTAGRAM_ACCOUNT_ID = var.instagram_account_id
     }
   }
 }
