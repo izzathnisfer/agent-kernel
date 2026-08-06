@@ -10,7 +10,7 @@ import json
 import sys
 
 
-def generate_matrix_from_config(config_path: str, tier: str) -> tuple[dict, dict]:
+def generate_matrix_from_config(config_path: str, tier: str) -> tuple[dict, dict, dict]:
     """
     Generate test matrix from configuration file.
     
@@ -61,23 +61,28 @@ def generate_matrix_from_config(config_path: str, tier: str) -> tuple[dict, dict
     
     # Get deployment base (only for integration tests)
     deployment_base = None
+    deployment_base_gcp = None
     if tier in ['nightly', 'weekly'] and 'deployment_base' in config and config['deployment_base']:
-        base = config['deployment_base'][0]  # Assume single base deployment
-        deployment_base = {
-            'type': base['type'],
-            'path': base['path'],
-            'deploy_dir': base.get('deploy_dir', 'deploy')
-        }
-    
-    return {'include': matrix_tests}, deployment_base
+        for base in config['deployment_base']:
+            entry = {
+                'type': base['type'],
+                'path': base['path'],
+                'deploy_dir': base.get('deploy_dir', 'deploy'),
+            }
+            if base['type'].startswith('aws-') and deployment_base is None:
+                deployment_base = entry
+            elif base['type'].startswith('gcp-') and deployment_base_gcp is None:
+                deployment_base_gcp = entry
+
+    return {'include': matrix_tests}, deployment_base, deployment_base_gcp
 
 
-def generate_nightly_matrix(config_path: str) -> tuple[dict, dict]:
+def generate_nightly_matrix(config_path: str) -> tuple[dict, dict, dict]:
     """Generate test matrix for nightly workflow."""
     return generate_matrix_from_config(config_path, 'nightly')
 
 
-def generate_weekly_matrices(config_path: str) -> tuple[dict, dict]:
+def generate_weekly_matrices(config_path: str) -> tuple[dict, dict, dict]:
     """Generate test matrices for weekly workflow."""
     return generate_matrix_from_config(config_path, 'weekly')
 
@@ -125,29 +130,39 @@ def main():
                 print(json.dumps(matrix, indent=2))
         
         elif args.tier == 'nightly':
-            matrix, deployment_base = generate_nightly_matrix(args.config)
+            matrix, deployment_base, deployment_base_gcp = generate_nightly_matrix(args.config)
             if args.format == 'github':
                 print(f"matrix={json.dumps(matrix)}")
                 if deployment_base:
                     print(f"deployment-base={json.dumps(deployment_base)}")
+                if deployment_base_gcp:
+                    print(f"deployment-base-gcp={json.dumps(deployment_base_gcp)}")
             else:
                 print(json.dumps(matrix, indent=2))
                 if deployment_base:
                     print("\nDeployment Base:")
                     print(json.dumps(deployment_base, indent=2))
-        
+                if deployment_base_gcp:
+                    print("\nDeployment Base (GCP):")
+                    print(json.dumps(deployment_base_gcp, indent=2))
+
         elif args.tier == 'weekly':
-            matrix, deployment_base = generate_weekly_matrices(args.config)
+            matrix, deployment_base, deployment_base_gcp = generate_weekly_matrices(args.config)
             if args.format == 'github':
                 print(f"matrix={json.dumps(matrix)}")
                 if deployment_base:
                     print(f"deployment-base={json.dumps(deployment_base)}")
+                if deployment_base_gcp:
+                    print(f"deployment-base-gcp={json.dumps(deployment_base_gcp)}")
             else:
                 print("Test Matrix:")
                 print(json.dumps(matrix, indent=2))
                 if deployment_base:
                     print("\nDeployment Base:")
                     print(json.dumps(deployment_base, indent=2))
+                if deployment_base_gcp:
+                    print("\nDeployment Base (GCP):")
+                    print(json.dumps(deployment_base_gcp, indent=2))
     
     except Exception as e:
         print(f"Error generating matrices: {e}", file=sys.stderr)

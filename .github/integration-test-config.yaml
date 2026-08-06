@@ -1,10 +1,17 @@
 # Integration Test Configuration
 # This file defines which tests run on nightly vs weekly schedules and their execution order
 
-# Deployment base infrastructure - always deployed but not part of test matrix
+# Deployment base infrastructure - always deployed but not part of test matrix.
+# The GCP base provides a persistent, shared VPC: other GCP examples reuse its
+# network via Direct VPC egress (network_id / private_subnet_id) instead of
+# creating and destroying their own VPC, which avoids the serverless address
+# reservation that otherwise blocks subnet deletion on destroy.
 deployment_base:
   - type: aws-serverless
     path: examples/aws-serverless/openai
+    deploy_dir: deploy
+  - type: gcp-serverless
+    path: examples/gcp-serverless/openai
     deploy_dir: deploy
 
 nightly:
@@ -92,11 +99,10 @@ weekly:
 #      deploy_dir: deploy
 
     # GCP Serverless
+    # NOTE: examples/gcp-serverless/openai is the GCP deployment_base (shared VPC),
+    # so it is deployed+tested there and intentionally omitted from this matrix.
     - type: gcp-serverless
       path: examples/gcp-serverless/openai-firestore
-      deploy_dir: deploy
-    - type: gcp-serverless
-      path: examples/gcp-serverless/openai
       deploy_dir: deploy
     - type: gcp-serverless
       path: examples/gcp-serverless/openai-auth

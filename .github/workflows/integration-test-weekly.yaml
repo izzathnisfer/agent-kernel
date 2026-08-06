@@ -30,6 +30,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       deployment-base: ${{ steps.set-matrix.outputs.deployment-base }}
+      deployment-base-gcp: ${{ steps.set-matrix.outputs.deployment-base-gcp }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -148,12 +149,84 @@ jobs:
         run: |
           echo "::error::openai base test failed (see the 'Test' step above for details). Continuing the pipeline since the base deployment itself succeeded and other tests depend on it."
 
-  get-base-outputs:
-    needs: [setup, build-ak-py, deploy-openai]
+  # GCP base deployment — provisions the shared, persistent VPC that every GCP
+  # example reuses via Direct VPC egress. Like deploy-openai it is NOT destroyed,
+  # so no test ever deletes its subnet (which would hit the serverless address
+  # reservation lock). Skipped if no GCP base is configured.
+  deploy-gcp-base:
+    needs: [setup, build-ak-py]
+    if: needs.setup.outputs.deployment-base-gcp != ''
     runs-on: ubuntu-latest
+    environment: ci-tests
+    defaults:
+      run:
+        shell: bash -e {0}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install uv pyyaml
+
+      - name: Restore ak-py build
+        uses: actions/cache/restore@v5
+        with:
+          path: ak-py/dist
+          key: ak-py-${{ github.sha }}
+          fail-on-cache-miss: true
+
+      - name: GCP login
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: "id_token"
+          id_token_audience: "32555940559.apps.googleusercontent.com"
+          id_token_include_email: true
+
+      - name: Export identity token
+        run: echo "IDENTITY_TOKEN=${{ steps.auth.outputs.id_token }}" >> $GITHUB_ENV
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.14.3
+
+      - name: Inject dependencies
+        run: python3 scripts/deploy/inject_dependencies.py
+
+      - name: Deploy GCP base ${{ fromJson(needs.setup.outputs.deployment-base-gcp).path }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python .github/scripts/run_single_test.py \
+            --type ${{ fromJson(needs.setup.outputs.deployment-base-gcp).type }} \
+            --path ${{ fromJson(needs.setup.outputs.deployment-base-gcp).path }} \
+            --deploy-dir ${{ fromJson(needs.setup.outputs.deployment-base-gcp).deploy_dir }} \
+            --action deploy
+
+  get-base-outputs:
+    needs: [setup, build-ak-py, deploy-openai, deploy-gcp-base]
+    # deploy-gcp-base is skipped when no GCP base is configured; don't let that
+    # skip cascade here.
+    if: always() && needs.deploy-openai.result == 'success' && (needs.deploy-gcp-base.result == 'success' || needs.deploy-gcp-base.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: ci-tests
     outputs:
       vpc_id: ${{ steps.base-outputs.outputs.vpc_id }}
       private_subnet_ids: ${{ steps.base-outputs.outputs.private_subnet_ids }}
+      gcp_network_id: ${{ steps.base-outputs-gcp.outputs.gcp_network_id }}
+      gcp_private_subnet_id: ${{ steps.base-outputs-gcp.outputs.gcp_private_subnet_id }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -184,6 +257,30 @@ jobs:
           python3 .github/scripts/get_base_outputs.py \
             --base-path ${{ fromJson(needs.setup.outputs.deployment-base).path }} \
             --deploy-dir ${{ fromJson(needs.setup.outputs.deployment-base).deploy_dir }}
+
+      - name: GCP login
+        id: auth
+        if: needs.setup.outputs.deployment-base-gcp != ''
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: "id_token"
+          id_token_audience: "32555940559.apps.googleusercontent.com"
+          id_token_include_email: true
+
+      - name: Setup gcloud
+        if: needs.setup.outputs.deployment-base-gcp != ''
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Retrieve GCP base outputs
+        id: base-outputs-gcp
+        if: needs.setup.outputs.deployment-base-gcp != ''
+        run: |
+          python3 .github/scripts/get_base_outputs.py \
+            --cloud gcp \
+            --base-path ${{ fromJson(needs.setup.outputs.deployment-base-gcp).path }} \
+            --deploy-dir ${{ fromJson(needs.setup.outputs.deployment-base-gcp).deploy_dir }}
 
   run-tests:
     needs: [setup, build-ak-py, get-base-outputs]
@@ -284,6 +381,12 @@ jobs:
           if [[ "${{ matrix.type }}" == aws-* ]]; then
             ARGS+=(--vpc-id "${{ needs.get-base-outputs.outputs.vpc_id }}" --private-subnet-ids '${{ needs.get-base-outputs.outputs.private_subnet_ids }}')
           fi
+          # GCP examples reuse the shared base VPC via Direct VPC egress; terraform
+          # reads these TF_VAR_* from the environment (inherited by the subprocess).
+          if [[ "${{ matrix.type }}" == gcp-* ]]; then
+            export TF_VAR_network_id="${{ needs.get-base-outputs.outputs.gcp_network_id }}"
+            export TF_VAR_private_subnet_id="${{ needs.get-base-outputs.outputs.gcp_private_subnet_id }}"
+          fi
           python .github/scripts/run_single_test.py "${ARGS[@]}"
 
       - name: Test - ${{ matrix.path }}
@@ -324,6 +427,13 @@ jobs:
           ARGS=(--type ${{ matrix.type }} --path ${{ matrix.path }} --deploy-dir ${{ matrix.deploy_dir }} --action destroy)
           if [[ "${{ matrix.type }}" == aws-* ]]; then
             ARGS+=(--vpc-id "${{ needs.get-base-outputs.outputs.vpc_id }}" --private-subnet-ids '${{ needs.get-base-outputs.outputs.private_subnet_ids }}')
+          fi
+          # GCP examples reuse the shared base VPC via Direct VPC egress. Since the
+          # base subnet is never destroyed here, the serverless address reservation
+          # never blocks teardown.
+          if [[ "${{ matrix.type }}" == gcp-* ]]; then
+            export TF_VAR_network_id="${{ needs.get-base-outputs.outputs.gcp_network_id }}"
+            export TF_VAR_private_subnet_id="${{ needs.get-base-outputs.outputs.gcp_private_subnet_id }}"
           fi
           python .github/scripts/run_single_test.py "${ARGS[@]}"
       - name: Upload test results

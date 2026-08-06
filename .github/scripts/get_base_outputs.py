@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-Retrieve VPC and subnet outputs from the base deployment.
+Retrieve network outputs from a base deployment.
 
-This script initializes Terraform in the base deployment directory and
-retrieves the VPC ID and private subnet IDs. Results are written to
+This script initializes Terraform in a base deployment directory and retrieves
+the network identifiers other example deployments reuse (so the e2e harness
+deploys the VPC once instead of per example). Results are written to
 $GITHUB_OUTPUT for use in subsequent workflow steps.
+
+- AWS (default): reads `vpc_id` (raw) and `private_subnet_ids` (JSON array) and
+  writes `vpc_id` / `private_subnet_ids`.
+- GCP: reads `network_id` and `private_subnet_id` (both raw) and writes
+  `gcp_network_id` / `gcp_private_subnet_id` (so they don't collide with the
+  AWS keys when both bases are read in the same job).
 """
 
 import argparse
@@ -15,9 +22,35 @@ import sys
 from pathlib import Path
 
 
+def _tf_output(deploy_path: Path, name: str, raw: bool = True) -> str:
+    """Return a single terraform output value."""
+    flag = "-raw" if raw else "-json"
+    result = subprocess.run(
+        ["terraform", "output", flag, name],
+        cwd=str(deploy_path),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _write_outputs(pairs: dict) -> None:
+    for key, value in pairs.items():
+        print(f"{key}: {value}")
+    github_output = os.environ.get("GITHUB_OUTPUT", "")
+    if github_output:
+        with open(github_output, "a") as f:
+            for key, value in pairs.items():
+                f.write(f"{key}={value}\n")
+        print("Outputs written to $GITHUB_OUTPUT")
+    else:
+        print("GITHUB_OUTPUT not set — printing outputs only")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Retrieve base deployment outputs (VPC ID, subnet IDs)"
+        description="Retrieve base deployment network outputs"
     )
     parser.add_argument(
         "--base-path",
@@ -28,6 +61,12 @@ def main():
         "--deploy-dir",
         default="deploy",
         help="Deploy directory within the base path",
+    )
+    parser.add_argument(
+        "--cloud",
+        choices=["aws", "gcp"],
+        default="aws",
+        help="Which cloud's base outputs to read",
     )
     args = parser.parse_args()
 
@@ -46,41 +85,22 @@ def main():
         env={**os.environ, "TF_INPUT": "0"},
     )
 
-    # Retrieve vpc_id
-    result = subprocess.run(
-        ["terraform", "output", "-raw", "vpc_id"],
-        cwd=str(deploy_path),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    vpc_id = result.stdout.strip()
-
-    # Retrieve private_subnet_ids (JSON array)
-    result = subprocess.run(
-        ["terraform", "output", "-json", "private_subnet_ids"],
-        cwd=str(deploy_path),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    private_subnet_ids = result.stdout.strip()
-
-    # Validate
-    json.loads(private_subnet_ids)  # ensure valid JSON
-
-    print(f"VPC ID: {vpc_id}")
-    print(f"Private Subnet IDs: {private_subnet_ids}")
-
-    # Write to GitHub Actions output
-    github_output = os.environ.get("GITHUB_OUTPUT", "")
-    if github_output:
-        with open(github_output, "a") as f:
-            f.write(f"vpc_id={vpc_id}\n")
-            f.write(f"private_subnet_ids={private_subnet_ids}\n")
-        print("Outputs written to $GITHUB_OUTPUT")
-    else:
-        print("GITHUB_OUTPUT not set — printing outputs only")
+    if args.cloud == "aws":
+        vpc_id = _tf_output(deploy_path, "vpc_id", raw=True)
+        private_subnet_ids = _tf_output(deploy_path, "private_subnet_ids", raw=False)
+        json.loads(private_subnet_ids)  # ensure valid JSON
+        _write_outputs(
+            {"vpc_id": vpc_id, "private_subnet_ids": private_subnet_ids}
+        )
+    else:  # gcp
+        network_id = _tf_output(deploy_path, "network_id", raw=True)
+        private_subnet_id = _tf_output(deploy_path, "private_subnet_id", raw=True)
+        _write_outputs(
+            {
+                "gcp_network_id": network_id,
+                "gcp_private_subnet_id": private_subnet_id,
+            }
+        )
 
 
 if __name__ == "__main__":

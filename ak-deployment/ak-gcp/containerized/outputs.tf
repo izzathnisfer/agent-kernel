@@ -32,3 +32,13 @@ output "authorizer_status" {
   description = "Status message indicating whether the JWT authorizer is configured"
   value       = local.authorizer_status_message
 }
+
+output "network_id" {
+  description = "VPC network id used by this deployment (created or provided)"
+  value       = local.network_id
+}
+
+output "private_subnet_id" {
+  description = "Private subnet id used for Cloud Run Direct VPC egress"
+  value       = local.private_subnet_id
+}
