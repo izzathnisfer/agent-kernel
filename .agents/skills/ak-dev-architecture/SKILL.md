@@ -202,7 +202,7 @@ Provides persistent, named conversation threads keyed by `session_id`, gated beh
 - **`Thread` / `ThreadMessage` / `ThreadAttachment` / `ThreadPage` / `MessagePage`** (`model.py`): Pydantic models for thread metadata, individual messages, attachment references, and cursor-paginated listings
 - **`ThreadNamingStrategy`** (`naming.py`): Overridable strategy that names auto-created threads — default implementation makes a single LiteLLM call (`thread.naming.model`, requires the `thread` extra) to derive a concise title from the first prompt, falling back to a truncated prompt prefix when `litellm`/an API key is unavailable. Explicit `thread_name` on a chat request always wins and locks the thread against further automatic naming
 - **`Authoriser`** (`authoriser.py`): Pluggable base class (`authorise(token) -> Optional[user_id]`) that `ThreadRESTRequestHandler` calls to protect the read routes; routes are open when no `Authoriser` is configured
-- **`ThreadRESTRequestHandler`** (`api/thread.py`): Mounts `GET /api/v1/threads` (list, filterable by `user_id`/`group_id`, cursor-paginated) and `GET /api/v1/threads/{session_id}` (thread + paginated message history); raises 404 when thread support is disabled and 403 when a resolved `user_id` doesn't own the requested thread
+- **`ThreadRESTRequestHandler`** (`api/thread.py`): Mounts `GET /api/v1/threads` (list, filterable by `user_id`/`group_id`, cursor-paginated) and `GET /api/v1/threads/{session_id}` (thread + paginated message history); raises 404 when thread support is disabled and 403 when a resolved `user_id` doesn't own the requested thread. **Never mounted implicitly** — it is served only when passed to `RESTAPI.run(handlers=[...])`, so a `thread:` block configures storage alone and enabling a backend cannot silently publish a read API over every user's history. Consequence: `ECSIOHandler.run()` and `CloudRun.run()` build their handler lists internally and therefore cannot expose thread routes today (`RESTAPI.add()` is not a substitute — it mounts under `api.custom_router_prefix`, giving the wrong paths)
 
 ### Store Backends
 
@@ -219,7 +219,7 @@ Provides persistent, named conversation threads keyed by `session_id`, gated beh
 
 ```yaml
 thread:
-  type: memory       # memory | redis | valkey | dynamodb | firestore | cosmosdb
+  type: in_memory    # in_memory | redis | valkey | dynamodb | firestore | cosmosdb
   naming:
     model: gpt-4o-mini
     max_length: 80
@@ -242,7 +242,7 @@ detail — `create_dynamodb_thread_table` (AWS serverless + containerized) injec
 `AK_THREAD__DYNAMODB__TABLE_NAME`; `create_firestore_thread_collection` (GCP) injects the
 `AK_THREAD__FIRESTORE__*` vars. Terraform never sets `AK_THREAD__TYPE`. Note the failure mode this
 leaves: because `AKConfig.thread` is `Optional` and any `AK_THREAD__*` var materialises it while
-`type` defaults to `memory`, setting a flag *without* declaring `thread.type` enables the feature on
+`type` defaults to `in_memory`, setting a flag *without* declaring `thread.type` enables the feature on
 the non-durable in-memory backend, with no error.
 
 Attachments in thread mode additionally require `multimodal.enabled: true` with a shared attachment store (`in_memory`, `redis`, or `dynamodb` — `session_cache` is rejected, since threads need durable, cross-request-scoped attachment storage that a session-local cache can't provide).

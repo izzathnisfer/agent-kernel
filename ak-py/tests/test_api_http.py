@@ -7,6 +7,23 @@ from fastapi.testclient import TestClient
 
 from agentkernel.api.http import RESTAPI
 from agentkernel.auth.handler import AuthValidator, ValidationResult
+from agentkernel.core.config import _ThreadStoreConfig
+
+
+def collect_route_paths(routes, prefix=""):
+    """Flatten an app's routes into full paths.
+
+    Starlette 1.3+ wraps routers added after app construction in `_IncludedRouter`
+    objects that carry no `path`, so their children have to be walked separately.
+    """
+    paths = []
+    for route in routes:
+        if hasattr(route, "path"):
+            paths.append(prefix + route.path)
+        elif hasattr(route, "include_context") and hasattr(route, "original_router"):
+            ctx_prefix = getattr(route.include_context, "prefix", "")
+            paths.extend(collect_route_paths(route.original_router.routes, prefix + ctx_prefix))
+    return paths
 
 
 class TestRESTAPI:
@@ -174,6 +191,33 @@ class TestRESTAPI:
             response = client.get("/custom")
             assert response.status_code == 200
 
+    @patch("agentkernel.api.http.AKConfig")
+    def test_run_does_not_auto_mount_thread_routes(self, mock_config_class, mock_config):
+        """A thread block configures storage only — it must not publish the read routes.
+
+        Auto-mounting meant enabling a storage backend silently exposed an
+        unauthenticated read API over every user's conversation history.
+        """
+        mock_config.thread = _ThreadStoreConfig(type="in_memory")
+        mock_config_class.get.return_value = mock_config
+
+        router = APIRouter()
+
+        @router.get("/api/v1/chat")
+        def chat_endpoint():
+            return {}
+
+        mock_handler = Mock()
+        mock_handler.get_router.return_value = router
+
+        with patch("uvicorn.run") as mock_uvicorn:
+            RESTAPI.run([mock_handler])
+
+        app = mock_uvicorn.call_args[1]["app"]
+        paths = collect_route_paths(app.routes)
+        assert "/api/v1/chat" in paths, "traversal must see the passed handler's routes, else the check below is vacuous"
+        assert not any(path.startswith("/api/v1/threads") for path in paths)
+
     def test_add_auth_handlers_with_validators(self, mock_auth_validator):
         """Test add_auth_handlers with auth validators."""
         RESTAPI._auth_token_validators.clear()
@@ -339,20 +383,7 @@ class TestRESTAPIIntegration:
         # Get the app that was passed to uvicorn.run
         app = mock_uvicorn.call_args[1]["app"]
 
-        # Test the routes — Starlette 1.3+ uses _IncludedRouter objects for
-        # routers added after app construction, so collect paths from both
-        # direct routes and included routers.
-        def collect_paths(routes, prefix=""):
-            paths = []
-            for route in routes:
-                if hasattr(route, "path"):
-                    paths.append(prefix + route.path)
-                elif hasattr(route, "include_context") and hasattr(route, "original_router"):
-                    ctx_prefix = getattr(route.include_context, "prefix", "")
-                    paths.extend(collect_paths(route.original_router.routes, prefix + ctx_prefix))
-            return paths
-
-        route_paths = collect_paths(app.routes)
+        route_paths = collect_route_paths(app.routes)
         assert "/health" in route_paths
         client = TestClient(app)
         response = client.get("/custom/test")

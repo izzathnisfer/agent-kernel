@@ -117,12 +117,23 @@ def test_session_builder_byo_dotted_path_gets_cache(monkeypatch):
 # --- ThreadStoreBuilder ----------------------------------------------------- #
 
 
-def test_thread_builder_default_memory():
+def test_thread_builder_default_in_memory():
+    with patch.object(AKConfig, "get") as mock_get:
+        cfg = Mock()
+        cfg.thread.type = "in_memory"
+        mock_get.return_value = cfg
+        assert isinstance(ThreadStoreBuilder.build(), InMemoryThreadStore)
+
+
+def test_thread_builder_legacy_memory_name_fails_loud():
+    # Breaking rename: "memory" was the old short name and has no back-compat alias.
+    # Configs omitting `type` are unaffected — the field default moved to "in_memory".
     with patch.object(AKConfig, "get") as mock_get:
         cfg = Mock()
         cfg.thread.type = "memory"
         mock_get.return_value = cfg
-        assert isinstance(ThreadStoreBuilder.build(), InMemoryThreadStore)
+        with pytest.raises(AKConfigError):
+            ThreadStoreBuilder.build()
 
 
 def test_thread_builder_unknown_type_fails_loud():

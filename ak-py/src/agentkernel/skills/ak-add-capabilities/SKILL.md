@@ -732,7 +732,7 @@ dependencies = [
 2. Update `config.yaml`:
 ```yaml
 thread:
-  type: memory  # other supported backends: redis | valkey | dynamodb | firestore | cosmosdb
+  type: in_memory  # other supported backends: redis | valkey | dynamodb | firestore | cosmosdb
 ```
 
 3. No further code changes needed. When enabled:
@@ -750,7 +750,7 @@ dependencies = [
 ```
 ```yaml
 thread:
-  type: memory
+  type: in_memory
   naming:
     model: "gpt-4o-mini"   # LiteLLM model used to name threads
     max_length: 80
@@ -822,9 +822,10 @@ class DemoAuthoriser(Authoriser):
 RESTAPI.run(handlers=[AgentRESTRequestHandler(), ThreadRESTRequestHandler(authoriser=DemoAuthoriser())])
 ```
 
-Passing an explicit `ThreadRESTRequestHandler` replaces the default open thread routes that are mounted
-automatically when a `thread` block is present in `config.yaml`. With an Authoriser configured, thread listings
-are scoped to the resolved `user_id` and reading another user's thread is rejected (403).
+The thread routes are served only when a `ThreadRESTRequestHandler` is passed to `RESTAPI.run()` — a
+`thread` block in `config.yaml` configures storage alone. Constructing the handler without an
+`authoriser` leaves the routes open. With an Authoriser configured, thread listings are scoped to the
+resolved `user_id` and reading another user's thread is rejected (403).
 
 **Attachments in thread mode:** require `multimodal.enabled: true` with a shared attachment store —
 `in_memory`, `redis`, or `dynamodb` (`session_cache` is rejected).

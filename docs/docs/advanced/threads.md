@@ -51,7 +51,7 @@ Add a `thread` block to `config.yaml`; its presence turns the feature on:
 
 ```yaml
 thread:
-  type: memory        # memory | redis | valkey | dynamodb | firestore | cosmosdb
+  type: in_memory     # in_memory | redis | valkey | dynamodb | firestore | cosmosdb
 ```
 
 ## Chat Request Fields
@@ -86,7 +86,7 @@ about once at startup with the install hint, and every failed naming call logs a
 
 ```yaml
 thread:
-  type: memory
+  type: in_memory
   naming:
     model: gpt-4o-mini  # LiteLLM model used to generate thread names
     max_length: 80      # max auto-generated name length
@@ -113,7 +113,16 @@ Threads whose name was explicitly supplied (a `thread_name` on any chat request)
 
 ## Reading Threads
 
-Two read endpoints are mounted automatically when threads are enabled:
+A `thread` block configures storage only. To expose the history over REST, pass a
+`ThreadRESTRequestHandler` to `RESTAPI.run()` alongside your other handlers:
+
+```python
+from agentkernel.api import RESTAPI, AgentRESTRequestHandler, ThreadRESTRequestHandler
+
+RESTAPI.run(handlers=[AgentRESTRequestHandler(), ThreadRESTRequestHandler()])
+```
+
+That mounts two read endpoints:
 
 ```bash
 # List threads (metadata only), filtered by user and/or group
@@ -233,7 +242,7 @@ You do not need to set the table or collection name yourself — Terraform gener
 
 :::warning Setting the flag without declaring `thread.type` runs threads in-memory
 `AKConfig.thread` is absent until something populates it, and any `AK_THREAD__*` variable is enough to
-populate it — but `thread.type` then falls back to its `memory` default. So enabling the Terraform flag
+populate it — but `thread.type` then falls back to its `in_memory` default. So enabling the Terraform flag
 *without* a `thread:` block in `config.yaml` switches the feature on against the **in-memory** backend:
 the provisioned table sits unused and history is lost on every cold start, with no error. Declare
 `thread.type` and this cannot happen.
@@ -263,7 +272,7 @@ multimodal:
   storage_type: in_memory
 
 thread:
-  type: memory
+  type: in_memory
 ```
 
 ## Examples

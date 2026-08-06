@@ -257,8 +257,8 @@ class _ThreadStoreConfig(BaseModel):
     """Configuration for Conversation Thread Support. Presence of this block enables the feature."""
 
     type: str = Field(
-        default="memory",
-        description="Thread store backend: a built-in short name (memory, redis, valkey, dynamodb, cosmosdb, firestore) or a dotted path to a ThreadStore subclass",
+        default="in_memory",
+        description="Thread store backend: a built-in short name (in_memory, redis, valkey, dynamodb, cosmosdb, firestore) or a dotted path to a ThreadStore subclass",
     )
     naming: _ThreadNamingConfig = Field(default_factory=_ThreadNamingConfig, description="Auto-naming settings for the built-in naming strategies")
     redis: Optional[_ThreadRedisConfig] = None
