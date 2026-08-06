@@ -190,7 +190,7 @@ multimodal:
     ttl: 604800
 ```
 
-## Conversation Threads (`ak-py/src/agentkernel/core/thread/`)
+## Conversation Threads (`ak-py/src/agentkernel/thread/`)
 
 Provides persistent, named conversation threads keyed by `session_id`, gated behind a `thread` config block and independent of session persistence (`session:`). When enabled, `user_id` becomes required on every chat request, a thread is auto-created on a session's first request, and history becomes readable over REST.
 

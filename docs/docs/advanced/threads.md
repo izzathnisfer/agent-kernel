@@ -97,7 +97,7 @@ Override the strategy by subclassing and registering your subclass once at start
 any other logic (optionally calling `self._complete(instruction)` to reuse the LLM call machinery):
 
 ```python
-from agentkernel.core.thread import ConversationThreadManager, ThreadNamingStrategy
+from agentkernel.thread import ConversationThreadManager, ThreadNamingStrategy
 
 
 class MyNaming(ThreadNamingStrategy):
@@ -147,7 +147,7 @@ Bearer token against your own authentication provider and resolve the caller's `
 ```python
 from typing import Optional
 from agentkernel.api import RESTAPI, AgentRESTRequestHandler, ThreadRESTRequestHandler
-from agentkernel.core.thread import Authoriser
+from agentkernel.thread import Authoriser
 
 
 class MyAuthoriser(Authoriser):

@@ -6,8 +6,8 @@ from agentkernel.core.base import Session
 from agentkernel.core.chat_service import ChatService
 from agentkernel.core.config import AKConfig, _ThreadStoreConfig
 from agentkernel.core.model import AgentReplyText, AgentRequestAttachmentRef, BaseRunRequest, StreamChunk
-from agentkernel.core.thread import ConversationThreadManager, ThreadNamingStrategy
-from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
+from agentkernel.thread import ConversationThreadManager, ThreadNamingStrategy
+from agentkernel.thread.store.in_memory import InMemoryThreadStore
 
 
 class EchoNaming(ThreadNamingStrategy):

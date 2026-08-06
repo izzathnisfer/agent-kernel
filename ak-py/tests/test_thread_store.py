@@ -5,9 +5,9 @@ import pytest
 from botocore.exceptions import ClientError
 
 from agentkernel.core.config import AKConfig, _ThreadDynamoDBConfig, _ThreadStoreConfig
-from agentkernel.core.thread.model import Thread, ThreadAttachment, ThreadMessage
-from agentkernel.core.thread.store.dynamodb import DynamoDBThreadStore
-from agentkernel.core.thread.store.in_memory import InMemoryThreadStore
+from agentkernel.thread.model import Thread, ThreadAttachment, ThreadMessage
+from agentkernel.thread.store.dynamodb import DynamoDBThreadStore
+from agentkernel.thread.store.in_memory import InMemoryThreadStore
 
 
 class TestDynamoDBToThread:

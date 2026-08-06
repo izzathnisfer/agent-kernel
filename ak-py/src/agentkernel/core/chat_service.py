@@ -5,6 +5,7 @@ import logging
 from collections.abc import AsyncGenerator, Generator
 from typing import Any, Dict, List, Optional, Union
 
+from ..thread import ConversationThreadManager
 from .config import AKConfig
 from .model import (
     AgentReplyAny,
@@ -19,7 +20,6 @@ from .model import (
     StreamChunk,
 )
 from .service import AgentService
-from .thread import ConversationThreadManager
 
 
 class RequestBuilder:

@@ -37,6 +37,7 @@ ak-py/                  The agentkernel PyPI package (core framework, all Python
     knowledgebase/       ChromaDB, Neo4j, Starburst backends
     guardrail/           OpenAI, AWS Bedrock, Walled AI guardrail providers
     trace/               Langfuse, OpenLLMetry tracing adapters
+    thread/              Conversation thread support + its pluggable thread stores
     skills/              Bundled end-user skills (see table above) — not dev docs
   tests/                 pytest suite, mirrors src/ structure
 ak-deployment/           Terraform modules per cloud (aws / azure / gcp) x (serverless / containerized)

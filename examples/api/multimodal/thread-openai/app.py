@@ -1,8 +1,8 @@
 from typing import Optional
 
 from agentkernel.api import RESTAPI, AgentRESTRequestHandler, ThreadRESTRequestHandler
-from agentkernel.core.thread import Authoriser
 from agentkernel.openai import OpenAIModule
+from agentkernel.thread import Authoriser
 from agents import Agent
 
 general_agent = Agent(

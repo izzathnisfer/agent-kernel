@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..core.thread import Authoriser, ConversationThreadManager
+from ..thread import Authoriser, ConversationThreadManager
 from .handler import RESTRequestHandler
 
 
