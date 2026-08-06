@@ -7,8 +7,9 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..thread import Authoriser, ConversationThreadManager
-from .handler import RESTRequestHandler
+from ..api import RESTRequestHandler
+from .authoriser import Authoriser
+from .manager import ConversationThreadManager
 
 
 class ThreadRESTRequestHandler(RESTRequestHandler):
@@ -30,7 +31,7 @@ class ThreadRESTRequestHandler(RESTRequestHandler):
         Initializes a ThreadRESTRequestHandler instance.
         :param authoriser: Optional user-supplied Authoriser protecting the thread routes.
         """
-        self._log = logging.getLogger("ak.api.thread")
+        self._log = logging.getLogger("ak.thread.rest")
         self._authoriser = authoriser
 
     def _resolve_user(self, request: Request) -> Optional[str]:

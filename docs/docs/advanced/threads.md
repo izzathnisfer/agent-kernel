@@ -117,7 +117,8 @@ A `thread` block configures storage only. To expose the history over REST, pass 
 `ThreadRESTRequestHandler` to `RESTAPI.run()` alongside your other handlers:
 
 ```python
-from agentkernel.api import RESTAPI, AgentRESTRequestHandler, ThreadRESTRequestHandler
+from agentkernel.api import RESTAPI, AgentRESTRequestHandler
+from agentkernel.thread import ThreadRESTRequestHandler
 
 RESTAPI.run(handlers=[AgentRESTRequestHandler(), ThreadRESTRequestHandler()])
 ```
@@ -155,8 +156,8 @@ Bearer token against your own authentication provider and resolve the caller's `
 
 ```python
 from typing import Optional
-from agentkernel.api import RESTAPI, AgentRESTRequestHandler, ThreadRESTRequestHandler
-from agentkernel.thread import Authoriser
+from agentkernel.api import RESTAPI, AgentRESTRequestHandler
+from agentkernel.thread import Authoriser, ThreadRESTRequestHandler
 
 
 class MyAuthoriser(Authoriser):

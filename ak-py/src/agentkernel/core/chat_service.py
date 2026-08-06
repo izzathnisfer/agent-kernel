@@ -5,7 +5,6 @@ import logging
 from collections.abc import AsyncGenerator, Generator
 from typing import Any, Dict, List, Optional, Union
 
-from ..thread import ConversationThreadManager
 from .config import AKConfig
 from .model import (
     AgentReplyAny,
@@ -495,10 +494,16 @@ class ChatService:
         """Return the shared ConversationThreadManager when thread support is
         enabled, enforcing the user_id requirement. Returns None when disabled.
 
+        Imported here rather than at module scope: ``agentkernel.thread`` pulls in the REST
+        handler and therefore FastAPI, which only ships in the optional ``api`` extra. A
+        module-level import would make that extra mandatory for ``import agentkernel``.
+
         :param req: Chat request to validate
         :return: The shared manager, or None when thread support is disabled
         :raises ValueError: If thread support is enabled and user_id is missing
         """
+        from ..thread import ConversationThreadManager
+
         manager = ConversationThreadManager.get()
         if manager is not None and not req.user_id:
             raise ValueError("No user_id is provided in the request — user_id is required when thread support is enabled")
