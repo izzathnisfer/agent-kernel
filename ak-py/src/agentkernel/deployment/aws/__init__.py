@@ -2,9 +2,8 @@
 AWS deployment entrypoints, serverless and containerized.
 
 The FastAPI-backed API classes stay lazy all the way up this re-export chain — see
-``containerized/__init__.py`` for why. Deliberately no ``__all__``: ``agentkernel/aws.py``
-star-imports this module, and ``import *`` resolves every name in ``__all__`` eagerly, which would
-undo the laziness and pull FastAPI back into the serverless Lambdas.
+``containerized/__init__.py`` for why. Deliberately no ``__all__``: ``agentkernel/aws.py`` star-imports
+this module, and ``import *`` resolves every ``__all__`` entry eagerly, undoing the laziness.
 """
 
 import importlib.metadata
