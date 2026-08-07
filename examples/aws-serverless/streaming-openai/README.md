@@ -39,7 +39,7 @@ The deployment exposes:
 
 Project dependencies are declared in `pyproject.toml`:
 
-- `agentkernel[aws,openai,redis]>=0.5.1`
+- `agentkernel[aws,openai,redis]>=0.8.1`
 
 ### Agent Kernel runtime config
 
@@ -50,7 +50,7 @@ execution:
   mode: stream
 ```
 
-This tells Agent Kernel to use `ServerlessStreamAgentRunner` (selected automatically at import time) and instructs the response handler to broadcast each chunk individually rather than storing a single final response.
+This tells Agent Kernel to dispatch to `ServerlessStreamAgentRunner` and instructs the response handler to broadcast each chunk individually rather than storing a single final response.
 
 Update the Redis URL to point at your cluster endpoint.
 

@@ -1,6 +1,6 @@
 locals {
   agent_runner_image = var.agent_runner.image_uri != null ? var.agent_runner.image_uri : var.default_image_uri
-  
+
   agent_runner_environment = merge(
     var.agent_runner.environment_variables,
     {
@@ -13,11 +13,18 @@ locals {
     var.valkey_url != null ? { AK_SESSION__VALKEY__URL = var.valkey_url } : {},
     var.dynamodb_memory_table_arn != null ? {
       AK_SESSION__DYNAMODB__TABLE_NAME = var.dynamodb_memory_table_name
+    } : {},
+    var.dynamodb_thread_table_arn != null ? {
+      AK_THREAD__DYNAMODB__TABLE_NAME = var.dynamodb_thread_table_name
+    } : {},
+    # WebSocket modes: full response (async) vs per-token chunks (stream).
+    contains(["async", "stream"], var.execution_mode) ? {
+      AK_EXECUTION__MODE = var.execution_mode
     } : {}
   )
 }
 
-# ---------- IAM Roles ----------
+# IAM Roles
 
 resource "aws_iam_role" "agent_runner_execution_role" {
   name = "${var.prefix}-agent-runner-exec-role"
@@ -54,7 +61,7 @@ resource "aws_iam_role" "agent_runner_task_role" {
   tags = var.tags
 }
 
-# ---------- IAM Policies ----------
+# IAM Policies
 
 resource "aws_iam_policy" "agent_runner_logs_policy" {
   name = "${var.prefix}-agent-runner-logs"
@@ -153,7 +160,38 @@ resource "aws_iam_role_policy_attachment" "agent_runner_dynamodb_memory_attachme
   policy_arn = aws_iam_policy.agent_runner_dynamodb_memory_policy[0].arn
 }
 
-# ---------- ECS Resources ----------
+resource "aws_iam_policy" "agent_runner_dynamodb_thread_policy" {
+  count = var.create_dynamodb_thread_table ? 1 : 0
+  name  = "${var.prefix}-agent-runner-dynamodb-thread"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ]
+      # No /index/* unlike the session policy: list_threads Scans, this table has no GSI.
+      Resource = var.dynamodb_thread_table_arn
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "agent_runner_dynamodb_thread_attachment" {
+  count      = var.create_dynamodb_thread_table ? 1 : 0
+  role       = aws_iam_role.agent_runner_task_role.name
+  policy_arn = aws_iam_policy.agent_runner_dynamodb_thread_policy[0].arn
+}
+
+# ECS Resources
 
 resource "aws_security_group" "agent_runner" {
   name        = "${var.prefix}-agent-runner-sg"
@@ -226,13 +264,13 @@ resource "aws_ecs_service" "agent_runner" {
   }
 
   tags = var.tags
-  
+
   lifecycle {
     ignore_changes = [desired_count]
   }
 }
 
-# ---------- Auto Scaling ----------
+# Auto Scaling
 
 resource "aws_iam_role" "backlog_metric_lambda_role" {
   count = var.scaling_config.enabled ? 1 : 0

@@ -18,7 +18,7 @@ graph TB
 
     subgraph AWS["AWS"]
         E[Lambda Serverless<br/>REST · Queue · WebSocket · Streaming]
-        F[ECS Fargate Containerized<br/>REST · Scalable Queue Mode]
+        F[ECS Fargate Containerized<br/>REST · Scalable Queue Mode · WebSocket]
     end
 
     subgraph AZ["Azure"]
@@ -56,8 +56,12 @@ Independently of *where* you deploy, `execution.mode` selects *how* requests are
 | Default (direct) | HTTP | JSON on the same connection | - | - | All flavors |
 | `rest_sync` | HTTP | JSON on the same connection (server polls the store internally) | SQS FIFO | DynamoDB / Redis / Valkey | AWS Lambda, AWS ECS |
 | `rest_async` | HTTP | `202 ACCEPTED` + `request_id`, client polls | SQS FIFO | DynamoDB / Redis / Valkey | AWS Lambda, AWS ECS |
-| `async` | WebSocket | Single `CHAT_RESPONSE` push when the agent finishes | Optional | Not used | AWS Lambda |
-| `stream` | SSE or WebSocket | Token-level `StreamChunk`s as they are generated | Optional (WebSocket path) | Not used | REST API surfaces (SSE); AWS Lambda (WebSocket) |
+| `async` | WebSocket | Single `CHAT_RESPONSE` push when the agent finishes | Optional | Not used | AWS Lambda, AWS ECS |
+| `stream` | SSE or WebSocket | Token-level `StreamChunk`s as they are generated | Optional (WebSocket path) | Not used | REST API surfaces (SSE); AWS Lambda (WebSocket); AWS ECS (WebSocket) |
+
+:::note
+AWS ECS supports `execution_mode = "stream"` for WebSocket mode in both direct and queue-backed topologies: in direct mode the chat route broadcasts each chunk inline via `ChatService.process_stream_chat_async`; in queue mode `ECSAgentRunner.run()` dispatches to `ECSStreamAgentRunner`, which fans out one Output Queue message per chunk instead of one for the full reply. See [AWS Containerized](./aws-containerized) for details.
+:::
 
 **Protocol support by flavor:**
 
@@ -65,7 +69,7 @@ Independently of *where* you deploy, `execution.mode` selects *how* requests are
 |--------|-----------|---------------|-------------------------------|------------|
 | Local REST API / self-hosted | ✅ | ✅ | - | - |
 | AWS Lambda | ✅ | - (use WebSocket) | ✅ | ✅ |
-| AWS ECS Fargate | ✅ | - | - | ✅ |
+| AWS ECS Fargate | ✅ | - | ✅ (`async` and `stream`) | ✅ |
 | Azure Functions | ✅ | - | - | - |
 | Azure Container Apps | ✅ | ✅ | - | - |
 | GCP Cloud Run (both flavors) | ✅ | ✅ | - | - |
@@ -107,7 +111,7 @@ graph LR
     OQ --> RSH[Response Handler]
     RSH --> RS[(Response Store)]
     RS -.->|rest_sync / rest_async| RH
-    RSH -.->|async / stream<br/>Lambda only| WS[WebSocket push]
+    RSH -.->|"async / stream (Lambda + ECS)"| WS[WebSocket push]
 
     style RH fill:#2e8555,stroke:#fff,stroke-width:2px,color:#fff
     style AR fill:#2e8555,stroke:#fff,stroke-width:2px,color:#fff
@@ -119,7 +123,7 @@ graph LR
 | Request handler | Request Handler Lambda | `ECSQueueRequestHandler` thread in the IO container |
 | Agent runner | Agent Runner Lambda (SQS event source mapping) | `ECSAgentRunner` service, a pool of long-poll consumer threads |
 | Response handler | Response Handler Lambda | `ECSOutputConsumer` thread pool in the IO container |
-| Reply delivery | Response store, or WebSocket push (`async`/`stream`) | Response store |
+| Reply delivery | Response store, or WebSocket push (`async`/`stream`) | Response store, or WebSocket push (`async`/`stream`) |
 | Scaling | Automatic per SQS batch | Backlog-per-task target tracking |
 
 See [AWS Serverless](./aws-serverless), [AWS Containerized](./aws-containerized), and the [Queue Mode Guide](../advanced/queue-mode-guide) for full component walkthroughs.
@@ -175,6 +179,7 @@ terraform init && terraform apply
 
 - ECS Fargate + Application Load Balancer
 - Optional two-container scalable queue mode with backlog-based auto-scaling
+- Optional WebSocket mode (`async`/`stream`) for real-time, connection-based interactions
 - Consistent performance, lower latency
 
 [Learn more →](./aws-containerized)
@@ -237,7 +242,7 @@ terraform init && terraform apply
 - **Small web app** → **REST API**: simple, self-hosted
 - **Variable traffic on AWS** → **AWS Lambda**: auto-scales, pay per use; add queue mode for backpressure and retries
 - **High traffic / long-running agents on AWS** → **AWS ECS in queue mode**: consistent performance, backlog-based auto-scaling
-- **Real-time UX on AWS** → **Lambda WebSocket modes**: `async` for push delivery, `stream` for token streaming
+- **Real-time UX on AWS** → **WebSocket mode**: `async` for push delivery, `stream` for token streaming — both on Lambda or ECS
 - **Variable traffic on Azure** → **Azure Functions**; **high traffic** → **Azure Container Apps** (KEDA scaling, SSE streaming)
 - **Variable traffic on GCP** → **Cloud Run scale-to-zero**; **high traffic** → **Cloud Run always-on**
 - **AI integration** → **MCP/A2A**: protocol-based integration

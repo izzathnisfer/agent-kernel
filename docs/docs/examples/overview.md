@@ -28,14 +28,25 @@ Examples demonstrating Agent Kernel's API capabilities and integrations:
 Command-line interface examples for local development and testing:
 
 - **`adk/`** - Google ADK (Agent Development Kit) agents with CLI interaction
-- **`a2a/`** - Agent-to-Agent (A2A) communication examples
 - **`crewai/`** - CrewAI framework integration examples
 - **`guardrail/`** - Content safety and compliance validation examples
   - `openai/` - OpenAI Guardrails integration with LangGraph agents
 - **`langgraph/`** - LangGraph framework integration examples
+- **`logfire/`** - Pydantic Logfire tracing over the OpenAI Agents SDK example
 - **`multi/`** - Multi-agent examples combining different frameworks
 - **`openai/`** - OpenAI Agent SDK integration examples
+- **`openai-dynamic/`** - OpenAI Agent SDK agents registered dynamically at runtime
+- **`openai_structured/`** - OpenAI Agent SDK agent returning structured (Pydantic) output
+- **`pydanticai/`** - Pydantic AI framework integration examples
+- **`smolagents/`** - HuggingFace smolagents `CodeAgent` integration examples
 - **`knowledgebase/openai/`** - OpenAI Agents knowledge base demos split into `chromadb/`, `neo4j/`, `starburst/`, and `multi/`
+
+Per-run framework context/state demos — a grocery assistant that carries a cart across turns through the reserved `framework_context` session key, one per framework, using each framework's native context mechanism (see the [Session](../core-concepts/session.md) guide):
+
+- **`openai_context/`** - OpenAI Agents SDK, via `RunContextWrapper.context`
+- **`langgraph_context/`** - LangGraph, via a declared state channel on a custom graph
+- **`adk_context/`** - Google ADK, via `ToolContext.state`
+- **`pydanticai_context/`** - Pydantic AI, via `RunContext.deps`
 
 ### 📁 Sandbox Examples (`/examples/sandbox`)
 
@@ -63,6 +74,10 @@ AWS ECS/Fargate deployment examples:
 - **`adk/`** - Google ADK agents deployed on AWS container services
 - **`crewai/`** - CrewAI agents deployed on AWS container services
 - **`openai-dynamodb-scalable/`** - OpenAI agents on AWS ECS with SQS queue mode for scalable, asynchronous request processing and DynamoDB response storage
+- **`openai-websocket/`** - OpenAI agents on AWS ECS over a WebSocket API in direct (non-queue) mode: one service authenticates `$connect`, runs the agent inline, and pushes the reply back over the same connection
+- **`openai-websocket-scalable/`** - OpenAI agents on AWS ECS over a WebSocket API in queue mode: the REST/IO service enqueues chat frames and pushes responses, while a separately-scalable Agent Runner service processes them from SQS
+- **`openai-stream/`** - OpenAI agents on AWS ECS over a WebSocket API in direct (non-queue), STREAM execution mode: the reply is delivered token-by-token as `STREAM_CHUNK` messages instead of one final `CHAT_RESPONSE`
+- **`openai-stream-queue-mode/`** - OpenAI agents on AWS ECS over a WebSocket API in queue-based STREAM execution mode: the Agent Runner streams token-by-token chunks onto the Output Queue so it can scale independently of ingress
 
 ### 📁 AWS Serverless Examples (`/examples/aws-serverless`)
 
@@ -116,6 +131,8 @@ Agent Kernel supports multiple AI agent frameworks:
 | **CrewAI** | Multi-agent orchestration framework | CLI, AWS Containerized, AWS Serverless, Azure Containerized, Azure Serverless, API |
 | **LangGraph** | Graph-based agent framework | CLI, AWS Serverless, Azure Serverless |
 | **OpenAI Agent SDK** | OpenAI's official agent framework | CLI, Containerized, AWS Serverless, AWS Containerized, Azure Serverless, Azure Containerized, GCP Serverless, GCP Containerized, API |
+| **Pydantic AI** | Type-safe agent framework from the Pydantic team | CLI, API |
+| **smolagents** | HuggingFace's code-first agent framework | CLI |
 
 ## Deployment Patterns
 

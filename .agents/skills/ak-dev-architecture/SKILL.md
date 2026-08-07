@@ -6,7 +6,7 @@ description: >
   interact, or before making changes to core functionality. Covers Session, Agent,
   Runner, Module, Runtime, AgentService, AKConfig, tools, hooks, multimodal, conversation
   threads, the adapter pattern, and the AWS ECS containerized deployment classes
-  (ECSIOHandler, ECSOutputConsumer, ECSAgentRunner, ECSSQSConsumer, QueueConsumer, ThreadRunner).
+  (ECSIOHandler, ECSOutputConsumer, ECSAgentRunner, ECSStreamAgentRunner, ECSSQSConsumer, QueueConsumer, ThreadRunner).
 license: Apache-2.0
 metadata:
   author: yaalalabs
@@ -34,6 +34,7 @@ Tracks state across related interactions. Key properties:
 - **Framework-specific data**: Stored via `get(key)` / `set(key, value)` — each framework stores its own state under a unique key (e.g., `"openai"`, `"langgraph"`)
 - **Volatile cache** (`v_cache`): Cleared after every `Runtime.run()` invocation — use for transient per-request data
 - **Non-volatile cache** (`nv_cache`): Persisted across requests within the session — use for data that should survive multiple interactions
+- **Reserved keys** (`Session.Keys` enum): `VOLATILE_CACHE`/`NON_VOLATILE_CACHE` back the two caches; `FRAMEWORK_CONTEXT` (`"framework_context"`) holds a per-run, framework-agnostic caller context/state **dict** (must be picklable) that runners inject into the native framework call and write back on success. Unlike the caches it is **not** pre-initialized — an unset key reads back as `None` (absent ⇒ no injection, no behaviour change). The key is fronted by dedicated accessors — `session.get_framework_context()` (live dict, never auto-creates), `set_framework_context(dict)` (rejects non-dicts), `clear_framework_context()` — the way `get_volatile_cache()` fronts `v_cache`; nothing outside `Session` (runners included) spells the raw key. Scope is **pre-hooks and post-hooks**; tools use their framework-native handle (`RunContextWrapper.context`, `RunContext.deps`, ADK `tool_context.state`, …) instead
 - **Async context manager**: `async with session:` acquires a lock and sets the session as the current context via `contextvars`
 - **`Session.current()`**: Class method to retrieve the active session from any code running within the session context
 
@@ -55,6 +56,7 @@ Encapsulates framework-specific execution logic:
 - **`stream(agent, session, requests) -> AsyncGenerator[str, None]`**: Abstract async generator that yields token deltas for streaming execution (`execution.mode: stream`). Frameworks without native token streaming (CrewAI, smolagents) implement it by raising `NotImplementedError`
 - Each framework implements its own Runner (e.g., `OpenAIRunner`, `LangGraphRunner`, `CrewAIRunner`, `GoogleADKRunner`, `SmolagentsRunner`, `PydanticAIRunner`)
 - Runners handle: creating `ToolContext`, converting request models to framework-native formats, invoking the framework's execution API, converting responses back to `AgentReply`
+- **Per-run framework context**: the base `Runner` provides `_load_framework_context(session)` (returns a **deep copy** of the reserved `framework_context` key, or `None` when absent) and `_store_framework_context(session, incoming, produced)` (shallow-merges `produced` over `incoming` — framework-touched top-level keys win, untouched caller keys preserved — with a fail-fast picklability check). Each adapter's `run`/`stream` calls load before the native call, injects `incoming` via its native mechanism, and calls store **only after a successful native call** (inside the `try`, before the `except`; after the `async for` loop for streams, never in `finally`) so a crash/disconnect leaves the stored context intact. Both helpers go through the `Session` accessors, so the raw key name stays inside `Session`. Round-trip fidelity is per-framework (OpenAI and Pydantic AI full — injected as `context=` / `deps=`, mutated in place by tools; ADK all-but-internal-and-scope-prefixed keys, accumulate-only; smolagents pre-seeded keys only, and the context is also appended to the task prompt; LangGraph declared channels only; CrewAI unsupported — warns once per runner and skips). When an adapter seeds caller keys into a native state dict, write AK-internal keys **last** so a caller key cannot displace them (`ak_tool_context` in ADK, `messages` in LangGraph)
 
 ### Module (`ak-py/src/agentkernel/core/module.py`)
 
@@ -196,7 +198,7 @@ Provides persistent, named conversation threads keyed by `session_id`, gated beh
 
 - **`ConversationThreadManager`** (`manager.py`): Service façade owning thread lifecycle (create/load/append/history) and, when multimodal is enabled, saving attachment bytes into the shared `AttachmentStore` before the agent runs. A single process-wide instance (`ConversationThreadManager.get()` / class-level singleton, guarded by an `RLock`) is shared by `ChatService` and `ThreadRESTRequestHandler` — `None` when thread support is disabled
 - **`ThreadStore`** (`store/base.py`): Abstract base with backend persistence methods (create/get/append/list); pluggable per backend
-- **`ThreadStoreBuilder`** (`store/__init__.py`): Factory that constructs the configured `ThreadStore` from `AKConfig`'s `thread.type`
+- **`ThreadStoreBuilder`** (`store/base.py`): Factory that constructs the configured `ThreadStore` from `AKConfig`'s `thread.type`
 - **`Thread` / `ThreadMessage` / `ThreadAttachment` / `ThreadPage` / `MessagePage`** (`model.py`): Pydantic models for thread metadata, individual messages, attachment references, and cursor-paginated listings
 - **`ThreadNamingStrategy`** (`naming.py`): Overridable strategy that names auto-created threads — default implementation makes a single LiteLLM call (`thread.naming.model`, requires the `thread` extra) to derive a concise title from the first prompt, falling back to a truncated prompt prefix when `litellm`/an API key is unavailable. Explicit `thread_name` on a chat request always wins and locks the thread against further automatic naming
 - **`Authoriser`** (`authoriser.py`): Pluggable base class (`authorise(token) -> Optional[user_id]`) that `ThreadRESTRequestHandler` calls to protect the read routes; routes are open when no `Authoriser` is configured
@@ -208,6 +210,7 @@ Provides persistent, named conversation threads keyed by `session_id`, gated beh
 |---------|-------|--------|------------|
 | In-memory | `InMemoryThreadStore` | `store/in_memory.py` | `ClassVar` dict, ephemeral, zero setup |
 | Redis | `RedisThreadStore` | `store/redis.py` | Persistent, TTL, index-key expiry/refresh for listings |
+| Valkey | `ValkeyThreadStore` | `store/valkey.py` | Redis-protocol twin of the above; shares the body via `_RedisLikeThreadStore` (`store/redis_like.py`), requires the `valkey` extra |
 | DynamoDB | `DynamoDBThreadStore` | `store/dynamodb.py` | Serverless/AWS, partition key `session_id` + sort key `sk`, optional TTL |
 | Firestore | `FirestoreThreadStore` | `store/firestore.py` | Serverless/GCP, one document per `session_id` |
 | Cosmos DB | `CosmosDBThreadStore` | `store/cosmosdb.py` | Azure Table API, partitioned by `session_id`, no TTL support |
@@ -216,7 +219,7 @@ Provides persistent, named conversation threads keyed by `session_id`, gated beh
 
 ```yaml
 thread:
-  type: memory       # memory | redis | dynamodb | firestore | cosmosdb
+  type: memory       # memory | redis | valkey | dynamodb | firestore | cosmosdb
   naming:
     model: gpt-4o-mini
     max_length: 80
@@ -224,10 +227,23 @@ thread:
     url: "redis://localhost:6379"
     ttl: 2592000
     prefix: "ak:thread:"
+  valkey:
+    url: "valkey://localhost:6379"
+    ttl: 2592000
+    prefix: "ak:thread:"
   dynamodb:
     table_name: "ak-agent-threads"
     ttl: 0
 ```
+
+Deployment splits the same way session does: the **application** declares `thread.type` in its
+committed `config.yaml`, and **Terraform** provisions the backend and injects only the connection
+detail — `create_dynamodb_thread_table` (AWS serverless + containerized) injects
+`AK_THREAD__DYNAMODB__TABLE_NAME`; `create_firestore_thread_collection` (GCP) injects the
+`AK_THREAD__FIRESTORE__*` vars. Terraform never sets `AK_THREAD__TYPE`. Note the failure mode this
+leaves: because `AKConfig.thread` is `Optional` and any `AK_THREAD__*` var materialises it while
+`type` defaults to `memory`, setting a flag *without* declaring `thread.type` enables the feature on
+the non-durable in-memory backend, with no error.
 
 Attachments in thread mode additionally require `multimodal.enabled: true` with a shared attachment store (`in_memory`, `redis`, or `dynamodb` — `session_cache` is rejected, since threads need durable, cross-request-scoped attachment storage that a session-local cache can't provide).
 
@@ -335,17 +351,21 @@ ak-py/src/agentkernel/
 │   │   ├── thread_runner.py     # ThreadRunner — run N callables as peer threads
 │   │   ├── queue_consumer.py    # QueueConsumer — ABC shared by ECSSQSConsumer + LambdaSQSConsumer
 │   │   ├── response_store.py    # ResponseStore
-│   │   └── websocket_connection_store.py
+│   │   ├── rest_handler.py      # RestHandler — queue-aware AgentRESTRequestHandler subclass (enqueue_and_wait/poll_response), shared by ECS's ECSQueueRequestHandler
+│   │   └── websocket_service.py # WebSocketConnectionStoreABC + WebSocketHandlerABC — shared WS connection-store contract and MessageType/broadcast lifecycle, used by both serverless and containerized AWS handlers
 │   ├── aws/
 │   │   ├── serverless/      # Lambda handlers: Lambda, ResponseHandler, ServerlessAgentRunner, etc.
+│   │   │   └── core/router/ws_lambda.py  # LambdaWSHandler (renamed from BaseWSHandler) — subclasses AWSWebSocketHandler, adds Lambda-event parsing only
 │   │   ├── containerized/   # ECS Fargate handlers
 │   │   │   ├── core/
-│   │   │   │   └── sqs_consumer.py      # ECSSQSConsumer — extends QueueConsumer: SQS poll loop
+│   │   │   │   ├── sqs_consumer.py      # ECSSQSConsumer — extends QueueConsumer: SQS poll loop
+│   │   │   │   └── api/
+│   │   │   │       ├── rest_api.py      # ECSQueueRequestHandler (extends RestHandler), AWSRestAPI (extends RESTAPI)
+│   │   │   │       └── websocket_api.py # ECSWebSocketHandlerBase, ECSWebSocketSystemRequestHandler, ECSWebSocketRequestHandler, AWSWebsocketAPI (extends RESTAPI)
 │   │   │   ├── akagentrunner.py         # ECSAgentRunner — polls Input Queue, runs agent
 │   │   │   ├── akoutputconsumer.py      # ECSOutputConsumer — polls Output Queue, writes to DB/WS
-│   │   │   ├── ecs_io_handler.py        # ECSIOHandler — entrypoint: wires both threads
-│   │   │   └── ecs_queue_handler.py     # ECSQueueRequestHandler — FastAPI routes
-│   │   └── core/            # Shared: SQSHandler, WebSocketHandler, ResponseStore
+│   │   │   └── ecs_io_handler.py        # ECSIOHandler — entrypoint: wires both threads
+│   │   └── core/            # Shared AWS-only: SQSHandler, ResponseStore, websocket_service.py (WebSocketConnectionStore — DynamoDB, AWSWebSocketHandler — API Gateway Management API push, extends WebSocketHandlerABC)
 │   └── azure/               # Azure Functions handler
 ├── integration/             # Messaging integrations
 │   ├── slack/
@@ -413,16 +433,49 @@ The containerized deployment runs on ECS Fargate and uses a two-container archit
 | `ECSSQSConsumer` | `containerized/core/sqs_consumer.py` | Extends `QueueConsumer`: SQS long-poll loop, retry/DLQ logic |
 | `ThreadRunner` | `deployment/common/thread_runner.py` | Runs N callables as peer threads (one `threading.Thread` per `Task`, gated by a `Semaphore`) |
 | `ECSOutputConsumer` | `containerized/akoutputconsumer.py` | Extends `ECSSQSConsumer` — polls Output Queue, writes to DynamoDB or broadcasts via WebSocket |
-| `ECSAgentRunner` | `containerized/akagentrunner.py` | Extends `ECSSQSConsumer` — polls Input Queue, runs the agent, sends to Output Queue |
-| `ECSIOHandler` | `containerized/ecs_io_handler.py` | Entrypoint for the IO container: wires REST API + output consumer as peer threads |
-| `ECSQueueRequestHandler` | `containerized/ecs_queue_handler.py` | FastAPI routes: `POST /api/v1/chat` enqueues; `GET /api/v1/chat/{id}` polls |
+| `ECSAgentRunner` | `containerized/akagentrunner.py` | Extends `ECSSQSConsumer` — polls Input Queue, runs the agent, sends to Output Queue. `run()` dispatches to `ECSStreamAgentRunner.run()` when `execution.mode == stream`, re-checked on every call (mirroring `ECSIOHandler.run` and the serverless `ServerlessAgentRunner.handle()`/`ServerlessStreamAgentRunner.handle()` dispatch) |
+| `ECSStreamAgentRunner` | `containerized/akagentrunner.py` | Extends `ECSAgentRunner` — STREAM-mode sibling: fans out each streamed chunk as its own Output Queue message instead of sending one full response |
+| `ECSIOHandler` | `containerized/ecs_io_handler.py` | Entrypoint for the IO container: wires REST/WebSocket API + output consumer as peer threads |
+| `RestHandler` | `deployment/common/rest_handler.py` | Queue-aware `AgentRESTRequestHandler` subclass used by ECS's `ECSQueueRequestHandler` (Lambda's poll path is the separate `rest_lambda.py` router, which uses a JSON body, not query params): `enqueue_and_wait` (`POST /api/v1/chat`, `REST_SYNC` waits on the response store / `REST_ASYNC` returns a `request_id`) and `poll_response` (`GET /api/v1/chat?request_id=...&session_id=...`, query params only — `session_id` is for logging, not validated against the stored reply) |
+| `ECSQueueRequestHandler` | `containerized/core/api/rest_api.py` | Thin `RestHandler` subclass wiring SQS (`QueueHandler`) + `ResponseDBHandler`; routes inherited from `RestHandler.get_router()` |
+| `AWSRestAPI` | `containerized/core/api/rest_api.py` | Extends `RESTAPI`; overrides `get_default_handlers()` to default to `ECSQueueRequestHandler`, safe to construct without config |
+| `ECSWebSocketHandlerBase` | `containerized/core/api/websocket_api.py` | Abstract shared base for the two WS handlers: connection store, push-endpoint construction, response envelope, `x-ws-*` headers |
+| `ECSWebSocketSystemRequestHandler` | `containerized/core/api/websocket_api.py` | Framework-managed protocol routes `$connect`/`$disconnect`/`$default`; owns the `AuthValidator` (only `$connect` authenticates). Not an extension point |
+| `ECSWebSocketRequestHandler` | `containerized/core/api/websocket_api.py` | Application routes: built-in chat route + custom routes. Framework-managed (not a subclassing extension point) and **not publicly exported** — `AWSWebsocketAPI` constructs it; custom routes are added via `AWSWebsocketAPI.register(route)` and passed in as `custom_routes`. Needs **no** `AuthValidator` (user resolved from the connection store) |
+| `AWSWebsocketAPI` | `containerized/core/api/websocket_api.py` | Extends `RESTAPI`; `run()` (no params) **always builds** exactly two handlers — the system handler (built lazily from the validator registered via `set_auth_handler`) plus one `ECSWebSocketRequestHandler` carrying every route registered via the `register(route)` decorator. Lazy build keeps importing the module safe when WebSocket mode isn't configured |
+
+### Shared WebSocket Transport (Serverless + Containerized)
+
+Containerized (ECS) and serverless (Lambda) WebSocket modes share the same AWS transport class,
+not just a similar shape:
+
+- `WebSocketHandlerABC` / `WebSocketConnectionStoreABC` (`deployment/common/websocket_service.py`)
+  declare the cloud-agnostic contract: `MessageType` enum (`CHAT_RESPONSE`, `CHAT_QUEUED`,
+  `SYSTEM_RESPONSE`, `STREAM_CHUNK`), `on_connect`/`on_disconnect`/`on_default`, `broadcast()`.
+- `AWSWebSocketHandler` (`deployment/aws/core/websocket_service.py`, renamed from `WebSocketHandler`)
+  implements the AWS-specific half: DynamoDB-backed `WebSocketConnectionStore`, a cached
+  `apigatewaymanagementapi` client, `construct_endpoint_url`, and `send()`/`PostToConnection`
+  (pruning stale connections on `GoneException`).
+- **Containerized** `ECSWebSocketHandlerBase` and **serverless** `LambdaWSHandler`
+  (`aws/serverless/core/router/ws_lambda.py`, renamed from `BaseWSHandler`) both build on
+  `AWSWebSocketHandler` — the serverless side adds only Lambda-event parsing on top. This is a
+  pure reuse refactor: serverless WebSocket runtime behavior is unchanged.
+
+`api/handler.py`'s `AgentRESTRequestHandler` was refactored to expose path constants
+(`AGENTS_PATH`, `CHAT_PATH`, `CHAT_MULTIPART_PATH`) and named methods (`list_agents`, `run`,
+`run_multipart`) instead of inline route closures, and `RESTAPI.get_default_handlers()`
+(`api/http.py`) is a new overridable classmethod `run()` calls when no handlers are passed —
+this is what lets `RestHandler`/`AWSWebsocketAPI` reuse the base routes/paths instead of
+redefining them.
 
 ### Two-Container Layout
 
 ```
 Container 1 — ECSIOHandler
-  Thread 1 (ThreadRunner):  RESTAPI.run(handlers=[ECSQueueRequestHandler()])
-                            — FastAPI/uvicorn, handles POST /chat and GET /chat/{id}
+  Thread 1 (ThreadRunner):  AWSRestAPI.run(handlers=[ECSQueueRequestHandler()])
+                            (or AWSWebsocketAPI.set_auth_handler(validator).run() in
+                            ASYNC/STREAM mode — system + custom-route handlers built automatically)
+                            — FastAPI/uvicorn, handles POST /chat and GET /chat?request_id=...
   Thread 2 (ThreadRunner):  ECSOutputConsumer.run()
                             — polls Output Queue, writes to DynamoDB / broadcasts via WebSocket
 
@@ -541,9 +594,12 @@ if __name__ == "__main__":
 ```python
 # agentkernel.deployment.aws
 from agentkernel.deployment.aws import (
-    ECSAgentRunner,      # Container 2 entry-point
-    ECSIOHandler,        # Container 1 entry-point
-    ECSOutputConsumer,   # Subclass ECSSQSConsumer for custom output processing
+    ECSAgentRunner,           # Container 2 entry-point
+    ECSIOHandler,             # Container 1 entry-point
+    ECSOutputConsumer,        # Subclass ECSSQSConsumer for custom output processing
+    AWSRestAPI,               # RESTAPI subclass defaulting to ECSQueueRequestHandler
+    AWSWebsocketAPI,          # RESTAPI subclass; builds system + custom-route handlers; register(route) decorator
+    ECSWebSocketSystemRequestHandler, # Framework $connect/$disconnect/$default handler (injected automatically)
 )
 from agentkernel.deployment.aws.containerized.core import ECSSQSConsumer
 from agentkernel.deployment.common import ThreadRunner
@@ -582,6 +638,9 @@ User Input
             → clear volatile cache                   # cleanup
     → REST: SSE (`text/event-stream`) when execution.mode=stream
     → AWS Lambda serverless: each StreamChunk sent as a separate SQS/WebSocket `STREAM_CHUNK` message
+    → AWS ECS containerized: queue mode — `ECSStreamAgentRunner` fans out one SQS output message per
+      chunk, `ECSOutputConsumer` broadcasts each as `STREAM_CHUNK`; direct mode — `ECSWebSocketRequestHandler`
+      broadcasts chunks inline via `ChatService.process_stream_chat_async`
 ```
 
 ### Multimodal Execution Flow

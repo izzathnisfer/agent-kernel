@@ -1,7 +1,7 @@
 {
   "skill": "ak-add-capabilities",
   "description": "Evaluations for the ak-add-capabilities (guardrails, tracing, sessions, knowledge base, MCP, A2A, hooks, multimodal, conversation threads, sandbox) skill",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "evals": [
     {
       "id": "cap-guardrail-openai",
@@ -207,6 +207,21 @@
       ]
     },
     {
+      "id": "cap-hooks-framework-context",
+      "name": "Seed and read per-run framework context via hooks",
+      "input": "I want to carry some per-run state through to my agent's native framework call using a hook",
+      "expected_outputs": [
+        "framework_context",
+        "get_framework_context(",
+        "set_framework_context(",
+        "PreHook",
+        "PostHook"
+      ],
+      "must_not_contain": [
+        "ToolContext.get().session.set_framework_context"
+      ]
+    },
+    {
       "id": "cap-multimodal",
       "name": "Enable multimodal support",
       "input": "Enable image and file processing",
@@ -282,6 +297,25 @@
         "thread"
       ],
       "must_not_contain": [
+        "type: dynamodb"
+      ]
+    },
+    {
+      "id": "cap-thread-valkey",
+      "name": "Enable conversation threads with Valkey storage",
+      "input": "Add conversation thread support with Valkey storage backend",
+      "expected_outputs": [
+        "thread:",
+        "type: valkey",
+        "valkey:",
+        "url:",
+        "ttl:",
+        "agentkernel[",
+        "valkey",
+        "thread"
+      ],
+      "must_not_contain": [
+        "type: redis",
         "type: dynamodb"
       ]
     },

@@ -86,13 +86,11 @@ Failure handling:
 
 Same as REST Sync except:
 
-1. The `POST` returns immediately (202) with the session/job ID.
-2. The client polls `GET /api/v1/chat/{sessionId}` to retrieve the result.
-3. The Request Handler uses **separate routes** for the POST and GET.
-4. The poll request must include the same `session_id` the original request was
-   submitted with. The Request Handler validates the stored response's `session_id`
-   against it and returns `NOT_FOUND` on a mismatch, so a response can't be read back
-   under the wrong session.
+1. The `POST` returns immediately (202) with a `request_id`.
+2. The client polls `GET /api/v1/chat?request_id=...&session_id=...` (query params, no path
+   segment) to retrieve the result. Same path as the `POST`, differentiated by HTTP method.
+3. `request_id` is the only lookup key. `session_id` is optional and used only for
+   logging/error messages — it is not validated against the stored reply.
 
 ### WebSocket (Async) Mode
 
@@ -165,17 +163,19 @@ graph TB
 ```
 
 :::note
-Streaming and WebSocket delivery are **not available in ECS queue mode**; those are
-AWS Lambda serverless features. ECS queue mode supports `rest_sync` and `rest_async`,
-with replies always delivered through the response store.
+**WebSocket delivery is available on ECS in both `async` and `stream` modes** — see
+[WebSocket (Async/Stream) Mode in ECS](#websocket-asyncstream-mode-in-ecs) below. `rest_sync` and
+`rest_async` always deliver replies through the response store; `async`/`stream` always push over
+the WebSocket connection instead.
 :::
 
 ### Python Class Hierarchy
 
 | Class | Container | Role |
 |-------|-----------|------|
-| `ECSIOHandler` | IO container | Entrypoint: starts Thread 1 + Thread 2 via `ThreadRunner` |
-| `ECSQueueRequestHandler` | IO container / Thread 1 | FastAPI: `POST /api/v1/chat` enqueues; `GET /api/v1/chat/{session_id}?request_id=...` polls |
+| `ECSIOHandler` | IO container | Entrypoint: starts Thread 1 + Thread 2 via `ThreadRunner`; Thread 1 is `AWSRestAPI` (`rest_sync`/`rest_async`) or `AWSWebsocketAPI` (`async`/`stream`), selected by `execution.mode` |
+| `ECSQueueRequestHandler` | IO container / Thread 1 (REST modes) | FastAPI: `POST /api/v1/chat` enqueues; `GET /api/v1/chat?request_id=...&session_id=...` polls (query params only, no path segment) |
+| `ECSWebSocketRequestHandler` / `ECSWebSocketSystemRequestHandler` | IO container / Thread 1 (WebSocket modes) | Chat + custom routes, and `$connect`/`$disconnect`/`$default` respectively — see [WebSocket (Async) Mode in ECS](#websocket-async-mode-in-ecs) |
 | `ECSOutputConsumer` | IO container / Thread 2 | Extends `ECSSQSConsumer`; runs `output.no_of_consumers` (default 2) threads polling Output Queue → response store |
 | `ECSAgentRunner` | Agent Runner container | Extends `ECSSQSConsumer`; runs `input.no_of_consumers` (default 5) threads polling Input Queue, running the agent, sending to Output Queue |
 | `ECSSQSConsumer` | both | Extends `QueueConsumer`; spins up `num_consumers` poll-loop threads via `ThreadRunner`; each thread does its own long-poll/retry/permanent-failure handling |
@@ -214,8 +214,50 @@ Identical infrastructure to REST Sync. The difference is purely in `ECSQueueRequ
 
 - `POST /api/v1/chat` returns **202 Accepted** with a `request_id` immediately after
   enqueuing (Thread 1 does not wait on DynamoDB).
-- `GET /api/v1/chat/{sessionId}?request_id=...` reads from DynamoDB Response Store
-  and returns the result when ready (or 404 while still processing).
+- `GET /api/v1/chat?request_id=...&session_id=...` (query params, no path segment) reads from
+  the DynamoDB Response Store by `request_id` and returns the result, or `404 NOT_FOUND` if
+  nothing is there yet (`session_id` is optional and used only for logging, not validated
+  against the stored reply).
+
+### WebSocket (Async/Stream) Mode in ECS
+
+Set `execution_mode = "async"` or `"stream"` (with `queue_mode = true`) to combine the queue
+pipeline above with a WebSocket API Gateway instead of an HTTP API:
+
+1. Client connects to `wss://<endpoint>/<stage>?token=<jwt>`. Thread 1 runs `AWSWebsocketAPI`
+   instead of `AWSRestAPI`; `$connect` authenticates via the registered `AuthValidator`
+   (mandatory) and stores `user_id` ↔ `connection_id` in a DynamoDB connections table.
+2. A `chat` frame (`{"route": "chat", "body": {...}}`) is enqueued to the Input Queue exactly
+   like REST Async — the framework never runs the agent inline in this mode.
+3. `ECSAgentRunner` processes it in `async` mode exactly as in REST modes, then forwards the
+   connection's `endpoint_url` as a custom SQS attribute to the Output Queue. In `stream` mode,
+   `ECSAgentRunner.run()` dispatches to `ECSStreamAgentRunner` instead (re-checking
+   `execution.mode` on every call, mirroring `ECSIOHandler.run`'s dispatch): it runs the agent via
+   `ChatService.process_stream_chat_sync()` and sends **one Output Queue message per streamed
+   chunk** (each carrying the forwarded `endpoint_url`), instead of one message for the full
+   reply.
+4. `ECSOutputConsumer` branches on `execution.mode`: `async` pushes a `CHAT_RESPONSE` over the
+   WebSocket connection via `PostToConnection`; `stream` pushes each Output Queue message as its
+   own `STREAM_CHUNK` (using the forwarded `endpoint_url` + `user_id`), terminated by a chunk with
+   `"done": true`. Neither mode falls back to the response store — that path only runs for
+   `rest_sync`/`rest_async`.
+5. Custom routes (registered with `AWSWebsocketAPI.register`) bypass the queue entirely — they
+   are answered directly by Thread 1, the same as chat frames in direct (non-queue) WebSocket
+   mode.
+
+Direct (non-queue) WebSocket mode works the same way minus the queue hop: `chat` runs the agent
+inline via `ChatService` and the reply is pushed immediately, no `ECSAgentRunner` or Output Queue
+involved. In `stream` mode, direct-mode chat runs
+`ChatService.process_stream_chat_async()` and broadcasts each chunk as it's produced instead of
+waiting for the full reply.
+
+See the [AWS Containerized WebSocket
+Mode](../deployment/aws-containerized.md#websocket-mode) docs for the full Terraform
+configuration, IAM, and wire protocol, and
+[`examples/aws-containerized/openai-stream-queue-mode`](https://github.com/yaalalabs/agent-kernel/tree/develop/examples/aws-containerized/openai-stream-queue-mode)
+for a full queue-mode streaming example (or
+[`openai-stream`](https://github.com/yaalalabs/agent-kernel/tree/develop/examples/aws-containerized/openai-stream)
+for the direct-mode variant).
 
 ### Entrypoint Code
 
@@ -318,5 +360,5 @@ this automatically. See the [AWS Containerized deployment docs](../deployment/aw
 | Output Queue Consumer | ✅ `modules/response-handler/` (separate Lambda) | ✅ `ECSOutputConsumer` (Thread 2 in IO container) |
 | DynamoDB Response Store | ✅ serverless stack | ✅ containerized stack |
 | Thread management | N/A | ✅ `ThreadRunner` (`deployment/common/thread_runner.py`) |
-| WebSocket Mode (`async`) | ✅ `modules/websocket-api-gateway/` + `modules/ws-connection-handler/` | ❌ Not supported, replies delivered via response store only |
-| Streaming Mode (`stream`) | ✅ `ServerlessStreamAgentRunner` → one SQS message per chunk → WebSocket `STREAM_CHUNK` | ❌ Not supported in queue mode |
+| WebSocket Mode (`async`) | ✅ `modules/websocket-api-gateway/` + `modules/ws-connection-handler/` | ✅ WebSocket API Gateway + VPC Link V1/NLB + DynamoDB connections table (`api_gateway_ws.tf`); direct and queue variants both supported |
+| Streaming Mode (`stream`) | ✅ `ServerlessStreamAgentRunner` → one SQS message per chunk → WebSocket `STREAM_CHUNK` | ✅ `ECSStreamAgentRunner` → one SQS message per chunk → WebSocket `STREAM_CHUNK` (queue mode); `ChatService.process_stream_chat_async` inline (direct mode) |

@@ -93,14 +93,32 @@ variable "dynamodb_memory_table_name" {
   default     = null
 }
 
+variable "create_dynamodb_thread_table" {
+  type        = bool
+  description = "Whether the DynamoDB conversation thread table is created"
+  default     = false
+}
+
+variable "dynamodb_thread_table_arn" {
+  type        = string
+  description = "DynamoDB conversation thread table ARN"
+  default     = null
+}
+
+variable "dynamodb_thread_table_name" {
+  type        = string
+  description = "DynamoDB conversation thread table name"
+  default     = null
+}
+
 variable "agent_runner" {
   description = "Agent runner configuration object"
   type = object({
-    cpu                = optional(number, 512)
-    memory             = optional(number, 1024)
-    desired_count      = optional(number, 1)
-    image_uri          = optional(string, null)
-    command            = optional(list(string), null)
+    cpu                   = optional(number, 512)
+    memory                = optional(number, 1024)
+    desired_count         = optional(number, 1)
+    image_uri             = optional(string, null)
+    command               = optional(list(string), null)
     environment_variables = optional(map(string), {})
   })
 }
@@ -116,12 +134,12 @@ variable "queue_config" {
 variable "scaling_config" {
   description = "Auto scaling configuration object"
   type = object({
-    enabled                = optional(bool, false)
-    min_count              = optional(number, 0)
-    max_count              = optional(number, 10)
-    backlog_target         = optional(number, 10)
-    scale_in_cooldown      = optional(number, 120)
-    scale_out_cooldown     = optional(number, 30)
+    enabled            = optional(bool, false)
+    min_count          = optional(number, 0)
+    max_count          = optional(number, 10)
+    backlog_target     = optional(number, 10)
+    scale_in_cooldown  = optional(number, 120)
+    scale_out_cooldown = optional(number, 30)
   })
   default = {
     enabled = false
@@ -142,4 +160,10 @@ variable "tags" {
 variable "account_id" {
   type        = string
   description = "AWS Account ID"
+}
+
+variable "execution_mode" {
+  type        = string
+  description = "Execution mode (rest_sync, rest_async, async, stream). Injected as AK_EXECUTION__MODE in WebSocket modes so the runner knows whether to emit a full response (async) or per-token chunks (stream)."
+  default     = "rest_sync"
 }

@@ -67,6 +67,10 @@ variable "gateway_endpoints" {
     ])
     error_message = "Each gateway_endpoints object must have non-empty 'path', 'method', and 'overwrite_path' fields, and 'method' must be one of: GET, POST, PUT, DELETE, PATCH, ANY, $default."
   }
+  validation {
+    condition     = !contains(["async", "stream"], var.execution_mode) || length(var.gateway_endpoints) == 0
+    error_message = "'gateway_endpoints' cannot be defined in 'async' or 'stream' (websocket) execution modes."
+  }
 }
 
 variable "tags" {
@@ -123,18 +127,24 @@ variable "create_dynamodb_memory_table" {
   default     = false
 }
 
-# ---------------------------------------------------------------------------
+variable "create_dynamodb_thread_table" {
+  type        = bool
+  description = "Create a dynamodb table to store the conversation threads"
+  default     = false
+}
+
+# -
 # REST Service Configuration
-# ---------------------------------------------------------------------------
+# -
 
 variable "rest_service" {
   description = "REST service configuration object"
   type = object({
-    cpu                   = optional(number, 256)
-    memory                = optional(number, 512)
-    desired_count         = optional(number, 1)
-    container_port        = optional(number, 8000)
-    health_check_endpoint = optional(string, "/health")
+    cpu                               = optional(number, 256)
+    memory                            = optional(number, 512)
+    desired_count                     = optional(number, 1)
+    container_port                    = optional(number, 8000)
+    health_check_endpoint             = optional(string, "/health")
     health_check_grace_period_seconds = optional(number, 120)
     package_path                      = string                 # Docker image source path (required)
     image_uri                         = optional(string, null) # Or provide pre-built image URI
@@ -212,7 +222,7 @@ variable "throttling_burst_limit" {
 
 variable "enable_api_gateway_logs" {
   type        = bool
-  description = "When true, creates the API Gateway CloudWatch log group and enables access logging on the HTTP API stage. Off by default."
+  description = "When true, creates the API Gateway CloudWatch log group and enables access logging on the HTTP API stage (or the WebSocket API stage, in WebSocket modes). Off by default."
   default     = false
 }
 
@@ -222,12 +232,11 @@ variable "enable_mcp_server" {
   default     = false
 }
 
-data "aws_ecr_authorization_token" "token" {}
 data "aws_caller_identity" "current" {}
 
-# ---------------------------------------------------------------------------
+# -
 # Queue Mode Configuration
-# ---------------------------------------------------------------------------
+# -
 
 variable "queue_mode" {
   type        = bool
@@ -237,15 +246,55 @@ variable "queue_mode" {
 
 variable "execution_mode" {
   type        = string
-  description = "Queue mode type: 'sync' (client waits on same connection) or 'async' (client polls a separate GET endpoint)."
-  default     = "sync"
+  description = "Execution mode: 'rest_sync' (client waits on same HTTP connection), 'rest_async' (client polls a separate GET endpoint), 'async' (WebSocket, full response in one message), or 'stream' (WebSocket, token-by-token). All four modes support queue_mode = true; 'rest_sync', 'async', and 'stream' also support queue_mode = false, running the agent inline in the ingress service. 'rest_async' requires queue_mode = true (it needs the response store) and is rejected when queue_mode = false."
+  default     = "rest_sync"
   validation {
-    condition     = contains(["sync", "async"], var.execution_mode)
-    error_message = "execution_mode must be either 'sync' or 'async'."
+    condition     = contains(["rest_sync", "rest_async", "async", "stream"], var.execution_mode)
+    error_message = "execution_mode must be one of: rest_sync, rest_async, async, stream."
+  }
+  validation {
+    condition     = var.queue_mode || contains(["rest_sync", "async", "stream"], var.execution_mode)
+    error_message = "execution_mode must be rest_sync, async, or stream when queue_mode is false. (rest_async requires queue_mode = true.)"
   }
 }
 
-# --- Queue Configuration Object ---
+# WebSocket configuration (async / stream execution modes)
+
+variable "ws_chat_route" {
+  type        = string
+  description = "WebSocket default chat route name. Only used in 'async'/'stream' modes."
+  default     = "chat"
+  validation {
+    condition     = !contains(["async", "stream"], var.execution_mode) || (var.ws_chat_route != null && length(trimspace(var.ws_chat_route)) > 0)
+    error_message = "ws_chat_route must not be null, empty, or whitespace-only."
+  }
+  validation {
+    condition     = !contains(["async", "stream"], var.execution_mode) || (var.ws_chat_route != null && can(regex("^[a-zA-Z0-9_-]+$", var.ws_chat_route)))
+    error_message = "ws_chat_route must contain only alphanumeric characters, hyphens (-), and underscores (_). Note: '$' prefix is reserved for predefined routes."
+  }
+}
+
+variable "ws_routes" {
+  type = list(object({
+    route = string
+  }))
+  description = "List of custom WebSocket routes beyond the default chat route. Only allowed in 'async'/'stream' modes."
+  default     = []
+  validation {
+    condition     = contains(["async", "stream"], var.execution_mode) || length(var.ws_routes) == 0
+    error_message = "'ws_routes' can only be defined in 'async' or 'stream' (websocket) execution modes."
+  }
+  validation {
+    condition     = !contains(["async", "stream"], var.execution_mode) || alltrue([for r in var.ws_routes : r.route != null && length(trimspace(r.route)) > 0])
+    error_message = "Routes in 'ws_routes' must not be null, empty, or whitespace-only."
+  }
+  validation {
+    condition     = !contains(["async", "stream"], var.execution_mode) || alltrue([for r in var.ws_routes : r.route != null && can(regex("^[a-zA-Z0-9_-]+$", r.route))])
+    error_message = "Routes in 'ws_routes' must contain only alphanumeric characters, hyphens (-), and underscores (_)."
+  }
+}
+
+# Queue Configuration Object
 
 variable "queue_config" {
   description = "Queue configuration object"
@@ -299,7 +348,7 @@ variable "queue_config" {
   }
 }
 
-# --- Agent Runner Configuration Object ---
+# Agent Runner Configuration Object
 
 variable "agent_runner" {
   description = "Agent runner configuration object"
@@ -323,7 +372,7 @@ variable "agent_runner" {
   }
 }
 
-# --- Scaling Configuration Object ---
+# Scaling Configuration Object
 
 variable "scaling_config" {
   description = "Auto scaling configuration object for agent runner"

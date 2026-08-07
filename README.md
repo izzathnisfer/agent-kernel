@@ -121,14 +121,14 @@ Let agents run code and shell commands in an isolated, permission-bounded enviro
 - **Workload profiles** — per-call, per-session, or shared lifetimes; each with its own permission policy (network egress, filesystem, CPU/memory, timeout) enforced fail-closed.
 - **Per-user identity** — run sandboxed code under the invoking user's identity, not one shared agent identity, via a pluggable principal resolver.
 
-[Learn more →](https://kernel.yaala.ai/docs/next/advanced/sandbox)
+[Learn more →](https://kernel.yaala.ai/docs/advanced/sandbox)
 
 ### 🧠 Memory, Sessions & Knowledge Bases
 
 | Layer | Backends |
 |---|---|
 | **Session / Memory** | In-memory, Redis, Valkey (AWS), DynamoDB (AWS), Cosmos DB (Azure), Firestore (GCP) |
-| **Conversation Threads** | Persistent, named threads keyed by `session_id` — in-memory, Redis, DynamoDB (AWS), Cosmos DB (Azure), Firestore (GCP) |
+| **Conversation Threads** | Persistent, named threads keyed by `session_id` — in-memory, Redis, Valkey, DynamoDB (AWS), Cosmos DB (Azure), Firestore (GCP) |
 | **Vector Knowledge** | ChromaDB |
 | **Graph Knowledge** | Neo4j |
 | **SQL Analytics** | Starburst Galaxy (Trino) |

@@ -33,7 +33,7 @@ sequenceDiagram
   first chat request; every later request with the same `session_id` appends to it.
 - **`user_id` becomes required** on every chat request once threads are enabled; requests without it are
   rejected with 400.
-- **Pluggable storage**: in-memory, Redis, DynamoDB, Firestore, or Cosmos DB.
+- **Pluggable storage**: in-memory, Redis, Valkey, DynamoDB, Firestore, or Cosmos DB.
 - **Optional, pluggable authorization**: you supply an `Authoriser` that validates a Bearer token against
   *your* authentication provider; Agent Kernel never authenticates users itself.
 - **Streaming included**: with `execution.mode: stream`, the user message is recorded before the stream
@@ -51,7 +51,7 @@ Add a `thread` block to `config.yaml`; its presence turns the feature on:
 
 ```yaml
 thread:
-  type: memory        # memory | redis | dynamodb | firestore | cosmosdb
+  type: memory        # memory | redis | valkey | dynamodb | firestore | cosmosdb
 ```
 
 ## Chat Request Fields
@@ -183,6 +183,14 @@ thread:
     prefix: "ak:thread:"
     ttl: 2592000                   # seconds; 0 disables expiry
 
+# Valkey (Redis-protocol compatible; requires the `valkey` extra)
+thread:
+  type: valkey
+  valkey:
+    url: "valkey://localhost:6379"
+    prefix: "ak:thread:"
+    ttl: 2592000                   # seconds; 0 disables expiry
+
 # DynamoDB - table needs partition key `session_id` (S) and sort key `sk` (S)
 thread:
   type: dynamodb
@@ -206,6 +214,39 @@ thread:
     connection_string: "..."
     table_name: "akagentthreads"
 ```
+
+## Deploying the Thread Store
+
+Deploying threads takes **two** steps, and they split the same way session does — your application
+declares *which* backend, Terraform provisions it and supplies *where* it lives:
+
+1. Declare the backend in `config.yaml`, e.g. `thread: {type: dynamodb}`. This is what enables the
+   feature.
+2. Set the matching Terraform flag, which provisions the backend and injects its connection detail:
+
+| Cloud | Flag | Provisions | Injects |
+|---|---|---|---|
+| AWS serverless + containerized | `create_dynamodb_thread_table` | A DynamoDB table (partition `session_id`, sort `sk`, TTL on `expiry_time`, no GSI) | `AK_THREAD__DYNAMODB__TABLE_NAME` |
+| GCP serverless + containerized | `create_firestore_thread_collection` | Nothing new — reuses the database from `create_firestore_database`; the collection is created on first write | `AK_THREAD__FIRESTORE__COLLECTION_NAME`, `__PROJECT_ID`, `__DATABASE_ID` |
+
+You do not need to set the table or collection name yourself — Terraform generates it and passes it in.
+
+:::warning Setting the flag without declaring `thread.type` runs threads in-memory
+`AKConfig.thread` is absent until something populates it, and any `AK_THREAD__*` variable is enough to
+populate it — but `thread.type` then falls back to its `memory` default. So enabling the Terraform flag
+*without* a `thread:` block in `config.yaml` switches the feature on against the **in-memory** backend:
+the provisioned table sits unused and history is lost on every cold start, with no error. Declare
+`thread.type` and this cannot happen.
+
+The reverse mistake is safe: declaring `thread.type` *without* setting the flag fails loudly at
+startup — `ValueError: AKConfig.thread.dynamodb.table_name must be set` — because no connection detail
+was injected.
+:::
+
+Redis and Valkey have no Terraform flag — they reuse whatever cluster `create_redis_cluster` /
+`create_valkey_cluster` already provisions. Declare `thread: {type: redis}` (or `valkey`) with the
+cluster URL in `config.yaml`, or pass `AK_THREAD__REDIS__URL` through the generic
+`environment_variables` passthrough.
 
 ## Attachments in Thread Mode
 

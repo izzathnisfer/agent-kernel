@@ -5,15 +5,17 @@ import logging
 from typing import Any, Dict
 
 from ....core.config import AKConfig
+from ....core.model import ExecutionMode, StreamChunk
 from ..core.response_store import ResponseDBHandler
 from ..core.sqs_handler import SQSHandler
+from ..core.websocket_service import AWSWebSocketHandler, WebSocketConnectionStore
 from .core import ECSSQSConsumer
 
 
 class ECSOutputConsumer(ECSSQSConsumer):
     """
-    ECS Output Consumer — polls the Output Queue and writes results to the
-    DynamoDB Response Store.
+    ECS Output Consumer — polls the Output Queue and delivers results: pushed over
+    WebSocket in ASYNC mode, else written to the Response Store.
 
     Extends ECSSQSConsumer so it inherits the blocking SQS poll loop via
     run(). Started as Thread 2 by ECSIOHandler.
@@ -25,6 +27,7 @@ class ECSOutputConsumer(ECSSQSConsumer):
     num_consumers = _config.execution.queues.output.no_of_consumers
 
     _response_store = None
+    _websocket_handler = None
 
     @classmethod
     def get_queue_url(cls) -> str:
@@ -37,15 +40,39 @@ class ECSOutputConsumer(ECSSQSConsumer):
         return cls._response_store
 
     @classmethod
+    def _get_websocket_handler(cls) -> AWSWebSocketHandler:
+        if cls._websocket_handler is None:
+            ws_cfg = cls._config.websocket_api
+            if not ws_cfg.connection_table or not ws_cfg.connection_table.table_name:
+                raise ValueError("websocket_api.connection_table.table_name is required for WebSocket mode")
+            connection_store = WebSocketConnectionStore(
+                table_name=ws_cfg.connection_table.table_name,
+                ttl=ws_cfg.connection_table.ttl,
+            )
+            cls._websocket_handler = AWSWebSocketHandler(connection_store=connection_store)
+        return cls._websocket_handler
+
+    @classmethod
     def process_message(cls, record: Dict[str, Any]) -> None:
         """
-        Process one message from the Output Queue by writing it to the
-        DynamoDB Response Store.
+        Process one Output Queue message: push over WebSocket (ASYNC) or write to the Response Store.
 
         :param record: boto3 SQS ``receive_message`` record
         """
         message_id = record.get("MessageId")
         cls._log.info(f"[OUTPUT START] Processing output message {message_id}")
+
+        exec_mode = cls._config.execution.mode
+        message_type = None
+        if exec_mode == ExecutionMode.ASYNC:
+            message_type = AWSWebSocketHandler.MessageType.CHAT_RESPONSE
+        elif exec_mode == ExecutionMode.STREAM:
+            message_type = AWSWebSocketHandler.MessageType.STREAM_CHUNK
+
+        if exec_mode in (ExecutionMode.ASYNC, ExecutionMode.STREAM):
+            cls._broadcast_via_websocket(record, message_type=message_type)
+            cls._log.info(f"[OUTPUT DONE] Broadcasted {message_type.value} {message_id} via WebSocket")
+            return
 
         message = cls._construct_message_for_store(record)
         cls._log.info(
@@ -58,9 +85,9 @@ class ECSOutputConsumer(ECSSQSConsumer):
     @classmethod
     def on_permanent_failure(cls, record: Dict[str, Any]) -> None:
         """
-        Handle an output message that exceeded ``max_receive_count`` by
-        writing an error entry to the Response Store so the waiting HTTP
-        caller gets a response instead of hanging indefinitely.
+        Handle an output message that exceeded ``max_receive_count``: push an error over
+        WebSocket (ASYNC), or write an error entry to the Response Store so the waiting
+        HTTP caller gets a response instead of hanging.
 
         :param record: boto3 SQS ``receive_message`` record
         """
@@ -70,10 +97,42 @@ class ECSOutputConsumer(ECSSQSConsumer):
         try:
             message_attributes = SQSHandler.get_message_custom_attributes(record)
             request_id = message_attributes.get("request_id")
+            session_id = SQSHandler.get_message_system_attributes(record).get("MessageGroupId")
             error_payload = {
                 "error": f"Failed to process message after {max_retries} retries",
                 "request_id": request_id,
             }
+            if session_id:
+                error_payload["session_id"] = session_id
+
+            exec_mode = cls._config.execution.mode
+            message_type = None
+            if exec_mode == ExecutionMode.ASYNC:
+                message_type = AWSWebSocketHandler.MessageType.SYSTEM_RESPONSE
+            elif exec_mode == ExecutionMode.STREAM:
+                message_type = AWSWebSocketHandler.MessageType.STREAM_CHUNK
+
+            if exec_mode in (ExecutionMode.ASYNC, ExecutionMode.STREAM):
+                if message_type == AWSWebSocketHandler.MessageType.STREAM_CHUNK:
+                    error_message = StreamChunk(error=error_payload["error"], done=True).model_dump(exclude_none=True)
+                    if session_id:
+                        error_message["session_id"] = session_id
+                else:
+                    error_message = error_payload
+
+                endpoint_url = message_attributes.get("endpoint_url")
+                user_id = message_attributes.get("user_id")
+                if endpoint_url and user_id:
+                    cls._get_websocket_handler().broadcast(
+                        endpoint_url=endpoint_url,
+                        message=error_message,
+                        user_id=user_id,
+                        message_type=message_type,
+                    )
+                    cls._log.info(f"Broadcasted permanent-failure {message_type.value} via WebSocket — user_id={user_id}")
+                else:
+                    cls._log.warning(f"Cannot broadcast permanent-failure {message_type.value}: endpoint_url or user_id missing")
+                return
 
             error_body = json.dumps(error_payload)
             message = cls._construct_message_for_store(record, body=error_body)
@@ -107,11 +166,12 @@ class ECSOutputConsumer(ECSSQSConsumer):
         }
 
     @classmethod
-    def _broadcast_via_websocket(cls, record: Dict[str, Any]) -> None:
+    def _broadcast_via_websocket(cls, record: Dict[str, Any], message_type: AWSWebSocketHandler.MessageType) -> None:
         """
         Push an output message to the client over WebSocket.
 
         :param record: boto3 SQS record
+        :param message_type: Envelope type to broadcast with (CHAT_RESPONSE for ASYNC, STREAM_CHUNK for STREAM)
         :raises ValueError: If endpoint_url or user_id is missing.
         """
         message_attributes = SQSHandler.get_message_custom_attributes(record)
@@ -119,13 +179,18 @@ class ECSOutputConsumer(ECSSQSConsumer):
         user_id = message_attributes.get("user_id")
 
         if not endpoint_url:
-            raise ValueError("endpoint_url is required in SQS message attributes for ASYNC mode")
+            raise ValueError("endpoint_url is required in SQS message attributes for WebSocket mode")
         if not user_id:
-            raise ValueError("user_id is required in SQS message attributes for ASYNC mode")
+            raise ValueError("user_id is required in SQS message attributes for WebSocket mode")
 
         message_body = record.get("Body", "{}")
         if isinstance(message_body, str):
             message_body = json.loads(message_body)
 
         cls._log.info(f"Broadcasting via WebSocket — user_id={user_id} endpoint={endpoint_url}")
-        cls._get_websocket_handler().broadcast(endpoint_url=endpoint_url, message=message_body, user_id=user_id)
+        cls._get_websocket_handler().broadcast(
+            endpoint_url=endpoint_url,
+            message=message_body,
+            user_id=user_id,
+            message_type=message_type,
+        )

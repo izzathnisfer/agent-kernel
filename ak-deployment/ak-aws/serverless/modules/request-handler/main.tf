@@ -90,6 +90,36 @@ resource "aws_iam_role_policy_attachment" "lambda_dynamodb_multimodal_describe_a
   policy_arn = aws_iam_policy.lambda_dynamodb_multimodal_describe_policy[0].arn
 }
 
+resource "aws_iam_policy" "lambda_dynamodb_thread_policy" {
+  count = var.create_dynamodb_thread_table == true ? 1 : 0
+  name  = "${var.product_alias}-${var.env_alias}-${var.module_name}-${var.function_name}-ddb-thread"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "dynamodb:DescribeTable",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ],
+        # No /index/*: list_threads Scans, this table has no GSI.
+        Resource = var.dynamodb_thread_table_arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_dynamodb_thread_attachment" {
+  count      = var.create_dynamodb_thread_table == true ? 1 : 0
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_dynamodb_thread_policy[0].arn
+}
+
 # Response store DynamoDB permissions
 resource "aws_iam_policy" "lambda_response_store_dynamodb_policy" {
   count = var.response_store_dynamodb != null ? 1 : 0
@@ -266,6 +296,9 @@ module "lambda_deployment" {
     } : {},
       var.dynamodb_multimodal_memory_table_arn != null ? {
       AK_MULTIMODAL__DYNAMODB__TABLE_NAME = var.dynamodb_multimodal_memory_table_name
+    } : {},
+      var.dynamodb_thread_table_arn != null ? {
+      AK_THREAD__DYNAMODB__TABLE_NAME = var.dynamodb_thread_table_name
     } : {},
       var.response_store_redis != null ? {
       AK_EXECUTION__RESPONSE_STORE__REDIS__URL = var.response_store_redis.url

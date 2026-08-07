@@ -24,6 +24,37 @@ Perfect for microservices, API backends, event-driven architectures, and serverl
 |------|---------|
 | Terraform | >= 1.9.5 |
 | AWS Provider | >= 6.11.0 |
+| Docker Provider | 3.6.2 |
+
+## 🔌 Providers
+
+This module is provider-agnostic: it declares `aws` and `docker` in `required_providers` but does **not** configure them internally. Configure both providers in your root module and pass them explicitly via the `providers` argument. This is what lets you use `count`, `for_each`, or `depends_on` on the module block, and lets a minimal/standalone config destroy the resources it created.
+
+```hcl
+provider "aws" {
+  region = var.region
+}
+
+# Docker authenticates against ECR to push the images this module builds
+data "aws_caller_identity" "current" {}
+data "aws_ecr_authorization_token" "token" {}
+
+provider "docker" {
+  registry_auth {
+    address  = format("%v.dkr.ecr.%v.amazonaws.com", data.aws_caller_identity.current.account_id, var.region)
+    username = data.aws_ecr_authorization_token.token.user_name
+    password = data.aws_ecr_authorization_token.token.password
+  }
+}
+
+module "python_api" {
+  source    = "yaalalabs/ak-serverless/aws"
+  version   = "0.8.1"
+  providers = { aws = aws, docker = docker }
+
+  # ... other inputs, see below
+}
+```
 
 ## 🚀 Usage
 
@@ -31,7 +62,8 @@ Perfect for microservices, API backends, event-driven architectures, and serverl
 
 ```hcl
 module "python_api" {
-  source = "yaalalabs/ak-serverless/aws"
+  source    = "yaalalabs/ak-serverless/aws"
+  providers = { aws = aws, docker = docker }
 
   region              = "us-west-2"
   product_alias       = "myapp"
@@ -461,6 +493,7 @@ module "serverless_api_auth" {
 | `create_redis_cluster` | Create a Redis cluster for Agent session memory | `bool` | `false` | no |
 | `create_valkey_cluster` | Create a Valkey (ElastiCache) cluster for Agent session memory | `bool` | `false` | no |
 | `create_dynamodb_memory_table` | Enable DynamoDB table for session storage | `bool` | `false` | no |
+| `create_dynamodb_thread_table` | Create a DynamoDB table for conversation thread storage and inject its generated name as `AK_THREAD__DYNAMODB__TABLE_NAME` into both Lambdas. Thread support is enabled by the application declaring `thread.type: dynamodb` in `config.yaml` — setting this flag alone leaves threads on the in-memory backend. Note that enabling threads makes `user_id` required on every chat request. | `bool` | `false` | no |
 | `create_redis_response_store` | Create or reuse Redis for response storage. Ignored in WebSocket modes (`async`/`stream`). | `bool` | `false` | no |
 | `create_valkey_response_store` | Create or reuse Valkey for response storage. Ignored in WebSocket modes (`async`/`stream`). | `bool` | `false` | no |
 | `create_dynamodb_response_store` | Create a DynamoDB table for response storage. Ignored in WebSocket modes (`async`/`stream`). | `bool` | `false` | no |

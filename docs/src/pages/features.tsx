@@ -48,6 +48,7 @@ import { FaFacebookMessenger } from "react-icons/fa6";
 import { TbBrandTeams } from "react-icons/tb";
 import PlantParticlesBackground from "../components/PlantParticlesBackground";
 import AgentKernelRuntimeFlowDiagram from "../components/AgentKernelRuntimeFlowDiagram";
+import SandboxFlowDiagram from "../components/SandboxFlowDiagram";
 import HeroAnimation from "../components/HeroAnimation";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/dist/ScrollTrigger";
@@ -58,6 +59,7 @@ gsap.registerPlugin(ScrollTrigger);
 const FEATURE_ANCHORS = {
   problem: "features-problem",
   core: "features-core",
+  sandbox: "features-sandbox",
   frameworks: "features-frameworks",
   testing: "features-testing",
   messaging: "features-messaging",
@@ -86,26 +88,32 @@ const FEATURE_PAGE_MAP: {
       hint: "Runtime, memory, hooks, and more",
     },
     {
-      anchor: "frameworks",
+      anchor: "sandbox",
       number: "03",
+      title: "Sandboxed Execution",
+      hint: "ExecutionBroker + five providers",
+    },
+    {
+      anchor: "frameworks",
+      number: "04",
       title: "Framework Support",
       hint: "One runtime, any framework",
     },
     {
       anchor: "testing",
-      number: "04",
+      number: "05",
       title: "Testing",
       hint: "CLI, pytest, comparison modes",
     },
     {
       anchor: "messaging",
-      number: "05",
+      number: "06",
       title: "Messaging",
       hint: "Slack, WhatsApp, and more",
     },
     {
       anchor: "protocols",
-      number: "06",
+      number: "07",
       title: "Protocol Support",
       hint: "MCP and A2A out of the box",
     },
@@ -272,7 +280,7 @@ function FeaturesPageMap({
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const COL_X_TOP = [143, 450, 757] as const;
-  const COL_X_BOT = [143, 450, 757] as const;
+  const COL_X_BOT = [117, 339, 561, 783] as const;
 
   // Top strip
   const topLines = COL_X_TOP.map((x, i) => ({
@@ -312,7 +320,7 @@ function FeaturesPageMap({
             Everything Agent Kernel Does
           </h2>
           <p className={styles.sectionSubtitle}>
-            Six production-ready capabilities. Explore any area below.
+            Seven production-ready capabilities. Explore any area below.
           </p>
         </div>
 
@@ -500,6 +508,12 @@ function ProblemTable() {
       with: "Built-in with multiple knowledge sources",
     },
     {
+      problem: "Code Execution",
+      without:
+        "Build and secure your own sandbox infrastructure before agents can safely run code",
+      with: "Isolated sandboxes built in: five providers, one config block",
+    },
+    {
       problem: "Messaging Integrations",
       without: "Build custom Slack/WhatsApp bots from scratch",
       with: "Built-in handlers, plug and play",
@@ -512,7 +526,7 @@ function ProblemTable() {
     {
       problem: "Observability",
       without: "Manual instrumentation",
-      with: "LangFuse/OpenLLMetry with one config line",
+      with: "Langfuse/OpenLLMetry/Pydantic Logfire with one config line",
     },
     {
       problem: "Guardrails & Safety",
@@ -535,6 +549,7 @@ function ProblemTable() {
     MdCloud,
     MdMemory,
     MdMenuBook,
+    MdTerminal,
     MdMessage,
     MdBugReport,
     MdVisibility,
@@ -784,8 +799,15 @@ function CoreFeatures() {
       icon: <MdSwapHoriz />,
       title: "Framework-Neutral Runtime",
       description:
-        "OpenAI Agents, LangGraph, CrewAI, and Google ADK, run them all simultaneously in one runtime. Switch frameworks by changing 2 import lines.",
-      highlights: ["OpenAI Agents SDK", "LangGraph", "CrewAI", "Google ADK"],
+        "OpenAI Agents, LangGraph, CrewAI, Google ADK, Smolagents, and Pydantic AI, run them all simultaneously in one runtime. Switch frameworks by changing 2 import lines.",
+      highlights: [
+        "OpenAI Agents SDK",
+        "LangGraph",
+        "CrewAI",
+        "Google ADK",
+        "Smolagents",
+        "Pydantic AI",
+      ],
       link: "/docs/frameworks/overview",
     },
     {
@@ -825,7 +847,20 @@ function CoreFeatures() {
         "Starburst Galaxy — SQL over MongoDB, Sheets, PostgreSQL",
         "semantic_map keeps agent prompts portable",
       ],
-      link: "/docs/architecture/knowledge-bases",
+      link: "/docs/advanced/knowledge-bases",
+    },
+    {
+      icon: <MdTerminal />,
+      title: "Sandboxed Code Execution",
+      description:
+        "Agents run code, shell commands, and file operations in isolated sandboxes. The ExecutionBroker routes every execution to a pluggable, policy-governed provider.",
+      highlights: [
+        "local_subprocess, docker, e2b, daytona, ec2_ssm",
+        "Session-persistent workspaces",
+        "Fail-closed network, filesystem, CPU, and memory policies",
+        "Agent or end-user identity",
+      ],
+      link: "/docs/advanced/sandbox",
     },
     {
       icon: <MdCloud />,
@@ -861,8 +896,9 @@ function CoreFeatures() {
       description:
         "Full visibility into agent execution, LLM calls, and tool invocations. One config line to enable.",
       highlights: [
-        "LangFuse integration",
+        "Langfuse integration",
         "OpenLLMetry (OpenTelemetry-based)",
+        "Pydantic Logfire integration",
         "Multi-level verbosity",
         "Cost and latency tracking",
       ],
@@ -1031,6 +1067,86 @@ function CoreFeatures() {
   );
 }
 
+/* ─── Sandboxed Execution ───────────────────────────────────────────────── */
+
+function SandboxSection() {
+  const sectionRef = useRef<HTMLElement>(null);
+
+  useLayoutEffect(() => {
+    const section = sectionRef.current;
+    if (!section) {
+      return;
+    }
+
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const header = section.querySelector(`.${styles.sectionHeader}`);
+    if (!header) {
+      return;
+    }
+
+    if (reducedMotion) {
+      gsap.set(header, { opacity: 1, y: 0 });
+      return;
+    }
+
+    gsap.set(header, { opacity: 0, y: 24 });
+
+    const tween = gsap.to(header, {
+      opacity: 1,
+      y: 0,
+      duration: 0.5,
+      ease: "power2.out",
+      scrollTrigger: {
+        trigger: header,
+        start: "top 75%",
+        toggleActions: "play none none reverse",
+      },
+    });
+
+    return () => {
+      tween.scrollTrigger?.kill();
+      tween.kill();
+    };
+  }, []);
+
+  return (
+    <section
+      id={FEATURE_ANCHORS.sandbox}
+      className={`${styles.section} ${styles.sandboxSection} ${styles.pageAnchor}`}
+      ref={sectionRef}
+    >
+      <div className="container">
+        <div className={styles.sectionHeader}>
+          <p className={styles.sectionLabel}>03: Sandboxed Execution</p>
+          <h2 className={styles.sectionTitle}>Sandboxed Code Execution</h2>
+          <p className={styles.sectionSubtitle}>
+            Agents write code; Agent Kernel gives it a safe place to run.
+            Every execution flows through the Agent Kernel Execution Broker to
+            a pluggable, policy-governed provider, all chosen in configuration.
+          </p>
+        </div>
+        <div className={styles.sandboxBlock}>
+          <SandboxFlowDiagram detailed />
+          <div className={styles.sandboxLinksRow}>
+            <Link to="/docs/advanced/sandbox" className={styles.sandboxLink}>
+              Sandbox Docs
+            </Link>
+            <Link
+              to="/docs/architecture/sandbox-internals"
+              className={styles.sandboxLink}
+            >
+              Sandbox Internals
+            </Link>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /* ─── Framework Support ─────────────────────────────────────────────────── */
 
 function FrameworkSupport() {
@@ -1111,6 +1227,22 @@ function FrameworkSupport() {
       logo: (
         <img
           src="/img/integrations/smolagents.png"
+          alt=""
+          className={styles.frameworkLogoImg}
+          width={150}
+          height={50}
+        />
+      ),
+    },
+    {
+      key: "pydantic-ai",
+      name: "Pydantic AI",
+      description:
+        "Pydantic-team framework with native multi-provider models, FallbackModel failover, and typed structured output.",
+      link: "/docs/frameworks/pydantic-ai",
+      logo: (
+        <img
+          src="/img/integrations/pydantic-ai.png"
           alt=""
           className={styles.frameworkLogoImg}
           width={150}
@@ -1283,7 +1415,7 @@ function FrameworkSupport() {
     >
       <div className="container">
         <div className={styles.sectionHeader}>
-          <p className={styles.sectionLabel}>03: Framework Support</p>
+          <p className={styles.sectionLabel}>04: Framework Support</p>
           <h2 className={styles.sectionTitle}>One Runtime, Any Framework</h2>
           <p className={styles.sectionSubtitle}>
             Use the best framework for each job, and run them all together in a
@@ -1478,7 +1610,7 @@ function TestingSection() {
     >
       <div className="container">
         <div className={styles.sectionHeader}>
-          <p className={styles.sectionLabel}>04: Testing</p>
+          <p className={styles.sectionLabel}>05: Testing</p>
           <h2 className={styles.sectionTitle}>Testing Framework</h2>
           <p className={styles.sectionSubtitle}>
             Test your agents like any other code. CLI testing for development,
@@ -1553,7 +1685,7 @@ const MESSAGING_PLATFORMS = [
     name: "Microsoft Teams",
     icon: <img src="/img/integrations/teams-logo.png" alt="" width={28} height={24} />,
     color: "#A8B2FF",
-    link: "/docs/next/integrations/teams",
+    link: "/docs/integrations/teams",
   },
   {
     name: "WhatsApp",
@@ -1650,7 +1782,7 @@ function MessagingSection() {
     >
       <div className="container">
         <div className={styles.sectionHeader}>
-          <p className={styles.sectionLabel}>05: Messaging</p>
+          <p className={styles.sectionLabel}>06: Messaging</p>
           <h2 className={styles.sectionTitle}>Messaging Integrations</h2>
           <p className={styles.sectionSubtitle}>
             Your agents meet users on the channels they already use. Every
@@ -1795,7 +1927,7 @@ function ProtocolSupport() {
     >
       <div className="container">
         <div className={styles.sectionHeader}>
-          <p className={styles.sectionLabel}>06: Protocol</p>
+          <p className={styles.sectionLabel}>07: Protocol</p>
           <h2 className={styles.sectionTitle}>Protocol Support</h2>
           <p className={styles.sectionSubtitle}>
             Standard protocols for tool connectivity and multi-agent
@@ -1911,7 +2043,7 @@ export default function Features() {
   return (
     <Layout
       title="Features"
-      description="Comprehensive overview of Agent Kernel features: a framework-neutral, multi-cloud AI agent runtime with built-in testing, observability, guardrails, knowledge bases, and messaging integrations."
+      description="Comprehensive overview of Agent Kernel features: a framework-neutral, multi-cloud AI agent runtime with built-in testing, observability, guardrails, knowledge bases, sandboxed code execution, and messaging integrations."
     >
       {/* <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100vh', zIndex: 0, pointerEvents: 'auto' }}>
         <HeroAnimation
@@ -1934,6 +2066,7 @@ export default function Features() {
         />
         <ProblemTable />
         <CoreFeatures />
+        <SandboxSection />
         <FrameworkSupport />
         <TestingSection />
         <MessagingSection />

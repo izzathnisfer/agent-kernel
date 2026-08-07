@@ -25,13 +25,49 @@ Perfect for microservices, API backends, event-driven architectures, and serverl
 | Google Beta Provider | >= 6.8.0 |
 | Docker Provider | 3.6.2 |
 
+## 🔌 Providers
+
+This module is provider-agnostic: it declares `google`, `google-beta`, and `docker` in `required_providers` but does **not** configure them internally. Configure all three providers in your root module and pass them explicitly via the `providers` argument. This is what lets you use `count`, `for_each`, or `depends_on` on the module block, and lets a minimal/standalone config destroy the resources it created.
+
+```hcl
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+provider "google-beta" {
+  project = var.project_id
+  region  = var.region
+}
+
+# Docker authenticates against Artifact Registry to push the images this module builds
+data "google_client_config" "current" {}
+
+provider "docker" {
+  registry_auth {
+    address  = "${var.region}-docker.pkg.dev"
+    username = "oauth2accesstoken"
+    password = data.google_client_config.current.access_token
+  }
+}
+
+module "serverless_agent" {
+  source    = "yaalalabs/ak-serverless/google"
+  version   = "0.8.1"
+  providers = { google = google, google-beta = google-beta, docker = docker }
+
+  # ... other inputs, see below
+}
+```
+
 ## 🚀 Usage
 
 ### Basic Serverless Deployment
 
 ```hcl
 module "serverless_agent" {
-  source = "yaalalabs/ak-serverless/google"
+  source    = "yaalalabs/ak-serverless/google"
+  providers = { google = google, google-beta = google-beta, docker = docker }
 
   project_id           = "my-gcp-project"
   region               = "us-central1"
@@ -365,6 +401,7 @@ gateway_endpoints = [
 |------|-------------|------|---------|:--------:|
 | `create_redis_cluster` | Create Memorystore Redis instance for agent memory | `bool` | `false` | no |
 | `create_firestore_database` | Create Firestore database for agent session storage | `bool` | `false` | no |
+| `create_firestore_thread_collection` | Wire the Firestore-backed conversation thread store. Requires `create_firestore_database` — it reuses that database and writes to its own collection (created implicitly), provisioning no new resource. Injects the `AK_THREAD__FIRESTORE__*` connection vars. Thread support is enabled by the application declaring `thread.type: firestore` in `config.yaml` — setting this flag alone leaves threads on the in-memory backend. Note that enabling threads makes `user_id` required on every chat request. | `bool` | `false` | no |
 
 **Redis Environment Variables (Auto-injected when enabled)**:
 - `AK_SESSION__REDIS__URL`: Complete Redis connection URL with authentication
