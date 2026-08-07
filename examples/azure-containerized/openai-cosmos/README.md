@@ -55,7 +55,7 @@ publisher_email = "your-email@domain.com"
 ### Optional Variables (have defaults)
 ```hcl
 # Azure region for deployment
-region = "eastus"
+region = "swedencentral"
 
 # Naming configuration
 product_alias = "ak-oai"        # Used in resource names
