@@ -264,7 +264,7 @@ timer fires
   in-flight run's id cannot be claimed by a new scheduled task while that run is still going. It is
   computed at initialization as
   `input queue visibility timeout × execution.queues.input.max_receive_count`
-  (`core/config.py:317-319`, default 3) plus a safety margin, floored at a documented minimum.
+  (`core/config.py:323-325`, default 3) plus a safety margin, floored at a documented minimum.
   - Correctness does not depend on getting this number right — the `scheduled_task_version` guard
     rejects a cross-incarnation outcome however short the TTL turns out to be (see *Outcome-write
     guards*). The derivation exists to make the common case unsurprising, not to carry the
@@ -323,8 +323,8 @@ agent message, with one optional block added to the existing models.
     error body to the output queue instead of processing it
     (`deployment/aws/serverless/core/sqs_consumer.py:46-53`,
     `deployment/aws/containerized/core/sqs_consumer.py:110-115`;
-    handlers at `deployment/aws/containerized/akagentrunner.py:110-118`,
-    `deployment/aws/serverless/akagentrunner.py:127-140,266-280`). That body echoes `scheduled_run`
+    handlers at `deployment/aws/containerized/akagentrunner.py:122-130`,
+    `deployment/aws/serverless/akagentrunner.py:137-156,278-304`). That body echoes `scheduled_run`
     from the failed request for the same reason — pass-through, not special-casing — which is what
     makes a retry-exhausted run recordable as `FAILED` without any DLQ involvement.
 - **The output consumer is the only component that reads `scheduled_run`.** Its presence is exactly
@@ -340,11 +340,11 @@ agent message, with one optional block added to the existing models.
   scheduled task's outcomes are processed in order and a stale outcome cannot overwrite a newer one.
   This requires no new mechanism — the agent runner already propagates the incoming message's group
   and dedup ids verbatim when publishing to the output queue
-  (`deployment/aws/containerized/akagentrunner.py:73-82`,
-  `deployment/aws/serverless/akagentrunner.py:93`), so grouping the input fire by
+  (`deployment/aws/containerized/akagentrunner.py:85-91`,
+  `deployment/aws/serverless/akagentrunner.py:100-106`), so grouping the input fire by
   `scheduled_task_id` automatically groups its outcome by `scheduled_task_id` too. The output queue
-  is FIFO on both supported targets (containerized `modules/queues/main.tf:53`; serverless shares
-  the `fifo_queue` variable across both queues, `modules/queues/main.tf:15,60`).
+  is FIFO on both supported targets (`containerized/modules/queues/main.tf:53`; serverless shares
+  the `fifo_queue` variable across both queues, `serverless/modules/queues/main.tf:15,60`).
   - Consequence of the same propagation: the outcome inherits dedup id
     `<scheduled_task_id>:<scheduled_time>`, so if an at-least-once redelivery re-executes a run
     within the 5-minute FIFO dedup window, only the first outcome is published. This is harmless —
@@ -425,7 +425,7 @@ agent message, with one optional block added to the existing models.
   exactly one call — `Scheduler.mark_run_completed(...)` — passing the ids and derived status.
 - **A scheduled run has no live client channel, and the output consumer must account for that.** In
   the WebSocket execution modes the response handler broadcasts the reply to the originating
-  connection (`deployment/aws/serverless/akresponsehandler.py:106-113`), using an `endpoint_url`
+  connection (`deployment/aws/serverless/akresponsehandler.py:69-76`, dispatched at `:102-105`), using an `endpoint_url`
   attribute that a timer-originated message does not carry. A response with a `scheduled_run` block
   is therefore recorded on the row instead of broadcast, and is not written to the response store
   either — nobody is polling for it. This is the one branch the feature adds to an existing
@@ -482,8 +482,8 @@ agent message, with one optional block added to the existing models.
   - **`ScheduledTaskService` is not a peer of `ChatService` and is not analogous to it.**
     `ChatService` runs agents; `ScheduledTaskService` never runs an agent — it only registers and
     manages schedules. In queue mode the chat route does not go through `ChatService` at all
-    (`QueueRequestHandler` bypasses it deliberately,
-    `deployment/common/queue_request_handler.py:1-13`), so the create path is:
+    (`RestHandler` bypasses it deliberately,
+    `deployment/common/rest_handler.py:16-17`), so the create path is:
     chat route → `ScheduledTaskService` → `Scheduler`.
   - It has three callers: the chat route (create), the `/api/v1/schedule` routes (read, update,
     delete) and the agent-callable tools (all four). No parallel code paths.
@@ -622,7 +622,7 @@ Terraform changes) is deferred to `spec.md`. None of this is visible to the API,
   (serialization); `MessageDeduplicationId` = `<scheduled_task_id>:<scheduled_time>` (at-most-once
   per scheduled time). No queue changes: the dedup id is set explicitly, so content-based
   deduplication stays off (`content_based_deduplication = false` on both queues, containerized
-  `modules/queues/main.tf:18,54`) and existing chat traffic is untouched.
+  `containerized/modules/queues/main.tf:18,54`) and existing chat traffic is untouched.
   - Note the departure from existing convention: ordinary chat traffic groups by `session_id`
     (`deployment/aws/core/sqs_handler.py:346,388` default `message_group_id` to the body's
     `session_id`). Scheduled fires deliberately group by `scheduled_task_id` instead, because the
