@@ -1,9 +1,22 @@
 import json
 import uuid
+from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+
+# Session ids derived for scheduled runs carry this prefix. scheduled_task_id is
+# caller-choosable and shares a namespace with user-supplied session ids, so without
+# the prefix a user session whose id equals a scheduled task's id would share
+# conversation state with that task's runs.
+SCHEDULED_SESSION_PREFIX = "schedule:"
+
+# Volatile-cache key under which ChatService binds the request's authenticated user id to
+# the session. Tool code needs the caller's identity (a scheduled task must have an
+# unforgeable human owner) but user_id is deliberately kept out of the agent's request
+# context, so it travels on the session instead.
+REQUEST_USER_ID_KEY = "ak.request.user_id"
 
 
 class AgentRequestText(BaseModel):
@@ -198,6 +211,88 @@ class ImageData(BaseModel):
     mime_type: Optional[str] = None
 
 
+class ScheduleMode(str, Enum):
+    """Conversation mode of a scheduled task.
+
+    PER_RUN gives every fire its own session (``schedule:<id>:<scheduled_time>``);
+    CONTINUOUS keeps all fires in one long-running session (``schedule:<id>``).
+    """
+
+    PER_RUN = "per_run"
+    CONTINUOUS = "continuous"
+
+
+class ScheduleSpec(BaseModel):
+    """The timing expression plus conversation mode — the ``schedule`` block on a chat body.
+
+    Exactly one of ``cron``, ``rate`` or ``at`` must be supplied. ``id`` is the optional
+    caller-supplied scheduled_task_id, which makes creation idempotent.
+    """
+
+    id: Optional[str] = None
+    cron: Optional[str] = None
+    rate: Optional[str] = None
+    at: Optional[datetime] = None
+    mode: ScheduleMode = ScheduleMode.PER_RUN
+    timezone: str = "UTC"
+
+    @model_validator(mode="after")
+    def _exactly_one_expression(self) -> "ScheduleSpec":
+        """Reject a schedule that names no timing expression or more than one."""
+        supplied = [name for name in ("cron", "rate", "at") if getattr(self, name) is not None]
+        if len(supplied) != 1:
+            raise ValueError(f"schedule requires exactly one of cron, rate or at; got {supplied or 'none'}")
+        return self
+
+
+class ScheduledRunMetadata(BaseModel):
+    """Correlation metadata for one fire of a scheduled task.
+
+    Stamped by the timer at fire time, echoed through the response verbatim, and read
+    only by the output consumer — its presence is how a consumer tells a scheduled run
+    from an ordinary one.
+    """
+
+    scheduled_task_id: str
+    scheduled_task_version: str
+    scheduled_time: datetime
+    run_id: str
+
+    @classmethod
+    def from_body(cls, body: dict) -> "ScheduledRunMetadata | None":
+        """Extract the block from an already-parsed body.
+
+        The output consumers call this on every output-queue message, so the miss costs
+        one ``dict.get`` and nothing else. A malformed block raises ``ValidationError``:
+        on the ordinary path that is a real bug worth surfacing.
+
+        :param body: The parsed response/request body.
+        :return: The parsed metadata, or None when the body carries no block.
+        """
+        if not isinstance(body, dict):
+            return None
+        raw = body.get("scheduled_run")
+        if raw is None:
+            return None
+        return cls.model_validate(raw)
+
+    @classmethod
+    def from_raw_body(cls, raw_body: "str | bytes | dict | None") -> "ScheduledRunMetadata | None":
+        """Extract the block from a raw, possibly-unparseable queue body.
+
+        Called only from the runners' ``on_permanent_failure``, which has no error channel
+        left and must never raise — so every parse and validation failure returns None.
+
+        :param raw_body: The raw SQS record body.
+        :return: The parsed metadata, or None when it cannot be extracted.
+        """
+        try:
+            body = json.loads(raw_body) if isinstance(raw_body, (str, bytes)) else raw_body
+            return cls.from_body(body)
+        except (json.JSONDecodeError, TypeError, ValueError, ValidationError):
+            return None
+
+
 class BaseChatRequest(BaseModel):
     """Base model for chat requests with common fields.
 
@@ -219,6 +314,10 @@ class BaseRunRequest(BaseChatRequest):
 
     files: Optional[List[FileData]] = None
     images: Optional[List[ImageData]] = None
+    # schedule is create-time only (registers the message to run later); scheduled_run is
+    # fire-time only (correlates one run). They never appear on the same request.
+    schedule: Optional[ScheduleSpec] = None
+    scheduled_run: Optional[ScheduledRunMetadata] = None
     model_config = ConfigDict(extra="allow")
 
 

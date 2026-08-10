@@ -111,6 +111,17 @@ class RESTAPI:
                 cls._log.info("Thread support is enabled — mounting thread routes")
                 routers.append(ThreadRESTRequestHandler().get_router())
 
+        from ..scheduler import SchedulerFactory
+
+        if SchedulerFactory.enabled():
+            from .schedule import ScheduleRESTRequestHandler
+
+            # Mount the schedule router automatically unless the user supplied their own
+            # (e.g. one constructed with a custom Authoriser).
+            if not any(isinstance(handler, ScheduleRESTRequestHandler) for handler in handlers):
+                cls._log.info("Scheduled tasks are enabled — mounting schedule routes")
+                routers.append(ScheduleRESTRequestHandler().get_router())
+
         if AKConfig.get().a2a.enabled:
             from .a2a.handler import A2ARESTRequestHandler
 

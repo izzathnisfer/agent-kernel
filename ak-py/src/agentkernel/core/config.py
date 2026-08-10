@@ -593,6 +593,57 @@ class _SandboxConfig(BaseModel):
         return self
 
 
+class _SchedulerDynamoDBConfig(BaseModel):
+    table_name: str = Field(
+        default="ak-scheduled-tasks",
+        description="Dedicated DynamoDB table for scheduled tasks. Partition key 'scheduled_task_id' (S), "
+        "GSI 'owner_id-index' on 'owner_id' (S) / 'created_at' (S), TTL attribute 'expiry_time'. "
+        "Never a partition of the session or response-store table.",
+    )
+
+
+class _SchedulerRedisConfig(BaseModel):
+    prefix: str = Field(
+        default="ak:scheduled_tasks:",
+        description="Key prefix for scheduled-task storage. Uses the session cluster's URL "
+        "(session.redis.url) with a separate keyspace — no new infrastructure.",
+    )
+
+
+class _SchedulerValkeyConfig(BaseModel):
+    prefix: str = Field(
+        default="ak:scheduled_tasks:",
+        description="Key prefix for scheduled-task storage. Uses the session cluster's URL "
+        "(session.valkey.url) with a separate keyspace — no new infrastructure.",
+    )
+
+
+class _SchedulerConfig(BaseModel):
+    """Scheduled task support. Requires AWS, queue mode, and a durable session store.
+
+    The block carries no scheduled-task definitions: scheduled tasks are defined one way,
+    at runtime by an authenticated caller.
+    """
+
+    enabled: bool = Field(default=False, description="Enable scheduled tasks")
+    agents: Optional[list[str]] = Field(
+        default=None,
+        description="Agent names the scheduling tools attach to; omitted = all agents, [] = none",
+    )
+    group_name: Optional[str] = Field(
+        default=None,
+        description="EventBridge Scheduler schedule group for this deployment; injected by Terraform via AK_SCHEDULER__GROUP_NAME",
+    )
+    target_role_arn: Optional[str] = Field(
+        default=None,
+        description="IAM role EventBridge Scheduler assumes to send to the input queue; injected by Terraform via AK_SCHEDULER__TARGET_ROLE_ARN",
+    )
+    region: Optional[str] = Field(default=None, description="AWS region for the scheduler and its table; defaults to the boto3 environment default")
+    dynamodb: Optional[_SchedulerDynamoDBConfig] = Field(default=None, description="Scheduled-task table when session.type is dynamodb")
+    redis: Optional[_SchedulerRedisConfig] = Field(default=None, description="Scheduled-task keyspace when session.type is redis")
+    valkey: Optional[_SchedulerValkeyConfig] = Field(default=None, description="Scheduled-task keyspace when session.type is valkey")
+
+
 class AKConfig(YamlBaseSettingsModified):
     session: _SessionStoreConfig = Field(
         description="Agent session / memory related configurations",
@@ -620,6 +671,10 @@ class AKConfig(YamlBaseSettingsModified):
     trace: _TraceConfig = Field(description="Tracing related configurations", default_factory=_TraceConfig)
     guardrail: _GuardrailConfig = Field(description="Guardrail related configurations", default_factory=_GuardrailConfig)
     sandbox: _SandboxConfig = Field(description="Sandbox capability configurations", default_factory=_SandboxConfig)
+    scheduler: Optional[_SchedulerConfig] = Field(
+        default=None,
+        description="Scheduled task configurations. Feature is enabled only when this block is present and enabled.",
+    )
     execution: _ExecutionConfig = Field(description="Execution mode and queue related configurations", default_factory=_ExecutionConfig)
     logging: _LoggingConfig = Field(description="Logging related configurations", default_factory=_LoggingConfig)
     library_version: str = Field(default=_get_ak_version(), description="Library version")

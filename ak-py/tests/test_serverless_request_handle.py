@@ -1,5 +1,13 @@
+import json
+from unittest.mock import patch
+
+import pytest
+from conftest_scheduler import enable_scheduler_config, install_scheduler, reset_scheduler_config
+
 from agentkernel.core.model import BaseRequest, BaseRunRequest
 from agentkernel.deployment.aws.core.sqs_handler import SQSHandler
+from agentkernel.deployment.aws.serverless.core.router.rest_lambda import DefaultEndpointsHandler
+from agentkernel.scheduler.testing import InMemoryScheduledTaskStore
 
 
 def test_base_request_from_nested_payload_generates_request_id_and_body():
@@ -162,3 +170,73 @@ def test_base_request_route_filtered_from_nested_body():
     assert request.body.prompt == "hello"
     assert request.body.session_id == "session-1"
     assert "route" not in request.body.model_dump()
+
+
+class TestServerlessScheduleCreate:
+    """A payload carrying a `schedule` block is registered, never enqueued."""
+
+    @pytest.fixture(autouse=True)
+    def _scheduler_config(self):
+        enable_scheduler_config()
+        install_scheduler(InMemoryScheduledTaskStore())
+        yield
+        reset_scheduler_config()
+
+    @pytest.fixture
+    def handler(self):
+        with patch("agentkernel.deployment.aws.serverless.core.router.rest_lambda.ResponseDBHandler"):
+            return DefaultEndpointsHandler()
+
+    def _event(self, body: dict, principal_id: str | None = "u1") -> dict:
+        request_context = {"authorizer": {"principalId": principal_id}} if principal_id else {}
+        return {"httpMethod": "POST", "body": json.dumps(body), "requestContext": request_context}
+
+    def _schedule_body(self, **overrides) -> dict:
+        body = {"prompt": "run the report", "schedule": {"rate": "1 hour", "id": "a"}}
+        body.update(overrides)
+        return body
+
+    def test_a_scheduled_payload_is_registered_and_never_enqueued(self, handler):
+        with patch("agentkernel.deployment.aws.serverless.core.router.rest_lambda.SQSHandler") as sqs:
+            status, body = handler._handle_rest_sync(self._event(self._schedule_body()), context=None)
+
+        assert status == 201
+        assert body["status"] == "SCHEDULED"
+        assert body["scheduled_task_id"] == "a"
+        sqs.send_message_to_input_queue.assert_not_called()
+
+    def test_the_owner_comes_from_the_authorizer_context(self, handler):
+        handler._handle_rest_sync(self._event(self._schedule_body()), context=None)
+        assert handler._schedule_service.get("a", owner_id="u1").owner_id == "u1"
+
+    def test_a_request_with_no_authorizer_context_is_rejected(self, handler):
+        """Python cannot observe whether Terraform attached the authorizer, so the
+        identity requirement is enforced per request here."""
+        status, body = handler._handle_rest_sync(self._event(self._schedule_body(), principal_id=None), context=None)
+
+        assert status == 401
+        assert "authenticated caller" in body["error"]
+
+    def test_the_async_submit_path_registers_too(self, handler):
+        with patch("agentkernel.deployment.aws.serverless.core.router.rest_lambda.SQSHandler") as sqs:
+            status, body = handler._handle_async_submit(self._event(self._schedule_body()), context=None)
+
+        assert status == 201
+        sqs.send_message_to_input_queue.assert_not_called()
+
+    def test_a_too_fine_schedule_is_rejected(self, handler):
+        status, body = handler._handle_rest_sync(self._event({"prompt": "hi", "schedule": {"rate": "10 seconds"}}), context=None)
+        assert status == 400
+
+    def test_an_ordinary_payload_is_still_enqueued(self, handler):
+        with patch("agentkernel.deployment.aws.serverless.core.router.rest_lambda.SQSHandler") as sqs:
+            handler._handle_async_submit(self._event({"prompt": "hi", "session_id": "s1"}), context=None)
+
+        sqs.send_message_to_input_queue.assert_called_once()
+
+    def test_a_scheduled_payload_is_rejected_when_scheduling_is_disabled(self, handler):
+        handler._schedule_service = None
+        status, body = handler._handle_rest_sync(self._event(self._schedule_body()), context=None)
+
+        assert status == 400
+        assert "not enabled" in body["error"]

@@ -4,7 +4,7 @@ import json
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from agentkernel.core.model import AgentReply, AgentReplyAny
+from agentkernel.core.model import AgentReply, AgentReplyAny, BaseRunRequest, ScheduledRunMetadata, ScheduleMode, ScheduleSpec
 
 
 class WeatherReport(BaseModel):
@@ -71,3 +71,98 @@ class TestAgentReplyAnyFromOutput:
         assert AgentReplyAny.from_output(42) is None
         assert AgentReplyAny.from_output(None) is None
         assert AgentReplyAny.from_output(["a", "b"]) is None
+
+
+class TestScheduleSpec:
+    """The `schedule` block on a chat body."""
+
+    def test_exactly_one_timing_expression_is_required(self):
+        with pytest.raises(ValidationError):
+            ScheduleSpec()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"cron": "0 9 * * ? *", "rate": "1 hour"},
+            {"rate": "1 hour", "at": "2026-08-09T09:00:00Z"},
+            {"cron": "0 9 * * ? *", "rate": "1 hour", "at": "2026-08-09T09:00:00Z"},
+        ],
+    )
+    def test_multiple_timing_expressions_are_rejected(self, kwargs):
+        with pytest.raises(ValidationError):
+            ScheduleSpec(**kwargs)
+
+    def test_per_run_is_the_default_mode(self):
+        assert ScheduleSpec(rate="1 hour").mode == ScheduleMode.PER_RUN
+
+
+class TestBaseRunRequestSchedulingFields:
+    """Both fields are optional, so every existing caller is unaffected."""
+
+    def test_both_fields_default_to_none(self):
+        request = BaseRunRequest(prompt="hi")
+        assert request.schedule is None
+        assert request.scheduled_run is None
+
+    def test_both_fields_round_trip(self):
+        payload = {
+            "prompt": "hi",
+            "schedule": {"rate": "1 hour", "mode": "continuous"},
+            "scheduled_run": {
+                "scheduled_task_id": "a",
+                "scheduled_task_version": "v1",
+                "scheduled_time": "2026-08-09T09:00:00Z",
+                "run_id": "exec-1",
+            },
+        }
+        request = BaseRunRequest.model_validate(payload)
+        assert request.schedule.mode == ScheduleMode.CONTINUOUS
+        assert request.scheduled_run.scheduled_task_id == "a"
+        assert BaseRunRequest.model_validate(request.model_dump(mode="json")) == request
+
+
+class TestScheduledRunMetadataExtraction:
+    """Two extraction paths: the consumers' hot path and the runners' failure path."""
+
+    VALID = {
+        "scheduled_task_id": "a",
+        "scheduled_task_version": "v1",
+        "scheduled_time": "2026-08-09T09:00:00Z",
+        "run_id": "exec-1",
+    }
+
+    def test_from_body_returns_none_on_the_common_miss(self):
+        assert ScheduledRunMetadata.from_body({"result": "hi"}) is None
+
+    def test_from_body_parses_a_present_block(self):
+        assert ScheduledRunMetadata.from_body({"scheduled_run": self.VALID}).run_id == "exec-1"
+
+    def test_from_body_surfaces_a_malformed_block(self):
+        """On the ordinary consumer path a malformed block is a real bug worth surfacing."""
+        with pytest.raises(ValidationError):
+            ScheduledRunMetadata.from_body({"scheduled_run": {"scheduled_task_id": "a"}})
+
+    @pytest.mark.parametrize("raw", ["{not json", None, "[]", json.dumps({"result": "hi"}), json.dumps({"scheduled_run": {"bad": 1}})])
+    def test_from_raw_body_never_raises(self, raw):
+        assert ScheduledRunMetadata.from_raw_body(raw) is None
+
+    @pytest.mark.parametrize("raw", [json.dumps({"scheduled_run": VALID}), {"scheduled_run": VALID}])
+    def test_from_raw_body_parses_a_string_or_a_dict(self, raw):
+        assert ScheduledRunMetadata.from_raw_body(raw).run_id == "exec-1"
+
+
+class TestImportDirection:
+    """core/ must import nothing from scheduler/, so the dependency points one way."""
+
+    def test_importing_core_model_pulls_in_no_scheduler_module(self):
+        import subprocess
+        import sys
+
+        script = "import sys; import agentkernel.core.model; " "print(any(name.startswith('agentkernel.scheduler') for name in sys.modules))"
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+        assert result.stdout.strip().splitlines()[-1] == "False", result.stderr
+
+    def test_the_capability_re_exports_the_very_same_classes(self):
+        from agentkernel.scheduler.model import ScheduleSpec as ReExported
+
+        assert ReExported is ScheduleSpec

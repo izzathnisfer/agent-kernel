@@ -23,6 +23,9 @@ class _FakeHandler:
     def initialize(self, session_id, agent):
         self.initialized_with = (session_id, agent)
 
+    def bind_request_user(self, user_id):
+        self.bound_user_id = user_id
+
     async def run_stream_async(self, requests):
         async for chunk in self.service.stream_multi(requests):
             yield chunk

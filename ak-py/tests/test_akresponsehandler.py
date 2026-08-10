@@ -111,3 +111,72 @@ def test_process_message_stream_mode_calls_broadcast_stream_chunk(mock_config_cl
     broadcasted = call_kwargs.kwargs["message"]
     assert message_type == LambdaWSHandler.MessageType.STREAM_CHUNK
     assert broadcasted["delta"] == "token"
+
+
+class TestScheduledRunOutcomes:
+    """A scheduled run has no live client channel and nobody polls for its response."""
+
+    SCHEDULED_RUN = {
+        "scheduled_task_id": "schedule_a",
+        "scheduled_task_version": "v1",
+        "scheduled_time": "2026-08-09T09:00:00Z",
+        "run_id": "exec-1",
+    }
+
+    @pytest.fixture
+    def scheduler(self):
+        with patch("agentkernel.deployment.common.scheduled_run_recorder.SchedulerFactory") as factory:
+            yield factory.build.return_value
+
+    def _record(self, body_overrides=None, with_endpoint_url=True):
+        body = {"result": "the report", "session_id": "schedule:schedule_a:2026-08-09T09:00:00Z", "scheduled_run": self.SCHEDULED_RUN}
+        body.update(body_overrides or {})
+        attributes = {"request_id": {"StringValue": "req-1", "DataType": "String"}}
+        if with_endpoint_url:
+            attributes["endpoint_url"] = {"StringValue": "https://example.execute-api.us-east-1.amazonaws.com/prod", "DataType": "String"}
+            attributes["user_id"] = {"StringValue": "user-1", "DataType": "String"}
+        return {"body": json.dumps(body), "messageAttributes": attributes}
+
+    def test_a_successful_run_is_recorded_and_not_stored(self, scheduler):
+        with patch.object(ResponseHandler, "_get_response_store") as store:
+            ResponseHandler.process_message(self._record())
+
+        store.assert_not_called()
+        kwargs = scheduler.mark_run_completed.call_args.kwargs
+        assert kwargs["scheduled_task_id"] == "schedule_a"
+        assert kwargs["status"].value == "COMPLETED"
+
+    def test_an_errored_run_is_recorded_as_failed_with_its_error(self, scheduler):
+        ResponseHandler.process_message(self._record({"error": "agent blew up"}))
+
+        kwargs = scheduler.mark_run_completed.call_args.kwargs
+        assert kwargs["status"].value == "FAILED"
+        assert kwargs["last_error"] == "agent blew up"
+
+    @pytest.mark.parametrize("mode", ["async", "stream"])
+    def test_a_timer_originated_message_is_not_broadcast(self, scheduler, mode):
+        """The regression guard: a fire carries no endpoint_url, so a broadcast would raise."""
+        from agentkernel.core.model import ExecutionMode
+
+        mock_config = MagicMock()
+        mock_config.execution.mode = ExecutionMode(mode)
+        with patch("agentkernel.deployment.aws.serverless.akresponsehandler.AKConfig") as config_cls:
+            config_cls.get.return_value = mock_config
+            with patch.object(ResponseHandler, "_get_base_ws_handler") as ws_handler:
+                ResponseHandler.process_message(self._record(with_endpoint_url=False))  # must not raise
+
+        ws_handler.assert_not_called()
+        scheduler.mark_run_completed.assert_called_once()
+
+    def test_an_ordinary_response_is_still_stored(self, scheduler):
+        record = {
+            "body": json.dumps({"result": "hi", "session_id": "s1"}),
+            "messageAttributes": {"request_id": {"StringValue": "req-1", "DataType": "String"}},
+        }
+        with patch("agentkernel.deployment.aws.serverless.akresponsehandler.AKConfig") as config_cls:
+            config_cls.get.return_value = MagicMock()
+            with patch.object(ResponseHandler, "_get_response_store") as store:
+                ResponseHandler.process_message(record)
+
+        store.return_value.add_message.assert_called_once()
+        scheduler.mark_run_completed.assert_not_called()

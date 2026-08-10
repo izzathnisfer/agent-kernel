@@ -78,13 +78,13 @@ variable "queue_mode" {
 variable "event_source_mapping" {
   description = "Event source mapping"
   type        = any
-  default = []
+  default     = []
 }
 
 variable "environment_variables" {
   description = "Environment variables"
   type        = any
-  default = {}
+  default     = {}
 }
 
 variable "timeout" {
@@ -122,8 +122,8 @@ variable "package_type" {
 
 variable "layers" {
   description = "Lambda layers"
-  type = list(string)
-  default = []
+  type        = list(string)
+  default     = []
 }
 
 variable "api_version" {
@@ -150,7 +150,7 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  type = list(string)
+  type        = list(string)
   description = "Subnet IDs for VPC deployment"
 }
 
@@ -299,4 +299,32 @@ variable "websocket_connections_dynamodb" {
     table_arn  = string
   })
   default = null
+}
+
+# -
+# Scheduled Task Configuration
+# -
+
+variable "scheduled_task" {
+  type        = bool
+  description = "Whether this component needs scheduled-task access"
+  default     = false
+}
+
+variable "scheduled_task_table_arn" {
+  type        = string
+  description = "Scheduled-task DynamoDB table ARN; null when the session store is Redis/Valkey"
+  default     = null
+}
+
+variable "scheduled_task_schedule_group_arn" {
+  type        = string
+  description = "ARN of the EventBridge Scheduler schedule group; scopes the scheduler IAM grant"
+  default     = null
+}
+
+variable "scheduled_task_target_role_arn" {
+  type        = string
+  description = "IAM role EventBridge Scheduler assumes to deliver a fire to the input queue"
+  default     = null
 }

@@ -74,16 +74,16 @@ variable "lambda_signing_config_arn" {
 variable "response_handler" {
   description = "Response handler configuration object"
   type = object({
-    function_name                  = optional(string, "response-handler")
-    function_description           = optional(string, "Response handler Lambda for processing SQS messages and storing responses")
-    timeout                        = optional(number, 30)
-    memory_size                    = optional(number, 256)
-    handler_path                   = optional(string, "response_handler.handler")
-    module_name                    = optional(string, "response-handler")
-    package_path                   = optional(string, null)
-    package_type                   = string
-    layers                         = optional(list(string), [])
-    environment_variables          = optional(map(string), {})
+    function_name                     = optional(string, "response-handler")
+    function_description              = optional(string, "Response handler Lambda for processing SQS messages and storing responses")
+    timeout                           = optional(number, 30)
+    memory_size                       = optional(number, 256)
+    handler_path                      = optional(string, "response_handler.handler")
+    module_name                       = optional(string, "response-handler")
+    package_path                      = optional(string, null)
+    package_type                      = string
+    layers                            = optional(list(string), [])
+    environment_variables             = optional(map(string), {})
     cloudwatch_logs_retention_in_days = optional(number, 90)
   })
 }
@@ -169,3 +169,24 @@ variable "websocket_mode" {
   default     = false
 }
 
+# -
+# Scheduled Task Configuration
+# -
+
+variable "scheduled_task" {
+  type        = bool
+  description = "Whether this component needs scheduled-task access"
+  default     = false
+}
+
+variable "scheduled_task_table_arn" {
+  type        = string
+  description = "Scheduled-task DynamoDB table ARN; null when the session store is Redis/Valkey"
+  default     = null
+}
+
+variable "input_queue_arn" {
+  type        = string
+  description = "ARN of the SQS input queue; the scheduler reads its visibility timeout to derive the soft-delete grace window"
+  default     = null
+}

@@ -42,6 +42,7 @@ module "rest_service" {
 
   queue_mode                = var.queue_mode
   input_queue_url           = var.queue_mode ? module.queues[0].input_queue_url : null
+  input_queue_arn           = var.queue_mode ? module.queues[0].input_queue_arn : null
   output_queue_url          = var.queue_mode ? module.queues[0].output_queue_url : null
   response_store_table_name = (var.queue_mode && !local.is_websocket_mode) ? aws_dynamodb_table.response_store[0].name : null
   queue_config              = var.queue_config
@@ -53,6 +54,14 @@ module "rest_service" {
   websocket_connections_table_arn  = local.is_websocket_mode ? module.websocket_connections[0].table_arn : null
   websocket_api_execution_arn      = local.is_websocket_mode ? aws_apigatewayv2_api.ws_api[0].execution_arn : null
   websocket_endpoint_url           = local.is_websocket_mode ? "https://${aws_apigatewayv2_api.ws_api[0].id}.execute-api.${var.region}.amazonaws.com/${local.ws_stage_name}" : null
+
+  # Scheduled tasks: this task hosts both the schedule routes and the output-consumer thread.
+  scheduled_task                     = var.scheduled_task
+  scheduled_task_table_name          = var.scheduled_task ? module.scheduler[0].table_name : null
+  scheduled_task_table_arn           = var.scheduled_task ? module.scheduler[0].table_arn : null
+  scheduled_task_schedule_group_name = var.scheduled_task ? module.scheduler[0].schedule_group_name : null
+  scheduled_task_schedule_group_arn  = var.scheduled_task ? module.scheduler[0].schedule_group_arn : null
+  scheduled_task_target_role_arn     = var.scheduled_task ? module.scheduler[0].target_role_arn : null
 
   tags = var.tags
 }

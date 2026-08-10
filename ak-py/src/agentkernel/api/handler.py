@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict
 
@@ -10,6 +10,39 @@ from ..core import Config
 from ..core.chat_service import ChatService
 from ..core.model import BaseChatRequest, BaseRunRequest, ExecutionMode
 from ..core.runtime import Runtime
+from ..core.thread import Authoriser
+
+
+class BearerIdentityMixin:
+    """Resolves the caller's identity from a Bearer token via a configured ``Authoriser``.
+
+    Shared by every route layer that needs an authenticated subject, so the thread routes
+    and the schedule routes cannot drift apart in how a token is read or rejected.
+    Subclasses must set ``_authoriser``.
+    """
+
+    _authoriser: Optional[Authoriser] = None
+
+    def _resolve_user(self, request: Request) -> Optional[str]:
+        """
+        Resolve the caller's user_id via the configured Authoriser.
+        :param request: The incoming FastAPI request.
+        :return: The resolved user_id, or None when no Authoriser is configured.
+        :raises HTTPException: 401 when a token is missing or rejected.
+        """
+        if self._authoriser is None:
+            return None
+        auth_header = request.headers.get("authorization")
+        if auth_header is None:
+            raise HTTPException(status_code=401, detail="Missing authorization header")
+        scheme, _, token = auth_header.partition(" ")
+        token = token.strip()
+        if scheme.lower() != "bearer" or not token:
+            raise HTTPException(status_code=401, detail="Invalid authorization header")
+        user_id = self._authoriser.authorise(token)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        return user_id
 
 
 class RESTRequestHandler(ABC):

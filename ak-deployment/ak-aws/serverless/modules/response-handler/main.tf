@@ -1,8 +1,8 @@
 locals {
-  subnet_ids                    = var.subnet_ids
-  lambda_kms_key_arn            = var.lambda_kms_key_arn
-  cloudwatch_kms_key_arn        = var.cloudwatch_kms_key_arn
-  
+  subnet_ids             = var.subnet_ids
+  lambda_kms_key_arn     = var.lambda_kms_key_arn
+  cloudwatch_kms_key_arn = var.cloudwatch_kms_key_arn
+
   # Response handler configuration
   response_handler_function_name        = var.response_handler.function_name
   response_handler_function_description = var.response_handler.function_description
@@ -14,20 +14,20 @@ locals {
   response_handler_package_type         = try(var.response_handler.package_type, "LocalZip")
   response_handler_layers               = var.response_handler.layers
   response_handler_env_vars             = var.response_handler.environment_variables
-  
+
   # S3 source key — passed in from parent via var.source_key (lambda-package module output)
 
   # Queue configuration
-  output_queue_arn                            = var.queue_config.output_queue_arn
-  batch_size                                  = var.queue_config.batch_size
-  maximum_batching_window_in_seconds          = var.queue_config.maximum_batching_window_in_seconds
-  output_queue_consumer_max_receive_count      = max(1, var.queue_config.output_queue_max_receive_count - 1)
-  
+  output_queue_arn                        = var.queue_config.output_queue_arn
+  batch_size                              = var.queue_config.batch_size
+  maximum_batching_window_in_seconds      = var.queue_config.maximum_batching_window_in_seconds
+  output_queue_consumer_max_receive_count = max(1, var.queue_config.output_queue_max_receive_count - 1)
+
   # Response store configuration
   redis_response_store    = var.response_store_redis
   valkey_response_store   = var.response_store_valkey
   dynamodb_response_store = var.response_store_dynamodb
-  
+
   # WebSocket API configuration
   websocket_api_execution_arn = try(var.websocket_api_execution_arn, null)
 }
@@ -64,7 +64,7 @@ data "aws_s3_object" "signed_component_code" {
 # IAM Role for Response Handler Lambda
 resource "aws_iam_role" "response_handler_lambda_role" {
   name = "${var.product_alias}-${var.env_alias}-${local.response_handler_module_name}-${local.response_handler_function_name}-lambda-role"
-  
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -94,7 +94,7 @@ resource "aws_iam_role_policy_attachment" "response_handler_vpc_execution" {
 # SQS permissions for response handler
 resource "aws_iam_policy" "response_handler_sqs_policy" {
   name = "${var.product_alias}-${var.env_alias}-${local.response_handler_module_name}-${local.response_handler_function_name}-sqs"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -121,7 +121,7 @@ resource "aws_iam_role_policy_attachment" "response_handler_sqs_attachment" {
 resource "aws_iam_policy" "response_handler_dynamodb_policy" {
   count = local.dynamodb_response_store != null ? 1 : 0
   name  = "${var.product_alias}-${var.env_alias}-${local.response_handler_module_name}-${local.response_handler_function_name}-dynamodb"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -152,7 +152,7 @@ resource "aws_iam_role_policy_attachment" "response_handler_dynamodb_attachment"
 resource "aws_iam_policy" "response_handler_websocket_connections_dynamodb_policy" {
   count = var.websocket_connections_dynamodb != null ? 1 : 0
   name  = "${var.product_alias}-${var.env_alias}-${local.response_handler_module_name}-${local.response_handler_function_name}-websocket-connections-ddb"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -271,11 +271,46 @@ resource "aws_lambda_event_source_mapping" "response_handler_output_queue" {
   event_source_arn = local.output_queue_arn
   function_name    = module.response_handler_lambda.lambda_function_name
   batch_size       = local.batch_size
-  
+
   # Configuring maximum batching window
   maximum_batching_window_in_seconds = local.maximum_batching_window_in_seconds
-  
+
   # Configuring partial batch failure handling
   function_response_types = ["ReportBatchItemFailures"]
 }
 
+# Scheduled tasks: the response handler records run outcomes, so it reads and updates the
+# table and gets no EventBridge Scheduler permissions at all — it never registers or
+# removes a schedule.
+
+resource "aws_iam_policy" "scheduler_policy" {
+  count = var.scheduled_task && var.scheduled_task_table_arn != null ? 1 : 0
+  name  = "${var.product_alias}-${var.env_alias}-${var.response_handler.function_name}-scheduler"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeTable",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+        ]
+        Resource = var.scheduled_task_table_arn
+      },
+      {
+        # The soft-delete grace window is derived from the queue's visibility timeout.
+        Effect   = "Allow"
+        Action   = ["sqs:GetQueueAttributes"]
+        Resource = var.input_queue_arn
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "scheduler_attachment" {
+  count      = var.scheduled_task && var.scheduled_task_table_arn != null ? 1 : 0
+  role       = aws_iam_role.response_handler_lambda_role.name
+  policy_arn = aws_iam_policy.scheduler_policy[0].arn
+}

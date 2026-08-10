@@ -9,6 +9,7 @@ from ......auth.handler import AuthValidator
 from ......core.chat_service import ChatService
 from ......core.config import AKConfig, ExecutionMode
 from ......core.model import BaseRequest, StreamChunk
+from ......scheduler import CreateAck, SchedulerError, SchedulerFactory
 from ....core.sqs_handler import SQSHandler
 from ....core.websocket_service import AWSWebSocketHandler, WebSocketConnectionStore
 from .common import BaseLambdaRouter
@@ -249,6 +250,10 @@ class SystemRoutesHandler(LambdaWSHandler):
         if not self.CHAT_ROUTE:
             raise ValueError("websocket_api.chat_route must be configured")
         self._chat_service = ChatService()
+        # No Authoriser check: a WebSocket connection is authenticated at $connect, so the
+        # identity requirement holds here without one.
+        SchedulerFactory.validate_config()
+        self._schedule_service = SchedulerFactory.service()
 
     def _is_queue_mode(self) -> bool:
         """
@@ -364,6 +369,67 @@ class SystemRoutesHandler(LambdaWSHandler):
                 pass
             return 500, self._build_lambda_response(user_id=user_id, msg="Stream request processing failed", success=False)
 
+    def _create_scheduled_task(
+        self,
+        event: Dict[str, Any],
+        ws_message_info: "LambdaWSHandler.WSMessageInfo",
+    ) -> Tuple[int, Dict[str, Any]]:
+        """Register a chat frame to run later and broadcast the acknowledgement.
+
+        The acknowledgement travels the caller's live connection, sent here rather than by
+        the response handler, so it never travels the queues.
+
+        :param event: WebSocket event dictionary.
+        :param ws_message_info: The parsed frame and its authenticated user.
+        :return: Tuple of (status_code, response_body).
+        """
+        user_id = ws_message_info.user_id
+        if self._schedule_service is None:
+            return (400, self._build_lambda_response(user_id=user_id, msg="Scheduling is not enabled for this deployment", success=False))
+
+        body = ws_message_info.request.body
+        try:
+            ack = self._schedule_service.create(
+                spec=body.schedule,
+                prompt=body.prompt,
+                agent=body.agent,
+                owner_id=user_id,
+                request_id=ws_message_info.request.request_id,
+            )
+        except (SchedulerError, ValueError) as e:
+            self._log.warning(f"Scheduled task creation failed for user_id={user_id}: {e}")
+            return (400, self._build_lambda_response(user_id=user_id, msg=str(e), success=False))
+
+        self._broadcast_ack(ack, event, user_id)
+        response_body = self._build_lambda_response(user_id=user_id, msg="Request scheduled successfully", success=True)
+        response_body["scheduled_task_id"] = ack.scheduled_task_id
+        return (201, response_body)
+
+    def _broadcast_ack(self, ack: CreateAck, event: Dict[str, Any], user_id: str) -> None:
+        """Push the creation acknowledgement over the caller's connection.
+
+        In stream mode it is a single terminal frame: nothing is generated at creation time,
+        so there are no token deltas to precede it.
+
+        :param ack: The acknowledgement payload.
+        :param event: WebSocket event dictionary.
+        :param user_id: The authenticated user to push to.
+        :return: None
+        """
+        payload = ack.model_dump(mode="json", exclude_none=True)
+        if self._config.execution.mode == ExecutionMode.STREAM:
+            message_type = self.MessageType.STREAM_CHUNK
+            payload = {**payload, "done": True}
+        else:
+            message_type = self.MessageType.CHAT_RESPONSE
+
+        self.broadcast(
+            endpoint_url=LambdaWSHandler.construct_endpoint_url(event),
+            message=payload,
+            user_id=user_id,
+            message_type=message_type,
+        )
+
     def _handle_queue_mode(self, event: Dict[str, Any], context: Optional[Any] = None) -> Tuple[int, Dict[str, Any]]:
         """
         Handle chat request in queue mode - send message to SQS input queue.
@@ -385,6 +451,11 @@ class SystemRoutesHandler(LambdaWSHandler):
                 raise ValueError("body is required")
             if not request.request_id:
                 raise ValueError("request_id is required")
+
+            # Before the session_id check: without this branch a frame carrying a schedule
+            # would be enqueued and executed immediately instead of scheduled.
+            if request_body.schedule is not None:
+                return self._create_scheduled_task(event, ws_message_info)
 
             session_id = request_body.session_id
             if not session_id:

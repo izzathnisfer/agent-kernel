@@ -39,14 +39,14 @@ module "agent_runner" {
   output_queue_url = module.queues[0].output_queue_url
   output_queue_arn = module.queues[0].output_queue_arn
 
-  redis_url                     = local.redis_url
-  valkey_url                    = local.valkey_url
-  create_dynamodb_memory_table  = var.create_dynamodb_memory_table
-  dynamodb_memory_table_arn     = local.dynamodb_memory_table_arn
-  dynamodb_memory_table_name    = local.dynamodb_memory_table_name
-  create_dynamodb_thread_table  = var.create_dynamodb_thread_table
-  dynamodb_thread_table_arn     = local.dynamodb_thread_table_arn
-  dynamodb_thread_table_name    = local.dynamodb_thread_table_name
+  redis_url                    = local.redis_url
+  valkey_url                   = local.valkey_url
+  create_dynamodb_memory_table = var.create_dynamodb_memory_table
+  dynamodb_memory_table_arn    = local.dynamodb_memory_table_arn
+  dynamodb_memory_table_name   = local.dynamodb_memory_table_name
+  create_dynamodb_thread_table = var.create_dynamodb_thread_table
+  dynamodb_thread_table_arn    = local.dynamodb_thread_table_arn
+  dynamodb_thread_table_name   = local.dynamodb_thread_table_name
 
   agent_runner = {
     cpu           = var.agent_runner.cpu
@@ -64,6 +64,15 @@ module "agent_runner" {
   default_image_uri = module.docker_image[0].docker_image_uri
 
   account_id = data.aws_caller_identity.current.account_id
+
+  # Scheduled tasks: the runner only needs access when the agent-callable tools are on.
+  scheduled_task                     = var.scheduled_task
+  scheduled_task_config              = var.scheduled_task_config
+  scheduled_task_table_name          = var.scheduled_task ? module.scheduler[0].table_name : null
+  scheduled_task_table_arn           = var.scheduled_task ? module.scheduler[0].table_arn : null
+  scheduled_task_schedule_group_name = var.scheduled_task ? module.scheduler[0].schedule_group_name : null
+  scheduled_task_schedule_group_arn  = var.scheduled_task ? module.scheduler[0].schedule_group_arn : null
+  scheduled_task_target_role_arn     = var.scheduled_task ? module.scheduler[0].target_role_arn : null
 
   tags = var.tags
 }

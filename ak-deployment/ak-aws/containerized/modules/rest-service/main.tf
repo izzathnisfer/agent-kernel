@@ -28,8 +28,25 @@ locals {
       AK_EXECUTION__MODE                             = var.execution_mode
       AK_WEBSOCKET_API__CONNECTION_TABLE__TABLE_NAME = var.websocket_connections_table_name
       AK_WEBSOCKET_API__ENDPOINT_URL                 = var.websocket_endpoint_url
-    } : {}
+    } : {},
+    local.scheduler_environment
   )
+
+  # Only the backend block matching the deployment's session store is injected: the ECS
+  # environment map rejects nulls, and an operator reading the running container's
+  # environment should see exactly the one backend that is in use.
+  scheduler_environment = var.scheduled_task ? merge(
+    {
+      AK_SCHEDULER__ENABLED         = "true"
+      AK_SCHEDULER__GROUP_NAME      = var.scheduled_task_schedule_group_name
+      AK_SCHEDULER__TARGET_ROLE_ARN = var.scheduled_task_target_role_arn
+    },
+    var.scheduled_task_table_name != null ? {
+      AK_SCHEDULER__DYNAMODB__TABLE_NAME = var.scheduled_task_table_name
+    } : {},
+    var.redis_url != null ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
+    var.valkey_url != null ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
+  ) : {}
 }
 
 # Service Discovery
@@ -95,6 +112,65 @@ resource "aws_iam_policy" "dynamodb_thread_policy" {
         Resource = var.dynamodb_thread_table_arn
       }
     ]
+  })
+
+  tags = var.tags
+}
+
+
+# The REST task hosts both the schedule routes (which register and remove timer
+# registrations) and the output-consumer thread (which records run outcomes), so it needs
+# the full grant. iam:PassRole is required because registering a schedule hands
+# EventBridge Scheduler the role it assumes to deliver the fire.
+
+resource "aws_iam_policy" "scheduler_policy" {
+  count       = var.scheduled_task ? 1 : 0
+  name        = "${var.product_alias}-${var.env_alias}-${var.module_name}-scheduler-policy"
+  description = "Policy for scheduled-task table and EventBridge Scheduler access"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      var.scheduled_task_table_arn != null ? [{
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeTable",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          var.scheduled_task_table_arn,
+          "${var.scheduled_task_table_arn}/index/*"
+        ]
+      }] : [],
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "scheduler:CreateSchedule",
+            "scheduler:UpdateSchedule",
+            "scheduler:DeleteSchedule",
+            "scheduler:GetSchedule",
+            "scheduler:ListSchedules",
+          ]
+          Resource = "${var.scheduled_task_schedule_group_arn}/*"
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["iam:PassRole"]
+          Resource = var.scheduled_task_target_role_arn
+        },
+        {
+          # The soft-delete grace window is derived from the queue's visibility timeout.
+          Effect   = "Allow"
+          Action   = ["sqs:GetQueueAttributes"]
+          Resource = var.input_queue_arn
+        },
+      ]
+    )
   })
 
   tags = var.tags
@@ -287,6 +363,9 @@ module "ecs_service" {
     } : {},
     var.create_dynamodb_thread_table ? {
       DynamoDBThread = aws_iam_policy.dynamodb_thread_policy[0].arn
+    } : {},
+    var.scheduled_task ? {
+      Scheduler = aws_iam_policy.scheduler_policy[0].arn
     } : {}
   )
 

@@ -67,8 +67,37 @@ locals {
     [{ path = var.agent_endpoint, method = "POST" }],
     var.execution_mode == "rest_async" ? [{ path = var.agent_endpoint, method = "GET" }] : []
   )
-  complete_gateway_endpoints = concat(local.chat_endpoint, var.gateway_endpoints)
-  agent_invoke_url           = try(module.api_gateway[0].agent_invoke_url, null)
+  # Management routes for already-created scheduled tasks. They inherit the request
+  # authorizer along with every other endpoint, which is the deploy-time half of the
+  # identity requirement the app enforces per request.
+  schedule_endpoints = var.scheduled_task ? [
+    { path = "schedule", method = "GET" },
+    { path = "schedule/{scheduled_task_id}", method = "GET" },
+    { path = "schedule/{scheduled_task_id}", method = "PUT" },
+    { path = "schedule/{scheduled_task_id}", method = "DELETE" },
+  ] : []
+  complete_gateway_endpoints = concat(local.chat_endpoint, local.schedule_endpoints, var.gateway_endpoints)
+
+  # Only the backend block matching the deployment's session store is injected: Lambda's
+  # environment map rejects nulls, and an operator reading the function's environment
+  # should see exactly the one backend that is in use.
+  scheduler_environment = var.scheduled_task ? merge(
+    {
+      AK_SCHEDULER__ENABLED         = "true"
+      AK_SCHEDULER__GROUP_NAME      = module.scheduler[0].schedule_group_name
+      AK_SCHEDULER__TARGET_ROLE_ARN = module.scheduler[0].target_role_arn
+    },
+    module.scheduler[0].table_name != null ? {
+      AK_SCHEDULER__DYNAMODB__TABLE_NAME = module.scheduler[0].table_name
+    } : {},
+    local.redis_url != null ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
+    local.valkey_url != null ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
+  ) : {}
+
+  # Scheduling reaches the agent runner only through the agent-callable tools, which are
+  # opt-in, so the runner gets nothing unless they are switched on.
+  scheduler_agent_tools_enabled = var.scheduled_task && var.scheduled_task_config.enable_agent_tools
+  agent_invoke_url              = try(module.api_gateway[0].agent_invoke_url, null)
 
   websocket_api_endpoint_url      = try(module.websocket_api_gateway[0].websocket_api_endpoint_url, null)
   websocket_api_endpoint_arn      = try(module.websocket_api_gateway[0].websocket_api_execution_arn, null)
@@ -521,8 +550,16 @@ module "request_handler" {
   environment_variables = merge(
     try(var.request_handler.environment_variables, {}),
     var.execution_mode != null ? { AK_EXECUTION__MODE = var.execution_mode } : {},
-    local.websocket_api_enabled ? { AK_WEBSOCKET_API__CHAT_ROUTE = var.ws_chat_route } : {}
+    local.websocket_api_enabled ? { AK_WEBSOCKET_API__CHAT_ROUTE = var.ws_chat_route } : {},
+    local.scheduler_environment
   )
+
+  # Hosts the chat create path and the /schedule routes, so it registers and removes timer
+  # registrations as well as reading and writing the table.
+  scheduled_task                    = var.scheduled_task
+  scheduled_task_table_arn          = var.scheduled_task ? module.scheduler[0].table_arn : null
+  scheduled_task_schedule_group_arn = var.scheduled_task ? module.scheduler[0].schedule_group_arn : null
+  scheduled_task_target_role_arn    = var.scheduled_task ? module.scheduler[0].target_role_arn : null
 
   depends_on = [module.request_handler_source_package]
 }
@@ -537,8 +574,19 @@ module "agent_runner" {
   module_type   = var.module_type
 
   agent_runner = merge(var.agent_runner, {
-    environment_variables = merge(var.agent_runner.environment_variables, var.execution_mode != null ? { AK_EXECUTION__MODE = var.execution_mode } : {})
+    environment_variables = merge(
+      var.agent_runner.environment_variables,
+      var.execution_mode != null ? { AK_EXECUTION__MODE = var.execution_mode } : {},
+      local.scheduler_agent_tools_enabled ? local.scheduler_environment : {}
+    )
   })
+
+  # Scheduling reaches the runner only through the agent-callable tools, so a deployment
+  # that leaves them off gives it no scheduler permissions at all.
+  scheduled_task                    = local.scheduler_agent_tools_enabled
+  scheduled_task_table_arn          = local.scheduler_agent_tools_enabled ? module.scheduler[0].table_arn : null
+  scheduled_task_schedule_group_arn = local.scheduler_agent_tools_enabled ? module.scheduler[0].schedule_group_arn : null
+  scheduled_task_target_role_arn    = local.scheduler_agent_tools_enabled ? module.scheduler[0].target_role_arn : null
 
   source_bucket     = local.shared_source_bucket
   source_key        = try(module.agent_runner_source_package[0].s3_key, null)
@@ -619,8 +667,18 @@ module "response_handler" {
     try(var.response_handler.ecr_image_uri, null) != null ? var.response_handler.ecr_image_uri : module.response_handler_docker_image[0].docker_image_uri
   ) : null
   response_handler = merge(var.response_handler, {
-    environment_variables = merge(var.response_handler.environment_variables, var.execution_mode != null ? { AK_EXECUTION__MODE = var.execution_mode } : {})
+    environment_variables = merge(
+      var.response_handler.environment_variables,
+      var.execution_mode != null ? { AK_EXECUTION__MODE = var.execution_mode } : {},
+      local.scheduler_environment
+    )
   })
+
+  # Records run outcomes: table read and update only. It never registers or removes a
+  # schedule, so it gets no EventBridge Scheduler permissions.
+  scheduled_task           = var.scheduled_task
+  scheduled_task_table_arn = var.scheduled_task ? module.scheduler[0].table_arn : null
+  input_queue_arn          = local.input_queue_arn
 
   queue_config = {
     output_queue_arn                   = local.output_queue_arn

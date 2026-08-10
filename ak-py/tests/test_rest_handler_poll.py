@@ -31,6 +31,8 @@ def client_and_store():
     config.execution.mode = ExecutionMode.REST_ASYNC
     config.execution.queues.input.url = "https://sqs.example/input"
     config.api.max_file_size = 10_000_000
+    # A bare Mock would make every optional capability look enabled.
+    config.scheduler = None
 
     store = Mock()
     store.get_message_with_retry = AsyncMock(return_value=None)

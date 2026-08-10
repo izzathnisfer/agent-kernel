@@ -17,6 +17,7 @@ from ......auth.handler import AuthValidator
 from ......core.chat_service import ChatService
 from ......core.config import AKConfig
 from ......core.model import BaseRequest, BaseRunRequest, ExecutionMode, StreamChunk
+from ......scheduler import CreateAck, SchedulerError, SchedulerFactory
 from ....core.sqs_handler import SQSHandler
 from ....core.websocket_service import AWSWebSocketHandler, WebSocketConnectionStore
 
@@ -234,6 +235,10 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
 
         self._custom_routes: dict[str, Callable] = dict(custom_routes or {})
         self._chat_service: Optional[ChatService] = None
+        # No Authoriser check here, unlike the REST chat route: a WebSocket deployment
+        # authenticates at $connect via an AuthValidator and has no Authoriser object at all.
+        SchedulerFactory.validate_config()
+        self._schedule_service = SchedulerFactory.service()
 
     def _is_queue_mode(self) -> bool:
         """True when an input queue is configured (enqueue mode); False for direct mode."""
@@ -401,6 +406,61 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
                 self._log.warning("Failed to broadcast stream error chunk")
             return self.build_error_http_response(500, "Stream request processing failed", user_id=user_id)
 
+    async def _create_scheduled_task(self, ctx: "ECSWebSocketRequestHandler.WSRouteContext") -> JSONResponse:
+        """Register a chat frame to run later and broadcast the acknowledgement.
+
+        The acknowledgement travels the caller's live connection, sent here rather than by
+        the output consumer, so it never travels the queues.
+
+        Identity needs no new mechanism: ``build_route_context`` has already resolved
+        ``ctx.user_id`` from the authenticated connection, or raised 401.
+
+        :param ctx: The resolved route context for this frame.
+        :return: A success envelope, or a 400 when scheduling is disabled or invalid.
+        """
+        if self._schedule_service is None:
+            return self.build_error_http_response(400, "Scheduling is not enabled for this deployment", user_id=ctx.user_id)
+
+        try:
+            ack = self._schedule_service.create(
+                spec=ctx.message.body.schedule,
+                prompt=ctx.message.body.prompt,
+                agent=ctx.message.body.agent,
+                owner_id=ctx.user_id,
+                request_id=ctx.message.request_id,
+            )
+        except (SchedulerError, ValueError) as e:
+            self._log.warning(f"Scheduled task creation failed for user_id={ctx.user_id}: {e}")
+            return self.build_error_http_response(400, str(e), user_id=ctx.user_id)
+
+        await self._broadcast_ack(ack, ctx)
+        return self.build_success_http_response("Request scheduled successfully", user_id=ctx.user_id, status_code=201)
+
+    async def _broadcast_ack(self, ack: CreateAck, ctx: "ECSWebSocketRequestHandler.WSRouteContext") -> None:
+        """Push the creation acknowledgement over the caller's connection.
+
+        In stream mode it is a single terminal frame: nothing is generated at creation time,
+        so there are no token deltas to precede it.
+
+        :param ack: The acknowledgement payload.
+        :param ctx: The resolved route context for this frame.
+        :return: None
+        """
+        payload = ack.model_dump(mode="json", exclude_none=True)
+        if self._config.execution.mode == ExecutionMode.STREAM:
+            message_type = AWSWebSocketHandler.MessageType.STREAM_CHUNK
+            payload = {**payload, "done": True}
+        else:
+            message_type = AWSWebSocketHandler.MessageType.CHAT_RESPONSE
+
+        await self._offload(
+            self.get_websocket_handler().broadcast,
+            endpoint_url=ctx.endpoint_url,
+            message=payload,
+            user_id=ctx.user_id,
+            message_type=message_type,
+        )
+
     async def _handle_chat(self, request: Request) -> JSONResponse:
         """Handle a chat frame: enqueue it (queue mode) or run the agent inline (direct mode)."""
         try:
@@ -408,6 +468,11 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
 
             if ctx.message.body is None:
                 return self.build_error_http_response(400, "body is required")
+
+            # Before the session_id check: without this branch a frame carrying a schedule
+            # would be enqueued and executed immediately instead of scheduled.
+            if ctx.message.body.schedule is not None:
+                return await self._create_scheduled_task(ctx)
 
             session_id = ctx.message.body.session_id
             if not session_id:

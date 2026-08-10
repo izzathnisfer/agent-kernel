@@ -1,5 +1,8 @@
+from typing import Optional
+
 from ......api.handler import RESTRequestHandler
 from ......api.http import RESTAPI
+from ......core.thread import Authoriser
 from .....common.queue_handler import QueueHandler
 from .....common.rest_handler import RestHandler
 from ....core.response_store import ResponseDBHandler
@@ -9,8 +12,12 @@ from ....core.sqs_handler import SQSHandler
 class ECSQueueRequestHandler(RestHandler):
     """ECS + SQS + DynamoDB/Redis RestHandler; bypasses ChatService (validation/execution happen in the Agent Runner)."""
 
-    def __init__(self):
-        super().__init__(logger_name="ak.ecs.queue_handler")
+    def __init__(self, authoriser: Optional[Authoriser] = None):
+        """
+        :param authoriser: Resolves the owner of a scheduled task; required when
+            ``scheduler.enabled``. Supply one by overriding ``AWSRestAPI.get_default_handlers``.
+        """
+        super().__init__(logger_name="ak.ecs.queue_handler", authoriser=authoriser)
         self._response_store = None
         self._queue_handler = None
 

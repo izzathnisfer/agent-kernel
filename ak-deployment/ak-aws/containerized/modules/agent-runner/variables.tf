@@ -167,3 +167,53 @@ variable "execution_mode" {
   description = "Execution mode (rest_sync, rest_async, async, stream). Injected as AK_EXECUTION__MODE in WebSocket modes so the runner knows whether to emit a full response (async) or per-token chunks (stream)."
   default     = "rest_sync"
 }
+
+# -
+# Scheduled Task Configuration
+# -
+
+variable "scheduled_task" {
+  type        = bool
+  description = "Whether scheduled tasks are enabled for this deployment"
+  default     = false
+}
+
+variable "scheduled_task_config" {
+  description = "Scheduled task configuration; enable_agent_tools decides whether the runner gets scheduler access at all"
+  type = object({
+    table_name          = optional(string, null)
+    schedule_group_name = optional(string, null)
+    enable_agent_tools  = optional(bool, false)
+  })
+  default = {}
+}
+
+variable "scheduled_task_table_name" {
+  type        = string
+  description = "Scheduled-task DynamoDB table name; null when the session store is Redis/Valkey"
+  default     = null
+}
+
+variable "scheduled_task_table_arn" {
+  type        = string
+  description = "Scheduled-task DynamoDB table ARN; null when the session store is Redis/Valkey"
+  default     = null
+}
+
+variable "scheduled_task_schedule_group_name" {
+  type        = string
+  description = "EventBridge Scheduler schedule group for this deployment"
+  default     = null
+}
+
+variable "scheduled_task_schedule_group_arn" {
+  type        = string
+  description = "ARN of the EventBridge Scheduler schedule group; scopes the scheduler IAM grant"
+  default     = null
+}
+
+variable "scheduled_task_target_role_arn" {
+  type        = string
+  description = "IAM role EventBridge Scheduler assumes to deliver a fire to the input queue"
+  default     = null
+}

@@ -68,11 +68,11 @@ variable "execution_mode" {
   description = "Execution mode for the deployment. Allowed values: rest_sync, async, stream (always allowed), rest_async (only when queue_mode is true). Use 'stream' for WebSocket streaming where each chunk is sent individually via SQS."
   default     = "rest_sync"
   validation {
-    condition = contains(["rest_sync", "rest_async", "async", "stream"], var.execution_mode)
+    condition     = contains(["rest_sync", "rest_async", "async", "stream"], var.execution_mode)
     error_message = "execution_mode must be one of: rest_sync, rest_async, async, stream."
   }
   validation {
-    condition = var.queue_mode || contains(["rest_sync", "async", "stream"], var.execution_mode)
+    condition     = var.queue_mode || contains(["rest_sync", "async", "stream"], var.execution_mode)
     error_message = "execution_mode must be rest_sync, async, or stream when queue_mode is false."
   }
 }
@@ -494,3 +494,33 @@ variable "queue_config" {
   }
 }
 
+
+# -
+# Scheduled Task Configuration
+# -
+
+variable "scheduled_task" {
+  type        = bool
+  description = "Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role, component IAM grants, and the /schedule API Gateway routes. Requires queue_mode = true."
+  default     = false
+
+  # The Terraform-side twin of SchedulerFactory.validate_config()'s queue-mode check, so
+  # the deploy fails before the app ever gets a chance to fail at startup.
+  validation {
+    condition = (
+      !var.scheduled_task ||
+      var.queue_mode
+    )
+    error_message = "scheduled_task = true requires queue_mode = true."
+  }
+}
+
+variable "scheduled_task_config" {
+  description = "Scheduled task configuration. Ignored when scheduled_task = false."
+  type = object({
+    table_name          = optional(string, null) # null -> "<prefix>-scheduled-tasks"
+    schedule_group_name = optional(string, null) # null -> "<prefix>-schedules"
+    enable_agent_tools  = optional(bool, false)  # grant the agent runner scheduler access
+  })
+  default = {}
+}

@@ -20,8 +20,28 @@ locals {
     # WebSocket modes: full response (async) vs per-token chunks (stream).
     contains(["async", "stream"], var.execution_mode) ? {
       AK_EXECUTION__MODE = var.execution_mode
-    } : {}
+    } : {},
+    local.scheduler_environment
   )
+
+  # The runner only ever reaches the scheduler through the agent-callable tools, which are
+  # opt-in — so the whole block is injected only when they are enabled.
+  scheduler_tools_enabled = var.scheduled_task && var.scheduled_task_config.enable_agent_tools
+
+  # Only the backend block matching the deployment's session store is injected: the ECS
+  # environment map rejects nulls.
+  scheduler_environment = local.scheduler_tools_enabled ? merge(
+    {
+      AK_SCHEDULER__ENABLED         = "true"
+      AK_SCHEDULER__GROUP_NAME      = var.scheduled_task_schedule_group_name
+      AK_SCHEDULER__TARGET_ROLE_ARN = var.scheduled_task_target_role_arn
+    },
+    var.scheduled_task_table_name != null ? {
+      AK_SCHEDULER__DYNAMODB__TABLE_NAME = var.scheduled_task_table_name
+    } : {},
+    var.redis_url != null ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
+    var.valkey_url != null ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
+  ) : {}
 }
 
 # IAM Roles
@@ -189,6 +209,69 @@ resource "aws_iam_role_policy_attachment" "agent_runner_dynamodb_thread_attachme
   count      = var.create_dynamodb_thread_table ? 1 : 0
   role       = aws_iam_role.agent_runner_task_role.name
   policy_arn = aws_iam_policy.agent_runner_dynamodb_thread_policy[0].arn
+}
+
+# Scheduling reaches the runner only through the agent-callable tools, which are opt-in.
+# A deployment that enables scheduling but not the tools leaves the runner with no
+# scheduler permissions at all, so the Terraform gate lines up with the app-level one.
+
+resource "aws_iam_policy" "agent_runner_scheduler_policy" {
+  count = local.scheduler_tools_enabled ? 1 : 0
+  name  = "${var.prefix}-agent-runner-scheduler"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      var.scheduled_task_table_arn != null ? [{
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeTable",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          var.scheduled_task_table_arn,
+          "${var.scheduled_task_table_arn}/index/*"
+        ]
+      }] : [],
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "scheduler:CreateSchedule",
+            "scheduler:UpdateSchedule",
+            "scheduler:DeleteSchedule",
+            "scheduler:GetSchedule",
+            "scheduler:ListSchedules",
+          ]
+          Resource = "${var.scheduled_task_schedule_group_arn}/*"
+        },
+        {
+          # Registering a schedule hands EventBridge Scheduler the role it assumes.
+          Effect   = "Allow"
+          Action   = ["iam:PassRole"]
+          Resource = var.scheduled_task_target_role_arn
+        },
+        {
+          # The soft-delete grace window is derived from the queue's visibility timeout.
+          Effect   = "Allow"
+          Action   = ["sqs:GetQueueAttributes"]
+          Resource = var.input_queue_arn
+        },
+      ]
+    )
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "agent_runner_scheduler_attachment" {
+  count      = local.scheduler_tools_enabled ? 1 : 0
+  role       = aws_iam_role.agent_runner_task_role.name
+  policy_arn = aws_iam_policy.agent_runner_scheduler_policy[0].arn
 }
 
 # ECS Resources

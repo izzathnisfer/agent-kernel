@@ -6,6 +6,8 @@ from typing import Any, Dict
 
 from ....core.config import AKConfig
 from ....core.model import ExecutionMode, StreamChunk
+from ....scheduler import SchedulerFactory
+from ...common.scheduled_run_recorder import ScheduledRunRecorder
 from ..core.response_store import ResponseDBHandler
 from ..core.sqs_handler import SQSHandler
 from ..core.websocket_service import AWSWebSocketHandler, WebSocketConnectionStore
@@ -25,6 +27,8 @@ class ECSOutputConsumer(ECSSQSConsumer):
     _config = AKConfig.get()
     max_receive_count = _config.execution.queues.output.max_receive_count
     num_consumers = _config.execution.queues.output.no_of_consumers
+    # Fails loudly at process startup rather than on the first scheduled outcome.
+    SchedulerFactory.validate_config()
 
     _response_store = None
     _websocket_handler = None
@@ -61,6 +65,13 @@ class ECSOutputConsumer(ECSSQSConsumer):
         """
         message_id = record.get("MessageId")
         cls._log.info(f"[OUTPUT START] Processing output message {message_id}")
+
+        # First, before the execution-mode fan-out: a timer-originated message carries no
+        # endpoint_url attribute, so the WebSocket branches would raise on it, and in the
+        # REST modes nobody is polling the response store for it.
+        if ScheduledRunRecorder.record(record.get("Body")):
+            cls._log.info(f"[OUTPUT DONE] Recorded scheduled run outcome for message {message_id}")
+            return
 
         exec_mode = cls._config.execution.mode
         message_type = None

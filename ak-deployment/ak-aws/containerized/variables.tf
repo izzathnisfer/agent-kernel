@@ -401,3 +401,33 @@ variable "scaling_config" {
     error_message = "scaling_config.enabled requires queue_mode = true."
   }
 }
+
+# -
+# Scheduled Task Configuration
+# -
+
+variable "scheduled_task" {
+  type        = bool
+  description = "Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role and component IAM grants. Requires queue_mode = true."
+  default     = false
+
+  # The Terraform-side twin of SchedulerFactory.validate_config()'s queue-mode check, so
+  # the deploy fails before the app ever gets a chance to fail at startup.
+  validation {
+    condition = (
+      !var.scheduled_task ||
+      var.queue_mode
+    )
+    error_message = "scheduled_task = true requires queue_mode = true."
+  }
+}
+
+variable "scheduled_task_config" {
+  description = "Scheduled task configuration. Ignored when scheduled_task = false."
+  type = object({
+    table_name          = optional(string, null) # null -> "<prefix>-scheduled-tasks"
+    schedule_group_name = optional(string, null) # null -> "<prefix>-schedules"
+    enable_agent_tools  = optional(bool, false)  # grant the agent runner scheduler access
+  })
+  default = {}
+}

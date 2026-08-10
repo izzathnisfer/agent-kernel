@@ -8,10 +8,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 
 from ..core.thread import Authoriser, ConversationThreadManager
-from .handler import RESTRequestHandler
+from .handler import BearerIdentityMixin, RESTRequestHandler
 
 
-class ThreadRESTRequestHandler(RESTRequestHandler):
+class ThreadRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
     """
     API router that exposes endpoints to read conversation threads.
     Endpoints:
@@ -32,27 +32,6 @@ class ThreadRESTRequestHandler(RESTRequestHandler):
         """
         self._log = logging.getLogger("ak.api.thread")
         self._authoriser = authoriser
-
-    def _resolve_user(self, request: Request) -> Optional[str]:
-        """
-        Resolve the caller's user_id via the configured Authoriser.
-        :param request: The incoming FastAPI request.
-        :return: The resolved user_id, or None when no Authoriser is configured.
-        :raises HTTPException: 401 when a token is missing or rejected.
-        """
-        if self._authoriser is None:
-            return None
-        auth_header = request.headers.get("authorization")
-        if auth_header is None:
-            raise HTTPException(status_code=401, detail="Missing authorization header")
-        scheme, _, token = auth_header.partition(" ")
-        token = token.strip()
-        if scheme.lower() != "bearer" or not token:
-            raise HTTPException(status_code=401, detail="Invalid authorization header")
-        user_id = self._authoriser.authorise(token)
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Unauthorized")
-        return user_id
 
     def get_router(self) -> APIRouter:
         """

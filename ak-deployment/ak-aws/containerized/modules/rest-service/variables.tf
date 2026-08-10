@@ -196,3 +196,49 @@ variable "tags" {
   description = "Resource tags"
   default     = {}
 }
+
+# -
+# Scheduled Task Configuration
+# -
+
+variable "scheduled_task" {
+  type        = bool
+  description = "Whether scheduled tasks are enabled for this deployment"
+  default     = false
+}
+
+variable "scheduled_task_table_name" {
+  type        = string
+  description = "Scheduled-task DynamoDB table name; null when the session store is Redis/Valkey"
+  default     = null
+}
+
+variable "scheduled_task_table_arn" {
+  type        = string
+  description = "Scheduled-task DynamoDB table ARN; null when the session store is Redis/Valkey"
+  default     = null
+}
+
+variable "scheduled_task_schedule_group_name" {
+  type        = string
+  description = "EventBridge Scheduler schedule group for this deployment"
+  default     = null
+}
+
+variable "scheduled_task_schedule_group_arn" {
+  type        = string
+  description = "ARN of the EventBridge Scheduler schedule group; scopes the scheduler IAM grant"
+  default     = null
+}
+
+variable "scheduled_task_target_role_arn" {
+  type        = string
+  description = "IAM role EventBridge Scheduler assumes to deliver a fire to the input queue"
+  default     = null
+}
+
+variable "input_queue_arn" {
+  type        = string
+  description = "ARN of the SQS input queue; the scheduler reads its visibility timeout to derive the soft-delete grace window"
+  default     = null
+}

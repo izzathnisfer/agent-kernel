@@ -121,3 +121,36 @@ def test_handle_stream_returns_400_not_raises():
             )
         },
     )
+
+
+class TestResourceTemplateFallback:
+    """The router matches on an exact path lookup, so a route carrying a path parameter
+    could never match without this. It is reached only where dispatch previously raised."""
+
+    def test_a_path_parameter_route_resolves_from_the_matched_resource(self, router, monkeypatch):
+        @router.register("schedule/{scheduled_task_id}", method="DELETE")
+        def delete_handler(event, context):
+            return (200, {"deleted": event["pathParameters"]["scheduled_task_id"]})
+
+        event = make_event_with_env_vars(monkeypatch, "/api/v1/schedule/abc", method="DELETE")
+        event["resource"] = "/api/v1/schedule/{scheduled_task_id}"
+        event["pathParameters"] = {"scheduled_task_id": "abc"}
+
+        assert router.dispatch(event, context=None) == (200, {"deleted": "abc"})
+
+    def test_a_literal_route_still_wins_without_consulting_the_resource(self, router, monkeypatch):
+        @router.register("schedule", method="GET")
+        def list_handler(event, context):
+            return (200, {"listed": True})
+
+        event = make_event_with_env_vars(monkeypatch, "/api/v1/schedule", method="GET")
+        event["resource"] = "/api/v1/schedule"
+
+        assert router.dispatch(event, context=None) == (200, {"listed": True})
+
+    def test_an_unmatched_path_still_raises(self, router, monkeypatch):
+        event = make_event_with_env_vars(monkeypatch, "/api/v1/schedule/abc", method="DELETE")
+        event["resource"] = "/api/v1/schedule/{scheduled_task_id}"
+
+        with pytest.raises(ValueError):
+            router.dispatch(event, context=None)

@@ -1,14 +1,14 @@
 locals {
-  agent_runner_function_name            = var.agent_runner.function_name
-  agent_runner_function_description     = var.agent_runner.function_description
-  agent_runner_timeout                  = var.agent_runner.timeout
-  agent_runner_memory_size              = var.agent_runner.memory_size
-  agent_runner_package_path             = var.agent_runner.package_path
-  agent_runner_package_type             = var.agent_runner.package_type
-  agent_runner_handler_path             = var.agent_runner.handler_path
-  agent_runner_module_name              = var.agent_runner.module_name
-  agent_runner_layers                   = var.agent_runner.layers
-  agent_runner_env_vars                 = var.agent_runner.environment_variables
+  agent_runner_function_name        = var.agent_runner.function_name
+  agent_runner_function_description = var.agent_runner.function_description
+  agent_runner_timeout              = var.agent_runner.timeout
+  agent_runner_memory_size          = var.agent_runner.memory_size
+  agent_runner_package_path         = var.agent_runner.package_path
+  agent_runner_package_type         = var.agent_runner.package_type
+  agent_runner_handler_path         = var.agent_runner.handler_path
+  agent_runner_module_name          = var.agent_runner.module_name
+  agent_runner_layers               = var.agent_runner.layers
+  agent_runner_env_vars             = var.agent_runner.environment_variables
 
   queue_input_arn                        = var.queue_config.input_queue_arn
   queue_output_arn                       = var.queue_config.output_queue_arn
@@ -272,4 +272,64 @@ resource "aws_lambda_event_source_mapping" "agent_runner_input_queue" {
   batch_size                         = local.queue_batch_size
   maximum_batching_window_in_seconds = local.queue_batching_window
   function_response_types            = ["ReportBatchItemFailures"]
+}
+
+# Scheduled tasks: table read/write plus EventBridge Scheduler registration management.
+# iam:PassRole is required because registering a schedule hands EventBridge Scheduler the
+# role it assumes to deliver the fire.
+
+resource "aws_iam_policy" "scheduler_policy" {
+  count = var.scheduled_task ? 1 : 0
+  name  = "${var.product_alias}-${var.env_alias}-${var.agent_runner.function_name}-scheduler"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      var.scheduled_task_table_arn != null ? [{
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeTable",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          var.scheduled_task_table_arn,
+          "${var.scheduled_task_table_arn}/index/*"
+        ]
+      }] : [],
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "scheduler:CreateSchedule",
+            "scheduler:UpdateSchedule",
+            "scheduler:DeleteSchedule",
+            "scheduler:GetSchedule",
+            "scheduler:ListSchedules",
+          ]
+          Resource = "${var.scheduled_task_schedule_group_arn}/*"
+        },
+        {
+          Effect   = "Allow"
+          Action   = ["iam:PassRole"]
+          Resource = var.scheduled_task_target_role_arn
+        },
+        {
+          # The soft-delete grace window is derived from the queue's visibility timeout.
+          Effect   = "Allow"
+          Action   = ["sqs:GetQueueAttributes"]
+          Resource = var.queue_config.input_queue_arn
+        },
+      ]
+    )
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "scheduler_attachment" {
+  count      = var.scheduled_task ? 1 : 0
+  role       = aws_iam_role.agent_runner_lambda_role.name
+  policy_arn = aws_iam_policy.scheduler_policy[0].arn
 }

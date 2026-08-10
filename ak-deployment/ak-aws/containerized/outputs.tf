@@ -122,3 +122,28 @@ output "websocket_api_cloudwatch_log_group_name" {
   description = "Name of the CloudWatch log group for the WebSocket API Gateway (null when access logging is disabled)"
   value       = local.is_websocket_mode && var.enable_api_gateway_logs ? aws_cloudwatch_log_group.ws_api[0].name : null
 }
+
+output "scheduled_task_enabled" {
+  description = "Whether scheduled tasks are enabled for this deployment"
+  value       = var.scheduled_task
+}
+
+output "scheduled_task_table_name" {
+  description = "Scheduled-task DynamoDB table name (scheduled tasks with a DynamoDB session store only)"
+  value       = var.scheduled_task ? module.scheduler[0].table_name : null
+}
+
+output "scheduled_task_table_arn" {
+  description = "Scheduled-task DynamoDB table ARN (scheduled tasks with a DynamoDB session store only)"
+  value       = var.scheduled_task ? module.scheduler[0].table_arn : null
+}
+
+output "scheduled_task_schedule_group_name" {
+  description = "EventBridge Scheduler schedule group name (scheduled tasks only)"
+  value       = var.scheduled_task ? module.scheduler[0].schedule_group_name : null
+}
+
+output "scheduled_task_target_role_arn" {
+  description = "IAM role EventBridge Scheduler assumes to deliver a fire to the input queue (scheduled tasks only)"
+  value       = var.scheduled_task ? module.scheduler[0].target_role_arn : null
+}

@@ -5,8 +5,11 @@ import logging
 from collections.abc import AsyncGenerator, Generator
 from typing import Any, Dict, List, Optional, Union
 
+from .base import Session
 from .config import AKConfig
 from .model import (
+    REQUEST_USER_ID_KEY,
+    SCHEDULED_SESSION_PREFIX,
     AgentReplyAny,
     AgentReplyImage,
     AgentReplyText,
@@ -16,6 +19,7 @@ from .model import (
     AgentRequestText,
     BaseChatRequest,
     BaseRunRequest,
+    ScheduledRunMetadata,
     StreamChunk,
 )
 from .service import AgentService
@@ -122,7 +126,19 @@ class RequestBuilder:
         :param requests: List to append context requests to
         :return: None
         """
-        known_fields = {"request_id", "user_id", "group_id", "thread_name", "prompt", "agent", "session_id", "images", "files"}
+        known_fields = {
+            "request_id",
+            "user_id",
+            "group_id",
+            "thread_name",
+            "prompt",
+            "agent",
+            "session_id",
+            "images",
+            "files",
+            "schedule",
+            "scheduled_run",
+        }
         for key, value in req.model_dump().items():
             if key in known_fields:
                 continue
@@ -203,6 +219,24 @@ class AgentHandler:
         if not self.service.agent:
             raise ValueError("No agent available")
 
+    def bind_request_user(self, user_id: Optional[str]) -> None:
+        """Make the request's authenticated user id reachable from tool code.
+
+        Tools that act on the caller's behalf (scheduling, for one) need an unforgeable
+        identity, but user_id is deliberately kept out of the agent's request context — so
+        it travels on the session's volatile cache instead. No-op when the request carries
+        no user.
+
+        :param user_id: The authenticated user id from the request.
+        :return: None
+        """
+        session = self.service.session if self.service else None
+        if session is None or not user_id:
+            return
+        cache = session.get(Session.Keys.VOLATILE_CACHE.value)
+        if cache is not None:
+            cache.set(REQUEST_USER_ID_KEY, user_id)
+
     @staticmethod
     def _run_async_sync(coro) -> Any:
         """Run an async coroutine from sync code, handling event loop state.
@@ -275,7 +309,14 @@ class ResponseBuilder:
     """Formats agent results and errors into response dicts."""
 
     @staticmethod
-    def build_response(status_code: int, session_id: Optional[str], rest_api_mode: bool, result: Any = None, error: Optional[Exception] = None):
+    def build_response(
+        status_code: int,
+        session_id: Optional[str],
+        rest_api_mode: bool,
+        result: Any = None,
+        error: Optional[Exception] = None,
+        scheduled_run: Optional[ScheduledRunMetadata] = None,
+    ):
         """Build response from agent result or error.
 
         :param status_code: HTTP status code
@@ -283,6 +324,8 @@ class ResponseBuilder:
         :param rest_api_mode: If True, return dict only on success or raise HTTPException on error; if False, return tuple
         :param result: Agent execution result (mutually exclusive with error)
         :param error: Exception that occurred (mutually exclusive with result)
+        :param scheduled_run: Correlation block echoed verbatim from the request when present,
+            so an output consumer can tell a scheduled run from an ordinary one
         :return: Response dict or (status_code, response_dict) tuple; raises HTTPException if error in rest_api_mode
         """
         if error:
@@ -294,6 +337,9 @@ class ResponseBuilder:
 
         if session_id:
             response_dict["session_id"] = session_id
+
+        if scheduled_run is not None:
+            response_dict["scheduled_run"] = scheduled_run.model_dump(mode="json")
 
         if error and rest_api_mode:
             from fastapi import HTTPException
@@ -335,22 +381,30 @@ class ChatService:
                  When rest_api_mode=True: response_dict only.
         """
         session_id = req.session_id
+        scheduled_run = self._scheduled_run(req)
         handler = AgentHandler()
         try:
             self._validate(req)
             thread_manager = self._validate_thread(req)
             requests = RequestBuilder.from_base_request_sync(req)
             handler.initialize(session_id, req.agent)
+            handler.bind_request_user(req.user_id)
             requests = self._thread_pre_run(thread_manager, req, requests)
             result = handler.run_sync(requests)
             self._thread_post_run(thread_manager, req, result)
-            return ResponseBuilder.build_response(200, handler.get_response_session_id(session_id), self.rest_api_mode, result=result)
+            return ResponseBuilder.build_response(
+                200, handler.get_response_session_id(session_id), self.rest_api_mode, result=result, scheduled_run=scheduled_run
+            )
         except ValueError as ve:
             self._log.error(f"ValueError processing request: {ve}")
-            return ResponseBuilder.build_response(400, handler.get_response_session_id(session_id), self.rest_api_mode, error=ve)
+            return ResponseBuilder.build_response(
+                400, handler.get_response_session_id(session_id), self.rest_api_mode, error=ve, scheduled_run=scheduled_run
+            )
         except Exception as e:
             self._log.error(f"Error processing request: {e}")
-            return ResponseBuilder.build_response(500, handler.get_response_session_id(None), self.rest_api_mode, error=e)
+            return ResponseBuilder.build_response(
+                500, handler.get_response_session_id(None), self.rest_api_mode, error=e, scheduled_run=scheduled_run
+            )
 
     async def process_async_chat_request(self, req: BaseChatRequest) -> Union[tuple[int, Dict[str, Any]], Dict[str, Any]]:
         """Process a chat request asynchronously.
@@ -361,6 +415,7 @@ class ChatService:
                  When rest_api_mode=True: response_dict only.
         """
         session_id = req.session_id
+        scheduled_run = self._scheduled_run(req)
         handler = AgentHandler()
         try:
             if not session_id:
@@ -370,16 +425,23 @@ class ChatService:
             thread_manager = self._validate_thread(req)
             requests = await RequestBuilder.from_base_request_async(req)
             handler.initialize(session_id, req.agent)
+            handler.bind_request_user(req.user_id)
             requests = self._thread_pre_run(thread_manager, req, requests)
             result = await handler.run_async(requests)
             self._thread_post_run(thread_manager, req, result)
-            return ResponseBuilder.build_response(200, handler.get_response_session_id(session_id), self.rest_api_mode, result=result)
+            return ResponseBuilder.build_response(
+                200, handler.get_response_session_id(session_id), self.rest_api_mode, result=result, scheduled_run=scheduled_run
+            )
         except ValueError as ve:
             self._log.error(f"ValueError processing request: {ve}")
-            return ResponseBuilder.build_response(400, handler.get_response_session_id(session_id), self.rest_api_mode, error=ve)
+            return ResponseBuilder.build_response(
+                400, handler.get_response_session_id(session_id), self.rest_api_mode, error=ve, scheduled_run=scheduled_run
+            )
         except Exception as e:
             self._log.error(f"Error processing request: {e}")
-            return ResponseBuilder.build_response(500, handler.get_response_session_id(session_id), self.rest_api_mode, error=e)
+            return ResponseBuilder.build_response(
+                500, handler.get_response_session_id(session_id), self.rest_api_mode, error=e, scheduled_run=scheduled_run
+            )
 
     async def process_stream_chat_async(
         self,
@@ -407,6 +469,7 @@ class ChatService:
         requests = self._thread_pre_run(thread_manager, req, requests)
         handler = AgentHandler()
         handler.initialize(session_id, req.agent)
+        handler.bind_request_user(req.user_id)
 
         async def _stream() -> AsyncGenerator[str, None]:
             deltas: List[str] = []
@@ -456,6 +519,7 @@ class ChatService:
         requests = self._thread_pre_run(thread_manager, req, requests)
         handler = AgentHandler()
         handler.initialize(session_id, req.agent)
+        handler.bind_request_user(req.user_id)
 
         def _stream() -> Generator[str, None, None]:
             deltas: List[str] = []
@@ -476,6 +540,29 @@ class ChatService:
                 yield ResponseBuilder.stream_chunk(error_chunk, session_id, sse_format=sse_format)
 
         return _stream()
+
+    @staticmethod
+    def _scheduled_run(req: BaseChatRequest) -> Optional[ScheduledRunMetadata]:
+        """Return the request's scheduled-run correlation block, if it carries one.
+
+        Read via getattr because the multipart request shape does not declare the field.
+
+        :param req: The originating chat request
+        :return: The correlation block, or None for ordinary traffic
+        """
+        return getattr(req, "scheduled_run", None)
+
+    @staticmethod
+    def _is_scheduled_session(req: BaseChatRequest) -> bool:
+        """True when the request belongs to a scheduled run's derived session.
+
+        Scheduled activity is kept out of the owner's regular conversation history, so
+        these sessions skip thread auto-creation and message appending.
+
+        :param req: The originating chat request
+        :return: Whether the session id carries the reserved scheduled-session prefix
+        """
+        return bool(req.session_id) and req.session_id.startswith(SCHEDULED_SESSION_PREFIX)
 
     @staticmethod
     def _validate(req: BaseRunRequest):
@@ -527,7 +614,7 @@ class ChatService:
         :param requests: The built AgentRequest list (may carry attachments)
         :return: The (possibly rebuilt) request list to run the agent with.
         """
-        if manager is None:
+        if manager is None or self._is_scheduled_session(req):
             return requests
         requests, attachments = manager.store_attachments(session_id=req.session_id, requests=requests)
         manager.get_or_create_thread(
@@ -550,6 +637,6 @@ class ChatService:
         :param result: The agent's reply
         :return: None
         """
-        if manager is None:
+        if manager is None or ChatService._is_scheduled_session(req):
             return
         manager.append_message(req.session_id, "assistant", str(result))

@@ -6,9 +6,18 @@ from typing import Any, Callable, Dict, Optional
 from ......core.chat_service import ChatService
 from ......core.config import AKConfig
 from ......core.model import BaseRequest, ExecutionMode
+from ......scheduler import SchedulerError, SchedulerFactory
 from ....core.response_store import ResponseDBHandler
 from ....core.sqs_handler import SQSHandler
 from .common import BaseLambdaRouter
+
+
+class UnauthenticatedScheduleError(Exception):
+    """A schedule request arrived with no API Gateway authorizer context.
+
+    Python cannot observe whether Terraform attached the authorizer to the route, so the
+    identity requirement is enforced per request here rather than at initialization.
+    """
 
 
 class DefaultEndpointsHandler:
@@ -22,6 +31,8 @@ class DefaultEndpointsHandler:
         self._config = AKConfig.get()
         self._response_store = ResponseDBHandler().get_store() if self._config.execution.response_store is not None else None
         self._chat_service = ChatService()
+        SchedulerFactory.validate_config()
+        self._schedule_service = SchedulerFactory.service()
 
     def get_default_endpoint_info(self):
         """
@@ -100,25 +111,67 @@ class DefaultEndpointsHandler:
             error_body["request_id"] = request_id
         return error_body
 
-    def _handle_request(self, event: Dict[str, Any], operation: Callable[[BaseRequest], Dict[str, Any]]) -> tuple[int, Dict[str, Any]]:
+    def _handle_request(
+        self,
+        event: Dict[str, Any],
+        operation: Callable[[BaseRequest, Dict[str, Any]], Any],
+    ) -> tuple[int, Dict[str, Any]]:
         """
         Execute operation with standard request parsing and error handling.
 
         :param event: API Gateway event
-        :param operation: Function executed with parsed payload
+        :param operation: Function executed with the parsed payload and the raw event. It
+            returns either a body (answered 200) or an explicit ``(statusCode, body)`` pair.
         :return: API Gateway formatted response (statusCode, body)
         """
         request_id = None
         try:
             request = self._parse_body(event)
             request_id = request.request_id
-            result = operation(request)
-            return (200, result)  # (statusCode, body) will be handled in aklambda.py
+            result = operation(request, event)
+            # (statusCode, body) will be handled in aklambda.py
+            return result if isinstance(result, tuple) else (200, result)
+
+        except UnauthenticatedScheduleError as e:
+            self._log.warning(f"Rejected schedule request with no authorizer context: {e}")
+            return (401, self._build_failure_body(request_id, message=str(e)))
+        except (SchedulerError, ValueError) as e:
+            self._log.warning(f"Schedule request rejected: {e}")
+            return (400, self._build_failure_body(request_id, message=str(e)))
 
         # Log and hide unexpected failures behind a generic 500 response.
         except Exception as e:
             self._log.error(f"Request failed: {e}\n{traceback.format_exc()}")
             return (500, self._build_failure_body(request_id))  # (statusCode, body) will be handled in aklambda.py
+
+    def _maybe_schedule(self, payload: BaseRequest, event: Dict[str, Any]) -> Optional[tuple[int, Dict[str, Any]]]:
+        """Register the request to run later when it carries a ``schedule`` block.
+
+        :param payload: The parsed request envelope.
+        :param event: The API Gateway event, carrying the authorizer context.
+        :return: The 201 acknowledgement, or None when this is an ordinary chat request.
+        :raises ValueError: Scheduling is not enabled for this deployment.
+        :raises UnauthenticatedScheduleError: The event carries no authorizer context.
+        """
+        body = payload.body
+        if body is None or body.schedule is None:
+            return None
+        if self._schedule_service is None:
+            raise ValueError("Scheduling is not enabled for this deployment")
+
+        owner_id = event.get("requestContext", {}).get("authorizer", {}).get("principalId")
+        if not owner_id:
+            raise UnauthenticatedScheduleError("a scheduled task requires an authenticated caller")
+
+        ack = self._schedule_service.create(
+            spec=body.schedule,
+            prompt=body.prompt,
+            agent=body.agent,
+            owner_id=owner_id,
+            request_id=payload.request_id,
+        )
+        self._log.info(f"Scheduled task registered: {ack.scheduled_task_id} for owner {owner_id}")
+        return (201, ack.model_dump(mode="json", exclude_none=True))
 
     def _send_to_queue(self, payload: BaseRequest) -> Dict[str, Any]:
         """
@@ -168,7 +221,13 @@ class DefaultEndpointsHandler:
         :return: Tuple of (status_code, response_body)
         """
 
-        def sync_operation(payload: BaseRequest) -> Dict[str, Any]:
+        def sync_operation(payload: BaseRequest, request_event: Dict[str, Any]) -> Any:
+            ack = self._maybe_schedule(payload, request_event)
+            if ack is not None:
+                # Nothing is enqueued and there is no run to wait for, so the response-store
+                # wait is skipped entirely.
+                return ack
+
             request_id = payload.request_id
             self._log.info(f"Performing REST_SYNC operation for payload: '{payload}'")
             queue_result = self._send_to_queue(payload)
@@ -200,7 +259,11 @@ class DefaultEndpointsHandler:
         :return: Tuple of (status_code, response_body)
         """
 
-        def submit_operation(payload: BaseRequest) -> Dict[str, Any]:
+        def submit_operation(payload: BaseRequest, request_event: Dict[str, Any]) -> Any:
+            ack = self._maybe_schedule(payload, request_event)
+            if ack is not None:
+                return ack
+
             self._log.info(f"Performing REST_ASYNC submit operation for payload: '{payload}'")
             queue_result = self._send_to_queue(payload)
 
@@ -221,7 +284,7 @@ class DefaultEndpointsHandler:
         :return: Tuple of (status_code, response_body)
         """
 
-        def poll_operation(payload: BaseRequest) -> Dict[str, Any]:
+        def poll_operation(payload: BaseRequest, request_event: Dict[str, Any]) -> Dict[str, Any]:
             self._log.info(f"Performing REST_ASYNC poll operation for payload: '{payload}'")
 
             request_id = payload.request_id
@@ -312,6 +375,12 @@ class RESTLambdaRouter(BaseLambdaRouter):
             self._default_user_polling_method,
         ) = self._endpoints_handler.get_default_endpoint_info()
         self._routes = self._endpoints_handler.get_routes()
+
+        if SchedulerFactory.enabled():
+            from .schedule_lambda import ScheduleEndpointsHandler
+
+            self._routes.update(ScheduleEndpointsHandler().get_routes())
+
         self._log.info(f"Registered REST Routes: {self._routes}")
 
     @staticmethod
@@ -351,6 +420,32 @@ class RESTLambdaRouter(BaseLambdaRouter):
 
         return _decorator
 
+    def _resolve_by_resource_template(
+        self,
+        event: Dict[str, Any],
+        method: str,
+        env_base_path: Optional[str],
+    ) -> Optional[Callable[[Dict[str, Any], Any], Any]]:
+        """Resolve a route registered under a path template rather than a literal path.
+
+        This router matches on an exact string lookup of the resolved path and has no
+        path-parameter support, so a route like ``/schedule/{scheduled_task_id}`` could
+        never match. API Gateway supplies the matched resource template on the event, which
+        is exactly the key such a route is registered under.
+
+        Reached only where dispatch previously raised, so existing behaviour is unchanged.
+
+        :param event: API Gateway event.
+        :param method: The normalized HTTP method.
+        :param env_base_path: The deployment's base path, when configured.
+        :return: The matching handler, or None.
+        """
+        resource = event.get("resource")
+        if not resource or not env_base_path:
+            return None
+        template = resource.removeprefix(env_base_path)
+        return self._routes.get(template, {}).get(method)
+
     def dispatch(self, event: Dict[str, Any], context: Any) -> Optional[Dict[str, Any]]:
         """
         Dispatch incoming API Gateway REST event to the appropriate registered handler.
@@ -380,7 +475,9 @@ class RESTLambdaRouter(BaseLambdaRouter):
         self._log.info(f"Converted event path: {converted_event_path}")
         methods = self._routes.get(converted_event_path, {})
         handler = methods.get(method)
-        if not methods or not handler:
+        if not handler:
+            handler = self._resolve_by_resource_template(event, method, env_base_path)
+        if not handler:
             self._log.warning(f"No registered route found for API Gateway path -> '{event_path}' and method '{method}'")
             raise ValueError(f"No registered route found for API Gateway path -> '{event_path}' and method '{method}'")
         result = handler(event, context)

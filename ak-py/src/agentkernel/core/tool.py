@@ -197,6 +197,12 @@ class SystemToolFactory:
 
             tools.extend(get_sandbox_tools())
 
+        scheduler_config = getattr(AKConfig.get(), "scheduler", None)
+        if scheduler_config and scheduler_config.enabled and SystemToolFactory._agent_allowed(scheduler_config, agent_name):
+            from ..scheduler.tools import get_scheduler_tools
+
+            tools.extend(get_scheduler_tools())
+
         return tools
 
     @staticmethod

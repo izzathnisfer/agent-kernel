@@ -5,7 +5,7 @@ import logging
 
 from ....core.chat_service import ChatService
 from ....core.config import AKConfig, ExecutionMode
-from ....core.model import BaseRunRequest, StreamChunk
+from ....core.model import BaseRunRequest, ScheduledRunMetadata, StreamChunk
 from ..core.sqs_handler import SQSHandler
 from .core import ECSSQSConsumer
 
@@ -125,6 +125,12 @@ class ECSAgentRunner(ECSSQSConsumer):
         try:
             record_attributes = cls._get_record_attributes(raw_queue_message=record)
             error_body = {"error": f"Failed to process message after " f"{cls._config.execution.queues.input.max_receive_count} retries"}
+            # Echoing the block is what makes a retry-exhausted scheduled run recordable as
+            # FAILED without any DLQ involvement — the error body reaches the output consumer
+            # like any other outcome. from_raw_body never raises.
+            scheduled_run = ScheduledRunMetadata.from_raw_body(record.get("Body"))
+            if scheduled_run is not None:
+                error_body["scheduled_run"] = scheduled_run.model_dump(mode="json")
             cls._send_to_output_queue(message_body=error_body, record_attributes=record_attributes)
         except Exception:
             cls._log.exception("Failed to send permanent-failure error to output queue")

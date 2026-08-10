@@ -4,6 +4,8 @@ from typing import Any, Dict, Optional
 
 from ....core.config import AKConfig
 from ....core.model import ExecutionMode, StreamChunk
+from ....scheduler import SchedulerFactory
+from ...common.scheduled_run_recorder import ScheduledRunRecorder
 from ..core.response_store import ResponseDBHandler
 from ..core.sqs_handler import SQSHandler
 from .core import LambdaSQSConsumer
@@ -16,6 +18,8 @@ class ResponseHandler(LambdaSQSConsumer):
     """
 
     _log = logging.getLogger("ak.aws.responsehandler")
+    # Fails loudly at cold start rather than on the first scheduled outcome.
+    SchedulerFactory.validate_config()
     _response_store = None
     _base_ws_handler = None
 
@@ -98,6 +102,13 @@ class ResponseHandler(LambdaSQSConsumer):
         :return: None
         """
         cls._log.info(f"Processing message: {record}")
+
+        # First, before the execution-mode fan-out: a timer-originated message carries no
+        # endpoint_url attribute, so the WebSocket branches would raise on it, and in the
+        # REST modes nobody is polling the response store for it.
+        if ScheduledRunRecorder.record(record.get("body")):
+            cls._log.info("Recorded scheduled run outcome; not broadcast and not stored")
+            return
 
         if AKConfig.get().execution.mode == ExecutionMode.ASYNC:
             cls._broadcast_via_websocket(record, message_type=LambdaWSHandler.MessageType.CHAT_RESPONSE)

@@ -6,7 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 from agentkernel.api.http import RESTAPI
+from agentkernel.api.schedule import ScheduleRESTRequestHandler as _ScheduleHandlerClass
 from agentkernel.auth.handler import AuthValidator, ValidationResult
+from agentkernel.core.thread import Authoriser
+from agentkernel.core.util.factory import AKConfigError
 
 
 class TestRESTAPI:
@@ -408,3 +411,65 @@ class TestResponseBuilderStructuredResult:
         response = ResponseBuilder.build_response(200, "session-1", rest_api_mode=True, result=AgentReplyText(response="hello"))
 
         assert response["result"] == "hello"
+
+
+class _TestAuthoriser(Authoriser):
+    """Permissive authoriser: any token resolves, so a mounted route answers 401 only
+    when no token is sent at all."""
+
+    def authorise(self, token: str):
+        return "u1"
+
+
+def _build_schedule_handler():
+    """Build a handler through the real class, unaffected by module-level patching."""
+    return _ScheduleHandlerClass(authoriser=_TestAuthoriser())
+
+
+class TestScheduleRouterMounting:
+    """The schedule routes are mounted automatically, mirroring the thread auto-mount."""
+
+    @pytest.fixture
+    def mock_config(self):
+        config = Mock()
+        config.api.host = "localhost"
+        config.api.port = 8000
+        config.api.custom_router_prefix = "/custom"
+        config.a2a.enabled = False
+        config.mcp.enabled = False
+        config.thread = None
+        return config
+
+    @pytest.fixture
+    def scheduler_enabled(self):
+        from conftest_scheduler import enable_scheduler_config, install_scheduler, reset_scheduler_config
+
+        from agentkernel.scheduler.testing import InMemoryScheduledTaskStore
+
+        enable_scheduler_config()
+        install_scheduler(InMemoryScheduledTaskStore())
+        yield
+        reset_scheduler_config()
+
+    def _client(self, mock_config, handlers=None) -> TestClient:
+        """Assemble the app RESTAPI.run() would serve and return a client over it."""
+        with patch("agentkernel.api.http.AKConfig") as config_class:
+            config_class.get.return_value = mock_config
+            with patch("uvicorn.run") as mock_uvicorn:
+                RESTAPI.run(handlers if handlers is not None else [])
+        return TestClient(mock_uvicorn.call_args[1]["app"])
+
+    def test_auto_mounting_without_an_authoriser_fails_before_uvicorn_binds(self, mock_config, scheduler_enabled):
+        """Every scheduled task must have an unforgeable owner, so an open route is refused."""
+        with pytest.raises(AKConfigError, match="Authoriser"):
+            self._client(mock_config)
+
+    def test_a_supplied_handler_is_mounted(self, mock_config, scheduler_enabled):
+        client = self._client(mock_config, handlers=[_build_schedule_handler()])
+
+        # 401, not 404: the route exists and is demanding a token.
+        assert client.get("/api/v1/schedule").status_code == 401
+        assert client.delete("/api/v1/schedule/abc").status_code == 401
+
+    def test_nothing_is_mounted_when_scheduling_is_disabled(self, mock_config):
+        assert self._client(mock_config).get("/api/v1/schedule").status_code == 404

@@ -1,9 +1,10 @@
 import json
 import logging
+from typing import Optional
 
 from ....core.chat_service import ChatService
 from ....core.config import AKConfig
-from ....core.model import BaseRunRequest, ExecutionMode, StreamChunk
+from ....core.model import BaseRunRequest, ExecutionMode, ScheduledRunMetadata, StreamChunk
 from ..core.sqs_handler import SQSHandler
 from .core import LambdaSQSConsumer
 
@@ -118,6 +119,21 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
         return BaseRunRequest.model_validate(json.loads(record["body"]))
 
     @classmethod
+    def _parse_session_id(cls, record: dict) -> Optional[str]:
+        """Read the session id straight off a record's body, tolerating an unparseable one.
+
+        Used only on the permanent-failure path, which has no error channel left.
+
+        :param record: SQS record (``dict``) passed from the Lambda event.
+        :return: The body's session_id, or None when it cannot be read.
+        """
+        try:
+            body = json.loads(record.get("body") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return body.get("session_id") if isinstance(body, dict) else None
+
+    @classmethod
     def process_message(cls, record: dict) -> None:
         """
         Process a single SQS record, invoke the chat service, and send the response (or an error) to the output queue.
@@ -147,7 +163,18 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
             error_message_body = cls._construct_error_message_body(
                 error_msg=f"Failed to process message. Retried {cls._get_max_receive_count()} times"
             )
-            error_message_body["session_id"] = record_attributes["message_group_id"]
+            # Echoing the block is what makes a retry-exhausted scheduled run recordable as
+            # FAILED without any DLQ involvement. from_raw_body never raises.
+            scheduled_run = ScheduledRunMetadata.from_raw_body(record.get("body"))
+            if scheduled_run is None:
+                error_message_body["session_id"] = record_attributes["message_group_id"]
+            else:
+                error_message_body["scheduled_run"] = scheduled_run.model_dump(mode="json")
+                # For a fire the group id is the scheduled_task_id, not a session id, so the
+                # session id has to come from the message itself.
+                session_id = cls._parse_session_id(record)
+                if session_id:
+                    error_message_body["session_id"] = session_id
             cls._send_to_output_queue(message_body=error_message_body, record_attributes=record_attributes)
             cls._log.info(f"Sent Permanent Failure message to Output Queue: '{SQSHandler.get_output_queue_url()}'")
         except Exception as e:
