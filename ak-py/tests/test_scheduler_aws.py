@@ -128,6 +128,28 @@ class TestValidation:
         scheduler._scheduler.create_schedule.assert_not_called()
         scheduler._scheduler.update_schedule.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            ScheduleSpec(cron="cron(0 9 * * ? *)"),
+            ScheduleSpec(rate="rate(1 minute)"),
+        ],
+    )
+    def test_a_provider_wrapped_expression_is_rejected_before_any_aws_call(self, scheduler, spec):
+        """The provider adds the wrapper itself; accepting a pre-wrapped one would double it."""
+        with pytest.raises(ScheduleValidationError, match="bare expression"):
+            scheduler.upsert(build_task("schedule_wrapped", spec=spec))
+        scheduler._scheduler.create_schedule.assert_not_called()
+        scheduler._scheduler.update_schedule.assert_not_called()
+
+    def test_a_timer_side_rejection_surfaces_as_a_validation_error(self, scheduler):
+        """A malformed expression is the caller's to fix, so it must not read as a server fault."""
+        error = ClientError({"Error": {"Code": "ValidationException", "Message": "Invalid Schedule Expression"}}, "UpdateSchedule")
+        scheduler._scheduler.update_schedule.side_effect = error
+
+        with pytest.raises(ScheduleValidationError, match="Invalid Schedule Expression"):
+            scheduler.upsert(build_task("schedule_rejected"))
+
     def test_a_one_time_schedule_in_the_past_is_rejected(self, scheduler):
         spec = ScheduleSpec(at=datetime.now(timezone.utc) - timedelta(minutes=1))
         with pytest.raises(ScheduleValidationError, match="not in the future"):

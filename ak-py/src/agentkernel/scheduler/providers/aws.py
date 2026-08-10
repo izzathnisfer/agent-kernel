@@ -16,7 +16,7 @@ from botocore.exceptions import ClientError
 from ...core.config import AKConfig
 from ...core.model import SCHEDULED_SESSION_PREFIX, ScheduleMode
 from ..base import Scheduler
-from ..errors import SchedulerError
+from ..errors import SchedulerError, ScheduleValidationError
 from ..expression import ScheduleExpression
 from ..model import RunStatus, ScheduledTask, ScheduledTaskPage, TaskStatus
 from ..store.base import ScheduledTaskStore, ScheduledTaskStoreBuilder
@@ -194,16 +194,33 @@ class AWSScheduler(Scheduler):
         """Create or replace the task's EventBridge Scheduler registration.
 
         :param task: The scheduled task to register.
+        :raises ScheduleValidationError: The timer rejected the request as malformed.
         """
         request = self._schedule_request(task)
         try:
+            self._upsert_schedule(request)
+        except ClientError as exc:
+            error = exc.response.get("Error", {})
+            if error.get("Code") != "ValidationException":
+                raise
+            # Local validation cannot know every rule EventBridge Scheduler applies, so the
+            # timer still refuses some expressions. That is a caller-fixable input, and
+            # letting it propagate as an unmapped error would report it as a server fault.
+            raise ScheduleValidationError(f"EventBridge Scheduler rejected the schedule: {error.get('Message') or exc}") from exc
+
+    def _upsert_schedule(self, request: dict[str, Any]) -> None:
+        """Update the registration, creating it when it does not exist yet.
+
+        :param request: The create/update request.
+        """
+        try:
             self._scheduler.update_schedule(**request)
-            self._log.info("Updated schedule %s in group %s", task.scheduled_task_id, self._group_name)
+            self._log.info("Updated schedule %s in group %s", request["Name"], self._group_name)
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") != "ResourceNotFoundException":
                 raise
             self._scheduler.create_schedule(**request)
-            self._log.info("Created schedule %s in group %s", task.scheduled_task_id, self._group_name)
+            self._log.info("Created schedule %s in group %s", request["Name"], self._group_name)
 
     def _deregister(self, scheduled_task_id: str) -> None:
         """Remove the task's registration. Idempotent — a one-time schedule may already be gone.

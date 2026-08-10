@@ -13,9 +13,9 @@ output "schedule_group_name" {
   value       = aws_scheduler_schedule_group.this.name
 }
 
-output "schedule_group_arn" {
-  description = "ARN of the EventBridge Scheduler schedule group; scopes the component IAM grants"
-  value       = aws_scheduler_schedule_group.this.arn
+output "schedule_arn_pattern" {
+  description = "ARN pattern matching every schedule in this deployment's group; scopes the component IAM grants"
+  value       = local.schedule_arn_pattern
 }
 
 output "target_role_arn" {

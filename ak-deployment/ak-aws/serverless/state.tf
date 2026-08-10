@@ -556,10 +556,10 @@ module "request_handler" {
 
   # Hosts the chat create path and the /schedule routes, so it registers and removes timer
   # registrations as well as reading and writing the table.
-  scheduled_task                    = var.scheduled_task
-  scheduled_task_table_arn          = var.scheduled_task ? module.scheduler[0].table_arn : null
-  scheduled_task_schedule_group_arn = var.scheduled_task ? module.scheduler[0].schedule_group_arn : null
-  scheduled_task_target_role_arn    = var.scheduled_task ? module.scheduler[0].target_role_arn : null
+  scheduled_task                      = var.scheduled_task
+  scheduled_task_table_arn            = var.scheduled_task ? module.scheduler[0].table_arn : null
+  scheduled_task_schedule_arn_pattern = var.scheduled_task ? module.scheduler[0].schedule_arn_pattern : null
+  scheduled_task_target_role_arn      = var.scheduled_task ? module.scheduler[0].target_role_arn : null
 
   depends_on = [module.request_handler_source_package]
 }
@@ -583,10 +583,10 @@ module "agent_runner" {
 
   # Scheduling reaches the runner only through the agent-callable tools, so a deployment
   # that leaves them off gives it no scheduler permissions at all.
-  scheduled_task                    = local.scheduler_agent_tools_enabled
-  scheduled_task_table_arn          = local.scheduler_agent_tools_enabled ? module.scheduler[0].table_arn : null
-  scheduled_task_schedule_group_arn = local.scheduler_agent_tools_enabled ? module.scheduler[0].schedule_group_arn : null
-  scheduled_task_target_role_arn    = local.scheduler_agent_tools_enabled ? module.scheduler[0].target_role_arn : null
+  scheduled_task                      = local.scheduler_agent_tools_enabled
+  scheduled_task_table_arn            = local.scheduler_agent_tools_enabled ? module.scheduler[0].table_arn : null
+  scheduled_task_schedule_arn_pattern = local.scheduler_agent_tools_enabled ? module.scheduler[0].schedule_arn_pattern : null
+  scheduled_task_target_role_arn      = local.scheduler_agent_tools_enabled ? module.scheduler[0].target_role_arn : null
 
   source_bucket     = local.shared_source_bucket
   source_key        = try(module.agent_runner_source_package[0].s3_key, null)

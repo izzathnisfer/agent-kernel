@@ -225,9 +225,9 @@ variable "scheduled_task_schedule_group_name" {
   default     = null
 }
 
-variable "scheduled_task_schedule_group_arn" {
+variable "scheduled_task_schedule_arn_pattern" {
   type        = string
-  description = "ARN of the EventBridge Scheduler schedule group; scopes the scheduler IAM grant"
+  description = "ARN pattern matching every schedule in the deployment's group; scopes the scheduler IAM grant"
   default     = null
 }
 

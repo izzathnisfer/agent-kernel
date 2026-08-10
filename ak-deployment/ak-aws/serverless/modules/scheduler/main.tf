@@ -61,6 +61,15 @@ resource "aws_scheduler_schedule_group" "this" {
   tags = merge(var.tags, { Type = "ScheduleGroup" })
 }
 
+# A schedule is not addressed as a child of its group's ARN: the group is
+# ...:schedule-group/<group> while a schedule is ...:schedule/<group>/<name>. A grant scoped
+# to "<group-arn>/*" therefore matches no schedule at all and every scheduler call is denied,
+# so the component grants are scoped to the schedule namespace derived here.
+
+locals {
+  schedule_arn_pattern = "${replace(aws_scheduler_schedule_group.this.arn, ":schedule-group/", ":schedule/")}/*"
+}
+
 # ---------- Timer execution role ----------
 # Assumed by EventBridge Scheduler when a schedule fires. Its only permission is to send to
 # the input queue.

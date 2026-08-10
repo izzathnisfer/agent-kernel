@@ -245,9 +245,8 @@ resource "aws_iam_policy" "agent_runner_scheduler_policy" {
             "scheduler:UpdateSchedule",
             "scheduler:DeleteSchedule",
             "scheduler:GetSchedule",
-            "scheduler:ListSchedules",
           ]
-          Resource = "${var.scheduled_task_schedule_group_arn}/*"
+          Resource = var.scheduled_task_schedule_arn_pattern
         },
         {
           # Registering a schedule hands EventBridge Scheduler the role it assumes.

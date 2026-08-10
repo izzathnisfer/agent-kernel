@@ -154,9 +154,8 @@ resource "aws_iam_policy" "scheduler_policy" {
             "scheduler:UpdateSchedule",
             "scheduler:DeleteSchedule",
             "scheduler:GetSchedule",
-            "scheduler:ListSchedules",
           ]
-          Resource = "${var.scheduled_task_schedule_group_arn}/*"
+          Resource = var.scheduled_task_schedule_arn_pattern
         },
         {
           Effect   = "Allow"

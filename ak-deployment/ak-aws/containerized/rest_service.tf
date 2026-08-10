@@ -56,12 +56,12 @@ module "rest_service" {
   websocket_endpoint_url           = local.is_websocket_mode ? "https://${aws_apigatewayv2_api.ws_api[0].id}.execute-api.${var.region}.amazonaws.com/${local.ws_stage_name}" : null
 
   # Scheduled tasks: this task hosts both the schedule routes and the output-consumer thread.
-  scheduled_task                     = var.scheduled_task
-  scheduled_task_table_name          = var.scheduled_task ? module.scheduler[0].table_name : null
-  scheduled_task_table_arn           = var.scheduled_task ? module.scheduler[0].table_arn : null
-  scheduled_task_schedule_group_name = var.scheduled_task ? module.scheduler[0].schedule_group_name : null
-  scheduled_task_schedule_group_arn  = var.scheduled_task ? module.scheduler[0].schedule_group_arn : null
-  scheduled_task_target_role_arn     = var.scheduled_task ? module.scheduler[0].target_role_arn : null
+  scheduled_task                      = var.scheduled_task
+  scheduled_task_table_name           = var.scheduled_task ? module.scheduler[0].table_name : null
+  scheduled_task_table_arn            = var.scheduled_task ? module.scheduler[0].table_arn : null
+  scheduled_task_schedule_group_name  = var.scheduled_task ? module.scheduler[0].schedule_group_name : null
+  scheduled_task_schedule_arn_pattern = var.scheduled_task ? module.scheduler[0].schedule_arn_pattern : null
+  scheduled_task_target_role_arn      = var.scheduled_task ? module.scheduler[0].target_role_arn : null
 
   tags = var.tags
 }

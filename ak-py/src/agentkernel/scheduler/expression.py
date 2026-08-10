@@ -14,6 +14,12 @@ from .model import ScheduleSpec
 # "<n> <unit>" — the rate grammar every supported timer shares.
 _RATE_PATTERN = re.compile(r"^\s*(\d+)\s+(minute|minutes|hour|hours|day|days|second|seconds)\s*$", re.IGNORECASE)
 
+# A spec carries the *bare* expression; the provider adds its own wrapper when it renders
+# the registration. A pasted-in native form therefore has to be rejected here: a wrapped
+# cron survives the field count below, and the doubly-wrapped result only fails later, at
+# the timer, as an opaque server error.
+_WRAPPED_PATTERN = re.compile(r"^\s*(cron|rate|at)\s*\((.*)\)\s*$", re.IGNORECASE | re.DOTALL)
+
 _RATE_UNITS = {
     "second": timedelta(seconds=1),
     "minute": timedelta(minutes=1),
@@ -59,8 +65,10 @@ class ScheduleExpression:
 
         :param rate: The rate expression.
         :return: The interval between fires.
-        :raises ScheduleValidationError: The expression does not match the rate grammar.
+        :raises ScheduleValidationError: The expression is wrapped, or does not match the
+            rate grammar.
         """
+        ScheduleExpression._reject_wrapper("rate", rate)
         match = _RATE_PATTERN.match(rate or "")
         if match is None:
             raise ScheduleValidationError(f"rate '{rate}' is not of the form '<n> <minute|hour|day>'")
@@ -109,12 +117,28 @@ class ScheduleExpression:
         return moment.astimezone(timezone.utc)
 
     @staticmethod
+    def _reject_wrapper(field: str, expression: Optional[str]) -> None:
+        """Reject an expression still carrying its provider-native ``cron(...)`` wrapper.
+
+        :param field: The spec field being read, for the message.
+        :param expression: The value as supplied.
+        :raises ScheduleValidationError: The value is wrapped.
+        """
+        match = _WRAPPED_PATTERN.match(expression or "")
+        if match is None:
+            return
+        raise ScheduleValidationError(
+            f"{field} '{expression}' must be the bare expression, not the '{match.group(1).lower()}(...)' form — supply '{match.group(2).strip()}'"
+        )
+
+    @staticmethod
     def _validate_cron(cron: str) -> None:
         """Reject a cron expression whose field count no supported timer accepts.
 
         :param cron: The cron expression, without the surrounding ``cron(...)``.
-        :raises ScheduleValidationError: The expression does not have six fields.
+        :raises ScheduleValidationError: The expression is wrapped, or does not have six fields.
         """
+        ScheduleExpression._reject_wrapper("cron", cron)
         fields = cron.split()
         if len(fields) != _CRON_FIELD_COUNT:
             raise ScheduleValidationError(
