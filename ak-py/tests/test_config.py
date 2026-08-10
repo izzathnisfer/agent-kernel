@@ -201,6 +201,29 @@ def test_config_has_no_test_section(tmp_path, monkeypatch):
     assert not hasattr(cfg, "test")
 
 
+def test_teams_config_defaults():
+    # The Teams integration reads Config.get().teams.*; a missing section made the
+    # whole AgentTeamsRequestHandler crash with AttributeError on construction.
+    cfg = AKConfig()
+    assert cfg.teams.agent == ""
+    assert cfg.teams.agent_acknowledgement == ""
+    assert cfg.teams.app_id == ""
+    assert cfg.teams.app_password == ""
+    assert cfg.teams.tenant_id == ""
+
+
+def test_teams_config_env_override(monkeypatch):
+    monkeypatch.setenv("AK_TEAMS__AGENT", "general")
+    monkeypatch.setenv("AK_TEAMS__APP_ID", "client-id")
+    monkeypatch.setenv("AK_TEAMS__APP_PASSWORD", "client-secret")
+    monkeypatch.setenv("AK_TEAMS__TENANT_ID", "tenant-123")
+    cfg = AKConfig()
+    assert cfg.teams.agent == "general"
+    assert cfg.teams.app_id == "client-id"
+    assert cfg.teams.app_password == "client-secret"
+    assert cfg.teams.tenant_id == "tenant-123"
+
+
 def test_lazy_singleton_identity():
     cfg_1 = AKConfig.get()
     cfg_2 = AKConfig.get()
