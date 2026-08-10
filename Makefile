@@ -37,17 +37,17 @@ lint: lint-fix
 lint-fix:
 	@cd ak-py && $(ENSURE_PYENV_VENV)
 	@echo "Sorting imports with isort..."
-	cd ak-py && uv run --dev isort --skip src/agentkernel/core/__init__.py ./src ./tests
+	cd ak-py && uv run --dev isort --skip src/agentkernel/core/__init__.py ./src ./tests ./testharness
 	@echo "Formatting ak-py code with black..."
-	cd ak-py && uv run --dev black ./src ./tests
+	cd ak-py && uv run --dev black ./src ./tests ./testharness
 
 lint-check:
 	@cd ak-py && $(ENSURE_PYENV_VENV)
 	@echo "Checking import sorting with isort..."
 	@EXIT_CODE=0; \
-	(cd ak-py && uv run --dev isort --skip src/agentkernel/core/__init__.py --check-only ./src ./tests) || EXIT_CODE=$$?; \
+	(cd ak-py && uv run --dev isort --skip src/agentkernel/core/__init__.py --check-only ./src ./tests ./testharness) || EXIT_CODE=$$?; \
 	echo "Checking ak-py code formatting with black..."; \
-	(cd ak-py && uv run --dev black --check ./src ./tests) || EXIT_CODE=$$?; \
+	(cd ak-py && uv run --dev black --check ./src ./tests ./testharness) || EXIT_CODE=$$?; \
 	if [ $$EXIT_CODE -ne 0 ]; then \
 		echo "❌ Linting errors found in ak-py!"; \
 	fi; \

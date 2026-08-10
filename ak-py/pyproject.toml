@@ -202,3 +202,6 @@ target-version = ["py312"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=src --cov-report=term --cov-report=html --html=report.html"
+# "." (ak-py/) so tests can import the top-level testharness/ package, which lives outside
+# src/agentkernel and is therefore not on sys.path via the normal editable package install.
+pythonpath = ["."]

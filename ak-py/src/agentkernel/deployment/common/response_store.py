@@ -73,10 +73,24 @@ class ResponseStore(ABC):
                 await asyncio.sleep(delay)
         return None
 
-    @staticmethod
-    def _get_retry_config() -> tuple[int, int]:
-        """Read (retry_count, delay) for get_message_with_retry from config."""
+    # Same ~5s worst-case wait as _ResponseStoreConfig's own defaults (retry_count=5, delay=5),
+    # but polling every 0.2s instead of every 5s — the round trip this fallback actually serves
+    # (local queue mode's SQLite backend) resolves in tens of milliseconds, not the seconds a
+    # real network hop (SQS/DynamoDB) takes, so a 5s-granularity poll would make every request
+    # eat a full 5s tax for no reason.
+    _DEFAULT_RETRY_COUNT = 25
+    _DEFAULT_RETRY_DELAY = 0.2
+
+    @classmethod
+    def _get_retry_config(cls) -> tuple[int, float]:
+        """Read (retry_count, delay) for get_message_with_retry from config.
+
+        Falls back to the defaults above when execution.response_store is unset — e.g. local
+        queue mode, which never goes through ResponseDBHandler and so has no reason to configure it.
+        """
         response_store_config = AKConfig.get().execution.response_store
+        if response_store_config is None:
+            return cls._DEFAULT_RETRY_COUNT, cls._DEFAULT_RETRY_DELAY
         return response_store_config.retry_count, response_store_config.delay
 
     @abstractmethod
