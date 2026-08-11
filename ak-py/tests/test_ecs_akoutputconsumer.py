@@ -198,4 +198,32 @@ class TestScheduledRunOutcomes:
             ECSOutputConsumer.process_message(_make_record({"result": "hi", "session_id": "s1"}))
 
         store.return_value.add_message.assert_called_once()
+
+    def test_a_retry_exhausted_run_gets_one_last_recording_attempt(self, scheduler):
+        """on_permanent_failure is the last code to see the message, so the outcome is written
+        there or lost — and the status still comes from the body, not from the failure path."""
+        with patch.object(ECSOutputConsumer, "_get_response_store") as store:
+            ECSOutputConsumer.on_permanent_failure(self._record())
+
+        store.assert_not_called()
+        kwargs = scheduler.mark_run_completed.call_args.kwargs
+        assert kwargs["scheduled_task_id"] == "schedule_a"
+        assert kwargs["status"].value == "COMPLETED"
+
+    def test_a_retry_exhausted_run_that_cannot_be_recorded_is_logged_not_raised(self, scheduler, caplog):
+        scheduler.mark_run_completed.side_effect = RuntimeError("dynamodb unavailable")
+
+        with caplog.at_level("ERROR"):
+            ECSOutputConsumer.on_permanent_failure(self._record())  # must not raise
+
+        assert "Lost the outcome of a scheduled run" in caplog.text
+        assert "schedule_a" in caplog.text
+        assert "exec-1" in caplog.text
+
+    def test_an_ordinary_permanent_failure_still_reaches_the_response_store(self, scheduler):
+        with patch.object(ECSOutputConsumer, "_get_response_store") as store:
+            ECSOutputConsumer.on_permanent_failure(_make_record({"result": "hi", "session_id": "s1"}))
+
+        store.return_value.add_message.assert_called_once()
+        scheduler.mark_run_completed.assert_not_called()
         scheduler.mark_run_completed.assert_not_called()

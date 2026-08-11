@@ -118,6 +118,14 @@ class ECSOutputConsumer(ECSSQSConsumer):
         max_retries = cls._config.execution.queues.output.max_receive_count
         cls._log.error(f"Permanent failure for output message {record.get('MessageId')} " f"after {max_retries} retries")
 
+        # Same two reasons process_message returns early for a fire — no endpoint_url to
+        # broadcast on, nobody polling the response store — plus a third here: the group id
+        # of a fire is the scheduled_task_id, so an error entry would be filed under a
+        # session that does not exist.
+        if ScheduledRunRecorder.record_before_discard(record.get("Body")):
+            cls._log.info("Scheduled run: not broadcast and not stored")
+            return
+
         try:
             message_attributes = SQSHandler.get_message_custom_attributes(record)
             request_id = message_attributes.get("request_id")

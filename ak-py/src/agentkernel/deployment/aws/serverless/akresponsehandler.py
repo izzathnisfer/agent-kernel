@@ -148,6 +148,14 @@ class ResponseHandler(LambdaSQSConsumer):
         """
         cls._log.error(f"Permanent failure: {record}: Retried message {cls._get_max_receive_count()} times")
 
+        # Same two reasons process_message returns early for a fire — no endpoint_url to
+        # broadcast on, nobody polling the response store — plus a third here: the group id
+        # of a fire is the scheduled_task_id, so an error entry would be filed under a
+        # session that does not exist.
+        if ScheduledRunRecorder.record_before_discard(record.get("body")):
+            cls._log.info("Scheduled run: not broadcast and not stored")
+            return
+
         try:
             message_attributes = SQSHandler.get_message_custom_attributes(record)
             # The session id travels as the FIFO group id, not as a custom attribute, and a
