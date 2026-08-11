@@ -37,17 +37,12 @@ def test_valid_redis_configuration_passes():
 
 
 @pytest.mark.parametrize("missing", ["input", "output"])
-def test_missing_queue_url_is_rejected(missing):
+def test_missing_queue_url_is_accepted(missing):
+    """Queue mode is no longer a precondition: each serverless Lambda only ever receives the
+    one queue URL it publishes to, so a missing URL cannot be treated as a misconfiguration."""
     enable_scheduler_config()
     setattr(getattr(AKConfig.get().execution.queues, missing), "url", None)
-    with pytest.raises(AKConfigError, match="queue mode"):
-        SchedulerFactory.validate_config()
-
-
-def test_non_fifo_input_queue_is_rejected():
-    enable_scheduler_config(input_url="https://sqs.us-east-1.amazonaws.com/1/input")
-    with pytest.raises(AKConfigError, match="FIFO"):
-        SchedulerFactory.validate_config()
+    SchedulerFactory.validate_config()  # must not raise
 
 
 @pytest.mark.parametrize("session_type", ["in_memory", "cosmosdb", "firestore", "my.custom.SessionStore"])
@@ -127,8 +122,21 @@ class TestSoftDeleteTTL:
 
         sqs = MagicMock()
         sqs.get_queue_attributes.side_effect = RuntimeError("access denied")
+        scheduler = AWSScheduler("grp", "arn:role", FIFO_INPUT_URL, InMemoryScheduledTaskStore(), scheduler_client=MagicMock(), sqs_client=sqs)
         with pytest.raises(SchedulerError, match="soft-delete TTL"):
-            AWSScheduler("grp", "arn:role", FIFO_INPUT_URL, InMemoryScheduledTaskStore(), scheduler_client=MagicMock(), sqs_client=sqs)
+            scheduler.soft_delete_ttl_seconds
+
+    def test_derivation_is_deferred_until_the_ttl_is_needed(self):
+        """Constructing the provider must not read the queue: the output consumers build one
+        to record run outcomes and are given neither the input queue URL nor permission on it."""
+        enable_scheduler_config()
+        scheduler = make_scheduler()
+        assert scheduler._sqs.get_queue_attributes.call_count == 0
+
+        scheduler.soft_delete_ttl_seconds
+        scheduler.soft_delete_ttl_seconds
+        # Derived once and cached, so a per-message caller does not pay for it repeatedly.
+        assert scheduler._sqs.get_queue_attributes.call_count == 1
 
 
 def test_env_vars_alone_populate_the_absent_scheduler_block(monkeypatch):

@@ -18,10 +18,26 @@ class ResponseHandler(LambdaSQSConsumer):
     """
 
     _log = logging.getLogger("ak.aws.responsehandler")
-    # Fails loudly at cold start rather than on the first scheduled outcome.
-    SchedulerFactory.validate_config()
     _response_store = None
     _base_ws_handler = None
+
+    @classmethod
+    def handle(cls, event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+        """Validate the scheduler wiring, then process the batch.
+
+        The check belongs here rather than in the class body: ``agentkernel.aws`` re-exports
+        every deployment class, so importing it for an unrelated entry point — the
+        authorizer Lambda, say — would otherwise assert on deployment values that only the
+        components actually running scheduled tasks are given. Validating on invocation
+        still fails this Lambda before it can record a scheduled outcome it cannot honour.
+
+        :param event: Lambda event containing SQS Records
+        :param context: Lambda context object
+        :return: A dict with "batchItemFailures" per AWS format
+        :raises AKConfigError: Scheduling is enabled but the deployment wiring is missing.
+        """
+        SchedulerFactory.validate_config()
+        return super().handle(event, context)
 
     @classmethod
     def _get_max_receive_count(cls) -> int:
@@ -134,11 +150,15 @@ class ResponseHandler(LambdaSQSConsumer):
 
         try:
             message_attributes = SQSHandler.get_message_custom_attributes(record)
-            session_id = message_attributes["message_group_id"]
+            # The session id travels as the FIFO group id, not as a custom attribute, and a
+            # body that failed every retry cannot be trusted to yield it either.
+            session_id = SQSHandler.get_message_system_attributes(record).get("MessageGroupId")
             error_message = {
                 "error": f"Failed to process message after {cls._get_max_receive_count()} retries",
                 "request_id": message_attributes.get("request_id"),
             }
+            if session_id:
+                error_message["session_id"] = session_id
 
             if AKConfig.get().execution.mode == ExecutionMode.ASYNC:
                 # Broadcast error via WebSocket for ASYNC mode
@@ -148,7 +168,6 @@ class ResponseHandler(LambdaSQSConsumer):
                 if endpoint_url and user_id:
                     base_ws = cls._get_base_ws_handler()
                     cls._log.info(f"Broadcasting permanent failure error via WebSocket for user_id: {user_id}")
-                    error_message["session_id"] = session_id
                     base_ws.broadcast(
                         endpoint_url=endpoint_url,
                         message=error_message,
@@ -169,7 +188,8 @@ class ResponseHandler(LambdaSQSConsumer):
                         done=True,
                     )
                     error_chunk_body = error_chunk.model_dump(exclude_none=True)
-                    error_chunk_body["session_id"] = session_id
+                    if session_id:
+                        error_chunk_body["session_id"] = session_id
                     base_ws = cls._get_base_ws_handler()
                     cls._log.info(f"Broadcasting permanent failure stream chunk via WebSocket for user_id: {user_id}")
                     base_ws.broadcast(

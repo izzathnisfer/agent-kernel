@@ -17,10 +17,6 @@ from .store.base import DURABLE_SESSION_TYPES
 if TYPE_CHECKING:
     from .service import ScheduledTaskService
 
-# The duplication-prevention and serialization guarantees depend on a FIFO input queue, and
-# FIFO queue URLs always end in this suffix.
-FIFO_QUEUE_SUFFIX = ".fifo"
-
 # session.type -> (the scheduler config block it requires, the field that must be set).
 _REQUIRED_BACKEND_FIELD = {
     "dynamodb": ("dynamodb", "table_name"),
@@ -61,7 +57,6 @@ class SchedulerFactory:
             return
 
         config = AKConfig.get()
-        SchedulerFactory._validate_queue_mode(config)
         SchedulerFactory._validate_session_type(config)
         SchedulerFactory._validate_timer_wiring(config)
         SchedulerFactory._validate_backend_block(config)
@@ -70,8 +65,8 @@ class SchedulerFactory:
     def build() -> Scheduler:
         """Return the process-wide ``Scheduler``, constructing it on first use.
 
-        Memoized because construction reads the input queue's attributes and creates boto3
-        clients — work that belongs once per process, not once per request.
+        Memoized because construction creates boto3 clients and the store — work that
+        belongs once per process, not once per request.
 
         :return: The configured scheduler.
         :raises AKConfigError: A precondition is not met.
@@ -92,29 +87,6 @@ class SchedulerFactory:
             cls._instance = None
 
     # ------------------------------------------------------------------ checks
-
-    @staticmethod
-    def _validate_queue_mode(config: AKConfig) -> None:
-        """Reject a deployment that is not running in queue mode with a FIFO input queue.
-
-        Queue mode has no config flag of its own — both queue URLs being present is how it
-        is detected.
-
-        :param config: The loaded configuration.
-        :raises AKConfigError: Either queue URL is unset, or the input queue is not FIFO.
-        """
-        input_url = config.execution.queues.input.url
-        output_url = config.execution.queues.output.url
-        if not input_url or not output_url:
-            raise AKConfigError(
-                "scheduler.enabled requires queue mode: both execution.queues.input.url and "
-                "execution.queues.output.url must be set. Scheduling is not available for non-queue deployments."
-            )
-        if not input_url.endswith(FIFO_QUEUE_SUFFIX):
-            raise AKConfigError(
-                f"scheduler.enabled requires a FIFO input queue, but '{input_url}' does not end in '{FIFO_QUEUE_SUFFIX}'. "
-                "Duplicate suppression and per-task serialization depend on it."
-            )
 
     @staticmethod
     def _validate_session_type(config: AKConfig) -> None:

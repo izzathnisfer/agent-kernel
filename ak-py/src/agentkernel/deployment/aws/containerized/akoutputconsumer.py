@@ -27,11 +27,24 @@ class ECSOutputConsumer(ECSSQSConsumer):
     _config = AKConfig.get()
     max_receive_count = _config.execution.queues.output.max_receive_count
     num_consumers = _config.execution.queues.output.no_of_consumers
-    # Fails loudly at process startup rather than on the first scheduled outcome.
-    SchedulerFactory.validate_config()
 
     _response_store = None
     _websocket_handler = None
+
+    @classmethod
+    def run(cls) -> None:
+        """Validate the scheduler wiring, then poll the output queue forever.
+
+        The check belongs here rather than in the class body: ``agentkernel.aws`` re-exports
+        every deployment class, so importing it for an unrelated entry point — the
+        authorizer Lambda, say — would otherwise assert on deployment values that only the
+        components actually running scheduled tasks are given. Validating at the start of
+        run() still fails the container at startup rather than on the first scheduled outcome.
+
+        :raises AKConfigError: Scheduling is enabled but the deployment wiring is missing.
+        """
+        SchedulerFactory.validate_config()
+        super().run()
 
     @classmethod
     def get_queue_url(cls) -> str:

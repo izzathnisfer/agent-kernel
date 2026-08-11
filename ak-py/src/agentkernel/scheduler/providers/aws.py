@@ -72,7 +72,6 @@ class AWSScheduler(Scheduler):
         :param scheduler_client: Override for the EventBridge Scheduler client (tests).
         :param sqs_client: Override for the SQS client (tests).
         :param region: AWS region; defaults to the boto3 environment default.
-        :raises SchedulerError: The input queue's attributes could not be read.
         """
         self._group_name = group_name
         self._target_role_arn = target_role_arn
@@ -80,8 +79,11 @@ class AWSScheduler(Scheduler):
         self._store = store
         self._scheduler = scheduler_client if scheduler_client is not None else boto3.client("scheduler", region_name=region)
         self._sqs = sqs_client if sqs_client is not None else boto3.client("sqs", region_name=region)
-        self._soft_delete_ttl_seconds = self._derive_soft_delete_ttl()
-        self._log.info("AWSScheduler ready — group=%s, soft-delete TTL=%ss", group_name, self._soft_delete_ttl_seconds)
+        # Not derived here: only delete() consumes it, so deriving it eagerly would make a
+        # component that merely records run outcomes — the output consumers — depend on the
+        # input queue's URL and read permission, neither of which it is given.
+        self._soft_delete_ttl_seconds: Optional[int] = None
+        self._log.info("AWSScheduler ready — group=%s", group_name)
 
     @property
     def minimum_granularity(self) -> timedelta:
@@ -89,7 +91,16 @@ class AWSScheduler(Scheduler):
 
     @property
     def soft_delete_ttl_seconds(self) -> int:
-        """The derived window during which a deleted scheduled task's id stays reserved."""
+        """The derived window during which a deleted scheduled task's id stays reserved.
+
+        Derived once, on first use. Two threads racing the first read is harmless: the
+        derivation is a read of queue attributes that both would resolve to the same value.
+
+        :return: The grace window in seconds.
+        :raises SchedulerError: The input queue's attributes could not be read.
+        """
+        if self._soft_delete_ttl_seconds is None:
+            self._soft_delete_ttl_seconds = self._derive_soft_delete_ttl()
         return self._soft_delete_ttl_seconds
 
     # ------------------------------------------------------------------ contract
@@ -114,7 +125,7 @@ class AWSScheduler(Scheduler):
         self._deregister(scheduled_task_id)
         if self._store.get(scheduled_task_id) is None:
             return
-        self._store.soft_delete(scheduled_task_id, datetime.now(timezone.utc), self._soft_delete_ttl_seconds)
+        self._store.soft_delete(scheduled_task_id, datetime.now(timezone.utc), self.soft_delete_ttl_seconds)
 
     def get(self, scheduled_task_id: str, *, include_deleted: bool = False) -> Optional[ScheduledTask]:
         task = self._store.get(scheduled_task_id)

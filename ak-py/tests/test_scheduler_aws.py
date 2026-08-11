@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
@@ -208,3 +209,16 @@ class TestOutcomeGuards:
         scheduler.upsert(task)
         scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, datetime.now(timezone.utc), RunStatus.COMPLETED)
         assert scheduler.get("schedule_a").status == TaskStatus.ACTIVE
+
+    def test_an_outcome_records_without_the_input_queue(self, store, scheduler):
+        """The deployment shape of the output consumers: they record outcomes but are given no
+        input queue URL, and recording must not depend on one."""
+        task = build_task("schedule_a")
+        scheduler.upsert(task)
+
+        sqs = MagicMock()
+        sqs.get_queue_attributes.side_effect = RuntimeError("queue does not exist")
+        consumer_side = AWSScheduler("grp", "arn:role", "", store, scheduler_client=MagicMock(), sqs_client=sqs)
+
+        assert consumer_side.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, datetime.now(timezone.utc), RunStatus.COMPLETED)
+        assert consumer_side.get("schedule_a").last_run_status == RunStatus.COMPLETED
