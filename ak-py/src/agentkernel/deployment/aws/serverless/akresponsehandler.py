@@ -25,11 +25,10 @@ class ResponseHandler(LambdaSQSConsumer):
     def handle(cls, event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         """Validate the scheduler wiring, then process the batch.
 
-        The check belongs here rather than in the class body: ``agentkernel.aws`` re-exports
-        every deployment class, so importing it for an unrelated entry point — the
-        authorizer Lambda, say — would otherwise assert on deployment values that only the
-        components actually running scheduled tasks are given. Validating on invocation
-        still fails this Lambda before it can record a scheduled outcome it cannot honour.
+        The check belongs here rather than in the class body because ``agentkernel.aws``
+        re-exports every deployment class, so importing it for an unrelated entry point would
+        assert on wiring only the scheduler-enabled components are given. Validating on
+        invocation still fails this Lambda before it can record any scheduled outcome.
 
         :param event: Lambda event containing SQS Records
         :param context: Lambda context object
@@ -119,9 +118,8 @@ class ResponseHandler(LambdaSQSConsumer):
         """
         cls._log.info(f"Processing message: {record}")
 
-        # First, before the execution-mode fan-out: a timer-originated message carries no
-        # endpoint_url attribute, so the WebSocket branches would raise on it, and in the
-        # REST modes nobody is polling the response store for it.
+        # Checked before the execution-mode fan-out: a fire carries no endpoint_url attribute,
+        # so the WebSocket branches would raise, and no REST caller is polling for it.
         if ScheduledRunRecorder.record(record.get("body")):
             cls._log.info("Recorded scheduled run outcome; not broadcast and not stored")
             return
@@ -148,18 +146,15 @@ class ResponseHandler(LambdaSQSConsumer):
         """
         cls._log.error(f"Permanent failure: {record}: Retried message {cls._get_max_receive_count()} times")
 
-        # Same two reasons process_message returns early for a fire — no endpoint_url to
-        # broadcast on, nobody polling the response store — plus a third here: the group id
-        # of a fire is the scheduled_task_id, so an error entry would be filed under a
-        # session that does not exist.
+        # Returns early for the same reasons as process_message, plus one more: a fire's group
+        # id is the scheduled_task_id, so an error entry would be filed under a missing session.
         if ScheduledRunRecorder.record_before_discard(record.get("body")):
             cls._log.info("Scheduled run: not broadcast and not stored")
             return
 
         try:
             message_attributes = SQSHandler.get_message_custom_attributes(record)
-            # The session id travels as the FIFO group id, not as a custom attribute, and a
-            # body that failed every retry cannot be trusted to yield it either.
+            # The session id travels as the FIFO group id, not as a custom attribute.
             session_id = SQSHandler.get_message_system_attributes(record).get("MessageGroupId")
             error_message = {
                 "error": f"Failed to process message after {cls._get_max_receive_count()} retries",

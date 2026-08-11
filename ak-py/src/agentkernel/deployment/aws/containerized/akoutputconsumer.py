@@ -35,11 +35,10 @@ class ECSOutputConsumer(ECSSQSConsumer):
     def run(cls) -> None:
         """Validate the scheduler wiring, then poll the output queue forever.
 
-        The check belongs here rather than in the class body: ``agentkernel.aws`` re-exports
-        every deployment class, so importing it for an unrelated entry point — the
-        authorizer Lambda, say — would otherwise assert on deployment values that only the
-        components actually running scheduled tasks are given. Validating at the start of
-        run() still fails the container at startup rather than on the first scheduled outcome.
+        The check belongs here rather than in the class body because ``agentkernel.aws``
+        re-exports every deployment class, so importing it for an unrelated entry point would
+        assert on wiring only the scheduler-enabled components are given. Validating at the
+        start of run() still fails the container at startup, not on the first outcome.
 
         :raises AKConfigError: Scheduling is enabled but the deployment wiring is missing.
         """
@@ -79,9 +78,8 @@ class ECSOutputConsumer(ECSSQSConsumer):
         message_id = record.get("MessageId")
         cls._log.info(f"[OUTPUT START] Processing output message {message_id}")
 
-        # First, before the execution-mode fan-out: a timer-originated message carries no
-        # endpoint_url attribute, so the WebSocket branches would raise on it, and in the
-        # REST modes nobody is polling the response store for it.
+        # Checked before the execution-mode fan-out: a fire carries no endpoint_url attribute,
+        # so the WebSocket branches would raise, and no REST caller is polling for it.
         if ScheduledRunRecorder.record(record.get("Body")):
             cls._log.info(f"[OUTPUT DONE] Recorded scheduled run outcome for message {message_id}")
             return
@@ -118,10 +116,8 @@ class ECSOutputConsumer(ECSSQSConsumer):
         max_retries = cls._config.execution.queues.output.max_receive_count
         cls._log.error(f"Permanent failure for output message {record.get('MessageId')} " f"after {max_retries} retries")
 
-        # Same two reasons process_message returns early for a fire — no endpoint_url to
-        # broadcast on, nobody polling the response store — plus a third here: the group id
-        # of a fire is the scheduled_task_id, so an error entry would be filed under a
-        # session that does not exist.
+        # Returns early for the same reasons as process_message, plus one more: a fire's group
+        # id is the scheduled_task_id, so an error entry would be filed under a missing session.
         if ScheduledRunRecorder.record_before_discard(record.get("Body")):
             cls._log.info("Scheduled run: not broadcast and not stored")
             return

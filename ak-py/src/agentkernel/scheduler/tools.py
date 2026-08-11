@@ -1,10 +1,10 @@
 """Scheduler system tools — the agent-facing surface of the scheduled-task capability.
 
-Registered on an agent (via ``SystemToolFactory``) when ``scheduler.enabled`` is true and
-the agent is in scope. They are the agent's equivalent of the chat endpoint's ``schedule``
-block, since an agent has no HTTP client into its own deployment. All of them go through
-the same ``ScheduledTaskService`` as the REST surfaces, return JSON strings, and catch
-machinery errors into ``{"error": ...}`` — tools never raise into the framework.
+Registered on an agent (via ``SystemToolFactory``) when ``scheduler.enabled`` is true and the
+agent is in scope. They are the agent's equivalent of the chat endpoint's ``schedule`` block,
+since an agent has no HTTP client into its own deployment. All go through the same
+``ScheduledTaskService`` as the REST surfaces and return JSON strings, reporting failures as
+``{"error": ...}`` rather than raising into the framework.
 """
 
 import json
@@ -36,11 +36,10 @@ class _ToolSupport:
     def owner_id() -> Optional[str]:
         """Resolve the human identity that owns the invoking session.
 
-        A tool cannot set an arbitrary owner: an agent is the mechanism, never the
-        principal. The id is the ``user_id`` of the request that started the invoking
-        session, which ``ChatService`` binds to the session's volatile cache — on a
-        scheduled fire that is the task's own owner, so a task created from a scheduled run
-        stays with the same human.
+        A tool cannot set an arbitrary owner. The id is the ``user_id`` of the request that
+        started the invoking session, which ``ChatService`` binds to the session's volatile
+        cache. On a scheduled fire that is the task's own owner, so a task created from a
+        scheduled run stays with the same user.
 
         :return: The owning user id, or None when the session has no authenticated user.
         """
@@ -231,10 +230,10 @@ def list_scheduled_tasks(limit: Optional[int] = None, cursor: Optional[str] = No
 def get_scheduler_tools() -> list[SystemTool]:
     """Build the scheduler system tools; called by ``SystemToolFactory`` when enabled.
 
-    The capability's whole system-prompt section rides on the first tool's ``description``
-    (the sandbox pattern), so agents learn about scheduling automatically and agent authors
-    never describe these tools in their own instructions. The rest carry empty descriptions;
-    their LLM-facing schemas come from the function docstrings when the tools are bound.
+    Following the sandbox pattern, the capability's whole system-prompt section sits on the
+    first tool's ``description``, so agent authors never describe these tools in their own
+    instructions. The rest have empty descriptions; their LLM-facing schemas come from the
+    function docstrings when the tools are bound.
 
     :return: The four scheduler tools.
     """

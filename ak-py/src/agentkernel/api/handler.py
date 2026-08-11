@@ -16,9 +16,8 @@ from ..core.thread import Authoriser
 class BearerIdentityMixin:
     """Resolves the caller's identity from a Bearer token via a configured ``Authoriser``.
 
-    Shared by every route layer that needs an authenticated subject, so the thread routes
-    and the schedule routes cannot drift apart in how a token is read or rejected.
-    Subclasses must set ``_authoriser``.
+    Shared by every route layer that needs an authenticated subject, so the thread and
+    schedule routes read and reject tokens identically. Subclasses must set ``_authoriser``.
     """
 
     _authoriser: Optional[Authoriser] = None

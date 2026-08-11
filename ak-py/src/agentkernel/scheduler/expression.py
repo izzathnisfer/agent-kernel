@@ -14,10 +14,9 @@ from .model import ScheduleSpec
 # "<n> <unit>" — the rate grammar every supported timer shares.
 _RATE_PATTERN = re.compile(r"^\s*(\d+)\s+(minute|minutes|hour|hours|day|days|second|seconds)\s*$", re.IGNORECASE)
 
-# A spec carries the *bare* expression; the provider adds its own wrapper when it renders
-# the registration. A pasted-in native form therefore has to be rejected here: a wrapped
-# cron survives the field count below, and the doubly-wrapped result only fails later, at
-# the timer, as an opaque server error.
+# A spec carries the bare expression and the provider adds its own wrapper, so a pasted-in
+# native form must be rejected here. A wrapped cron passes the field count below and the
+# doubly-wrapped result would only fail later at the timer, as an opaque server error.
 _WRAPPED_PATTERN = re.compile(r"^\s*(cron|rate|at)\s*\((.*)\)\s*$", re.IGNORECASE | re.DOTALL)
 
 _RATE_UNITS = {
@@ -27,9 +26,8 @@ _RATE_UNITS = {
     "day": timedelta(days=1),
 }
 
-# A cron expression has six fields (minute hour day-of-month month day-of-week year).
-# A seventh leading field would be seconds — finer than any supported timer, and silently
-# rounding it is exactly what this validation exists to prevent.
+# Fields are: minute hour day-of-month month day-of-week year. A seventh leading field would
+# be seconds, which is finer than any supported timer, so it is rejected rather than rounded.
 _CRON_FIELD_COUNT = 6
 
 
@@ -82,9 +80,9 @@ class ScheduleExpression:
     def next_run_at(spec: ScheduleSpec, created_at: datetime) -> Optional[datetime]:
         """Derive the next fire time, where it is knowable without evaluating the expression.
 
-        Best-effort by design: no timer API supplies a next-invocation time, and adding a
-        cron evaluator for a convenience field is not worth the dependency. ``None`` means
-        "not computed", never "not scheduled" — authoritative history is ``last_run_at``.
+        Best-effort by design: no timer API supplies a next-invocation time, and a cron
+        evaluator is not worth the dependency for a convenience field. ``None`` means "not
+        computed", never "not scheduled"; ``last_run_at`` is the authoritative history.
 
         :param spec: The schedule to read.
         :param created_at: When the schedule was registered, the base for a rate.

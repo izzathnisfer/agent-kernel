@@ -15,9 +15,8 @@ class DemoAuthoriser(Authoriser):
     (e.g. verify a JWT signature) and return the subject's user_id, or None to reject the
     request. Here a static token map stands in for that provider.
 
-    Scheduling requires this: every scheduled task is owned by an authenticated identity,
-    and the owner is stamped server-side from whatever this returns — it is never read
-    from the request body, so it cannot be forged.
+    Scheduling requires this. The owner is stamped server-side from whatever this returns and
+    is never read from the request body, so a caller cannot forge it.
     """
 
     _TOKENS = {
@@ -47,8 +46,8 @@ def scheduling_handlers() -> list[RESTRequestHandler]:
     ]
 
 
-# ECSIOHandler.run() starts AWSRestAPI with its default handlers, so this classmethod is
-# the seam where an Authoriser gets supplied.
+# ECSIOHandler.run() starts AWSRestAPI with its default handlers, so overriding this
+# classmethod is how an Authoriser gets supplied.
 AWSRestAPI.get_default_handlers = classmethod(lambda cls: scheduling_handlers())
 
 runner = ECSIOHandler.run

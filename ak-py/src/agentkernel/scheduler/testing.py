@@ -6,12 +6,11 @@ Two things live here, both importable by bring-your-own-backend authors:
   suite in place of DynamoDB or Redis.
 * ``SchedulerContract`` — a reusable pytest suite asserting the semantics every
   ``Scheduler`` implementation must honor. Subclass it in a test module and override the
-  ``scheduler`` fixture; it is deliberately NOT named ``Test*`` so pytest does not collect
+  ``scheduler`` fixture. It is deliberately not named ``Test*`` so pytest does not collect
   it on its own.
 
-This module imports ``pytest`` and is therefore only meant to be imported from test code —
-it is intentionally left out of ``agentkernel.scheduler``'s eager exports so importing the
-capability stays free of a pytest dependency.
+This module imports ``pytest``, so it is left out of ``agentkernel.scheduler``'s exports to
+keep importing the capability free of a pytest dependency.
 """
 
 import copy

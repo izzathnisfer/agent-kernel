@@ -32,12 +32,12 @@ MAX_EVENT_AGE_SECONDS = 300
 # execution an already-enqueued fire can have.
 TTL_SAFETY_MARGIN_SECONDS = 300
 
-# Floor for the derived soft-delete TTL, so a very short visibility timeout cannot collapse
-# the grace window to something an in-flight run could outlive.
+# Floor for the derived soft-delete TTL, so a short visibility timeout cannot shrink the
+# grace window below what an in-flight run needs.
 TTL_FLOOR_SECONDS = 900
 
-# Substituted by EventBridge Scheduler into the payload at fire time. This is what keeps
-# the agent runner clean: the message that lands on the queue has nothing left to derive.
+# Substituted by EventBridge Scheduler into the payload at fire time, so the delivered
+# message needs nothing derived by the agent runner.
 SCHEDULED_TIME_VARIABLE = "<aws.scheduler.scheduled-time>"
 EXECUTION_ID_VARIABLE = "<aws.scheduler.execution-id>"
 
@@ -79,9 +79,8 @@ class AWSScheduler(Scheduler):
         self._store = store
         self._scheduler = scheduler_client if scheduler_client is not None else boto3.client("scheduler", region_name=region)
         self._sqs = sqs_client if sqs_client is not None else boto3.client("sqs", region_name=region)
-        # Not derived here: only delete() consumes it, so deriving it eagerly would make a
-        # component that merely records run outcomes — the output consumers — depend on the
-        # input queue's URL and read permission, neither of which it is given.
+        # Derived lazily: only delete() needs it, so output consumers (which only record run
+        # outcomes) never need read permission on the input queue.
         self._soft_delete_ttl_seconds: Optional[int] = None
         self._log.info("AWSScheduler ready — group=%s", group_name)
 
@@ -113,15 +112,14 @@ class AWSScheduler(Scheduler):
         try:
             self._register(task)
         except Exception:
-            # A row without a registration would silently never fire, which is worse than a
-            # failed create — so the row goes back to exactly what it was.
+            # A row without a registration would silently never fire, so restore it.
             self._restore(task.scheduled_task_id, previous)
             raise
         return task
 
     def delete(self, scheduled_task_id: str) -> None:
-        # Stopping future fires is the safe half, so it happens first: a fire already on the
-        # queue still executes, but its outcome is discarded by the soft-delete guard.
+        # Deregister first to stop future fires. A fire already on the queue still runs, but
+        # its outcome is discarded by the soft-delete guard.
         self._deregister(scheduled_task_id)
         if self._store.get(scheduled_task_id) is None:
             return
@@ -162,9 +160,8 @@ class AWSScheduler(Scheduler):
             fields["status"] = TaskStatus.COMPLETED
             fields["completed_at"] = datetime.now(timezone.utc)
 
-        # Never a put: the definition fields must not be rewritten from a row read before a
-        # concurrent PUT landed. expected_version re-checks the incarnation at write time,
-        # closing the window between the get above and this write.
+        # A field update, not a put: a put would rewrite the definition from a row that may be
+        # stale. expected_version re-checks the incarnation, closing the gap since the get.
         return self._store.update_fields(scheduled_task_id, fields, expected_version=scheduled_task_version)
 
     # ------------------------------------------------------------------ guards
@@ -188,8 +185,8 @@ class AWSScheduler(Scheduler):
             return f"no row at '{scheduled_task_id}' — it was deleted and its TTL has expired"
         if task.deleted:
             return "the scheduled task was deleted while this run was in flight"
-        # This guard is what makes caller-chosen, reusable ids safe: an outcome from a
-        # deleted-and-recreated task must never land on its successor's row.
+        # Makes caller-chosen, reusable ids safe: an outcome from a deleted-and-recreated
+        # task must never land on its successor's row.
         if task.scheduled_task_version != scheduled_task_version:
             return f"incarnation mismatch — row is version {task.scheduled_task_version}, outcome reports {scheduled_task_version}"
         # Defence in depth behind FIFO ordering, not the primary mechanism.
@@ -214,9 +211,8 @@ class AWSScheduler(Scheduler):
             error = exc.response.get("Error", {})
             if error.get("Code") != "ValidationException":
                 raise
-            # Local validation cannot know every rule EventBridge Scheduler applies, so the
-            # timer still refuses some expressions. That is a caller-fixable input, and
-            # letting it propagate as an unmapped error would report it as a server fault.
+            # Local validation cannot cover every EventBridge Scheduler rule. Map its
+            # rejection to a validation error so it reports as bad input, not a server fault.
             raise ScheduleValidationError(f"EventBridge Scheduler rejected the schedule: {error.get('Message') or exc}") from exc
 
     def _upsert_schedule(self, request: dict[str, Any]) -> None:
@@ -261,8 +257,7 @@ class AWSScheduler(Scheduler):
             "State": "ENABLED",
         }
         if ScheduleExpression.is_one_time(task.schedule):
-            # The registration removes itself atomically after firing — no cleanup process
-            # and no race with a concurrent delete.
+            # The registration removes itself after firing, so no cleanup process is needed.
             request["ActionAfterCompletion"] = "DELETE"
         return request
 
@@ -293,9 +288,8 @@ class AWSScheduler(Scheduler):
                 {
                     "QueueUrl": self._input_queue_url,
                     "MessageBody": json.dumps(self._message_body(task)),
-                    # Grouping by scheduled_task_id rather than session_id (the convention for
-                    # ordinary chat traffic) is deliberate: in per-run mode the session id
-                    # changes between fires and would not serialize them.
+                    # Grouped by scheduled_task_id, not session_id as ordinary chat traffic is:
+                    # a per-run session id changes between fires and would not serialize them.
                     "MessageGroupId": task.scheduled_task_id,
                     "MessageDeduplicationId": f"{task.scheduled_task_id}:{SCHEDULED_TIME_VARIABLE}",
                     "MessageAttributes": {
@@ -363,10 +357,10 @@ class AWSScheduler(Scheduler):
     def _derive_soft_delete_ttl(self) -> int:
         """Size the window during which a deleted scheduled task's id stays reserved.
 
-        It should outlive the longest execution an already-enqueued fire can have, so an
-        in-flight run's id cannot be claimed by a new scheduled task. Correctness does not
-        depend on the number — the incarnation guard rejects a cross-incarnation outcome
-        however short it turns out to be — this only makes the common case unsurprising.
+        Sized to outlive the longest execution an already-enqueued fire can have, so an
+        in-flight run's id is not claimed by a new scheduled task. This is a convenience, not
+        a correctness requirement: the incarnation guard rejects cross-incarnation outcomes
+        regardless of the window.
 
         :return: The grace window in seconds.
         :raises SchedulerError: The queue's attributes could not be read.
@@ -381,9 +375,8 @@ class AWSScheduler(Scheduler):
 
         visibility_timeout = int(attributes["VisibilityTimeout"])
         redrive_policy = json.loads(attributes.get("RedrivePolicy") or "{}")
-        # The queue's own maxReceiveCount is the hard ceiling, but a deployment with no DLQ
-        # has no redrive policy at all — the AKConfig value covers that case, and the max
-        # over both keeps the TTL an upper bound whichever component is deriving it.
+        # A deployment with no DLQ has no redrive policy, so fall back to the configured
+        # count. Taking the max of both keeps the TTL an upper bound either way.
         receives = max(int(redrive_policy.get("maxReceiveCount", 0)), AKConfig.get().execution.queues.input.max_receive_count)
         return max(visibility_timeout * receives + TTL_SAFETY_MARGIN_SECONDS, TTL_FLOOR_SECONDS)
 

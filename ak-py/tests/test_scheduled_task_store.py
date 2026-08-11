@@ -83,8 +83,7 @@ class TestStoreContract:
         loaded = store.get("a")
         assert loaded.last_run_status == RunStatus.COMPLETED
         assert loaded.last_error == "boom"
-        # The definition is untouched: an outcome write must never rewrite it from a row
-        # read before a concurrent PUT landed.
+        # The definition is untouched, so an outcome write cannot clobber a concurrent PUT.
         assert loaded.schedule.rate == task.schedule.rate
         assert loaded.message == task.message
         assert loaded.status == TaskStatus.ACTIVE
@@ -219,8 +218,8 @@ class TestDynamoDBLayout:
 
         item = store._driver.table.items["a"]
         assert OWNER_INDEX_KEY not in item
-        # owner_id itself stays, so the tombstone is still a readable row — which is what
-        # the outcome-write guards need during the grace window.
+        # owner_id itself stays, so the tombstone remains a readable row for the
+        # outcome-write guards during the grace window.
         assert item["owner_id"] == "u1"
 
     def test_list_queries_the_sparse_index_with_no_filter(self):

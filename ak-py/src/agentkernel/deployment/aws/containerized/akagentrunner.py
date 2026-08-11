@@ -125,9 +125,8 @@ class ECSAgentRunner(ECSSQSConsumer):
         try:
             record_attributes = cls._get_record_attributes(raw_queue_message=record)
             error_body = {"error": f"Failed to process message after " f"{cls._config.execution.queues.input.max_receive_count} retries"}
-            # Echoing the block is what makes a retry-exhausted scheduled run recordable as
-            # FAILED without any DLQ involvement — the error body reaches the output consumer
-            # like any other outcome. from_raw_body never raises.
+            # Echoing the block lets the output consumer record a retry-exhausted run as
+            # FAILED, with no DLQ involved. from_raw_body never raises.
             scheduled_run = ScheduledRunMetadata.from_raw_body(record.get("Body"))
             if scheduled_run is not None:
                 error_body["scheduled_run"] = scheduled_run.model_dump(mode="json")

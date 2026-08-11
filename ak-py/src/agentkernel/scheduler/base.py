@@ -10,22 +10,18 @@ from .model import RunStatus, ScheduledTask, ScheduledTaskPage
 class Scheduler(ABC):
     """Owns the scheduled-task table and the timer registrations.
 
-    The ``ScheduledTaskStore`` is a private collaborator held by the implementation: no
-    caller — not the service, not the route layers, not the output consumers — resolves or
-    calls it. Every row read and write goes through a method here.
+    The ``ScheduledTaskStore`` is a private collaborator of the implementation. No caller
+    resolves or calls it directly; every row read and write goes through a method here.
 
     Beyond the method contract, an implementation must guarantee:
 
-    * **At-most-once delivery per (scheduled_task_id, scheduled_time)** — a duplicate
-      timer-side fire is suppressed before it reaches the agent runner.
-    * **Fires of the same scheduled task are serialized.**
-    * **One-time registrations remove themselves after firing** — no cleanup process.
-    * **Schedules finer than the provider's minimum granularity are rejected at
-      registration**, never silently rounded.
-    * **The delivered payload is a valid ordinary agent message** — a fully resolved
-      ``session_id`` and a ``scheduled_run`` block, so the runner needs no scheduling
-      awareness.
-    * **Outcome writes are guarded against stale and mismatched runs.**
+    * At-most-once delivery per ``(scheduled_task_id, scheduled_time)``.
+    * Fires of the same scheduled task are serialized.
+    * One-time registrations remove themselves after firing, so no cleanup process is needed.
+    * Schedules finer than ``minimum_granularity`` are rejected, never silently rounded.
+    * The delivered payload is an ordinary agent message with a resolved ``session_id`` and a
+      ``scheduled_run`` block, so the agent runner needs no scheduling awareness.
+    * Outcome writes are guarded against stale and mismatched runs.
     """
 
     @property
@@ -41,9 +37,8 @@ class Scheduler(ABC):
     def upsert(self, task: ScheduledTask) -> ScheduledTask:
         """Persist the row and register (or replace) its timer registration.
 
-        The row is written first, then registered; a registration failure rolls the row
-        back to its prior state, because a row without a registration would silently never
-        fire.
+        The row is written first, then registered. A registration failure rolls the row back
+        to its prior state, since a row without a registration would silently never fire.
 
         :param task: The scheduled task to persist and register.
         :return: The persisted scheduled task.
@@ -54,8 +49,7 @@ class Scheduler(ABC):
     def delete(self, scheduled_task_id: str) -> None:
         """Remove the timer registration, then soft-delete the row. Idempotent.
 
-        Ordering is deliberate: stopping future fires is the safe half, so it happens
-        first.
+        Deregistering first stops future fires even if the row write then fails.
 
         :param scheduled_task_id: Identity of the scheduled task to delete.
         """
@@ -90,9 +84,8 @@ class Scheduler(ABC):
     ) -> bool:
         """Record a terminal run outcome on the row.
 
-        There is deliberately no ``mark_run_started``: only terminal outcomes are
-        recorded, so a stuck run is visible from queue metrics instead of costing a write
-        on every fire.
+        There is no ``mark_run_started`` counterpart: recording only terminal outcomes avoids
+        a write on every fire, and a stuck run is already visible from queue metrics.
 
         :param scheduled_task_id: Identity of the scheduled task the run belongs to.
         :param scheduled_task_version: Incarnation token carried by the fire.
@@ -100,6 +93,6 @@ class Scheduler(ABC):
         :param status: The run's terminal status.
         :param last_error: Error detail when the run failed.
         :return: False (a logged no-op) when a guard rejects the write; True when recorded.
-        :raises SchedulerError: Only on store or infrastructure failure — a guard rejection
-            and an infrastructure failure are deliberately different outcomes.
+        :raises SchedulerError: Only on store or infrastructure failure, never on a guard
+            rejection.
         """

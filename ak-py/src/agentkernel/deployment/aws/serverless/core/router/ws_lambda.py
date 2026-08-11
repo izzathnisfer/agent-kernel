@@ -376,8 +376,8 @@ class SystemRoutesHandler(LambdaWSHandler):
     ) -> Tuple[int, Dict[str, Any]]:
         """Register a chat frame to run later and broadcast the acknowledgement.
 
-        The acknowledgement travels the caller's live connection, sent here rather than by
-        the response handler, so it never travels the queues.
+        The acknowledgement is sent here rather than by the response handler, so it goes out on
+        the caller's live connection without passing through the queues.
 
         :param event: WebSocket event dictionary.
         :param ws_message_info: The parsed frame and its authenticated user.
@@ -452,8 +452,8 @@ class SystemRoutesHandler(LambdaWSHandler):
             if not request.request_id:
                 raise ValueError("request_id is required")
 
-            # Before the session_id check: without this branch a frame carrying a schedule
-            # would be enqueued and executed immediately instead of scheduled.
+            # Checked before session_id: without this branch a frame carrying a schedule would
+            # be enqueued and executed immediately instead of scheduled.
             if request_body.schedule is not None:
                 return self._create_scheduled_task(event, ws_message_info)
 

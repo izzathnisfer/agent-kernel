@@ -6,16 +6,14 @@ from typing import Any, Callable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-# Session ids derived for scheduled runs carry this prefix. scheduled_task_id is
-# caller-choosable and shares a namespace with user-supplied session ids, so without
-# the prefix a user session whose id equals a scheduled task's id would share
-# conversation state with that task's runs.
+# Prefix for session ids derived for scheduled runs. Since scheduled_task_id is
+# caller-chosen and shares a namespace with user-supplied session ids, without the prefix a
+# user session named after a scheduled task would share conversation state with its runs.
 SCHEDULED_SESSION_PREFIX = "schedule:"
 
-# Volatile-cache key under which ChatService binds the request's authenticated user id to
-# the session. Tool code needs the caller's identity (a scheduled task must have an
-# unforgeable human owner) but user_id is deliberately kept out of the agent's request
-# context, so it travels on the session instead.
+# Volatile-cache key under which ChatService binds the request's authenticated user id to the
+# session. Tool code needs the caller's identity to own a scheduled task, but user_id is kept
+# out of the agent's request context, so it travels on the session instead.
 REQUEST_USER_ID_KEY = "ak.request.user_id"
 
 
@@ -223,9 +221,9 @@ class ScheduleMode(str, Enum):
 
 
 class ScheduleSpec(BaseModel):
-    """The timing expression plus conversation mode — the ``schedule`` block on a chat body.
+    """The ``schedule`` block on a chat body: a timing expression plus conversation mode.
 
-    Exactly one of ``cron``, ``rate`` or ``at`` must be supplied. ``id`` is the optional
+    Exactly one of ``cron``, ``rate`` or ``at`` must be supplied. ``id`` is an optional
     caller-supplied scheduled_task_id, which makes creation idempotent.
     """
 
@@ -248,9 +246,8 @@ class ScheduleSpec(BaseModel):
 class ScheduledRunMetadata(BaseModel):
     """Correlation metadata for one fire of a scheduled task.
 
-    Stamped by the timer at fire time, echoed through the response verbatim, and read
-    only by the output consumer — its presence is how a consumer tells a scheduled run
-    from an ordinary one.
+    Stamped by the timer at fire time, echoed through the response verbatim, and read only by
+    the output consumer, which uses its presence to tell a scheduled run from an ordinary one.
     """
 
     scheduled_task_id: str
@@ -262,9 +259,9 @@ class ScheduledRunMetadata(BaseModel):
     def from_body(cls, body: dict) -> "ScheduledRunMetadata | None":
         """Extract the block from an already-parsed body.
 
-        The output consumers call this on every output-queue message, so the miss costs
-        one ``dict.get`` and nothing else. A malformed block raises ``ValidationError``:
-        on the ordinary path that is a real bug worth surfacing.
+        The output consumers call this on every output-queue message, so a miss costs one
+        ``dict.get``. A malformed block raises ``ValidationError``, which on the ordinary path
+        is a real bug worth surfacing.
 
         :param body: The parsed response/request body.
         :return: The parsed metadata, or None when the body carries no block.
@@ -280,8 +277,8 @@ class ScheduledRunMetadata(BaseModel):
     def from_raw_body(cls, raw_body: "str | bytes | dict | None") -> "ScheduledRunMetadata | None":
         """Extract the block from a raw, possibly-unparseable queue body.
 
-        Called only from the runners' ``on_permanent_failure``, which has no error channel
-        left and must never raise — so every parse and validation failure returns None.
+        Called only from the runners' ``on_permanent_failure``, which has no error channel left
+        and must never raise, so every parse and validation failure returns None.
 
         :param raw_body: The raw SQS record body.
         :return: The parsed metadata, or None when it cannot be extracted.

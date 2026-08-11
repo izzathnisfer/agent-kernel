@@ -96,8 +96,8 @@ class TestOwnership:
 class TestSessionIds:
     def test_per_run_sessions_are_resolved_at_fire_time(self, service, store):
         ack = _create(service, spec=ScheduleSpec(rate="1 hour", id="a", mode=ScheduleMode.PER_RUN))
-        # The template carries no stable session, so the acknowledgement omits the field
-        # rather than returning something that looks usable and is not.
+        # A per-run task has no stable session, so the ack omits the field rather than
+        # returning a template that looks like a usable session id.
         assert ack.session_id is None
 
     def test_continuous_sessions_are_stable_and_prefixed(self, service):

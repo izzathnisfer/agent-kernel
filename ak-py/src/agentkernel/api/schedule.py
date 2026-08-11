@@ -45,8 +45,8 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
     - PUT /api/v1/schedule/{scheduled_task_id}: Change the schedule or the message
     - DELETE /api/v1/schedule/{scheduled_task_id}: Stop the task and soft-delete the row
 
-    An ``Authoriser`` is mandatory: every scheduled task must have an unforgeable owner, so
-    routes that could create ownerless state must never be open.
+    An ``Authoriser`` is mandatory: every route acts on a specific owner's tasks, so none of
+    them may run without a resolved identity.
     """
 
     SCHEDULE_PATH = "/api/v1/schedule"
@@ -56,8 +56,7 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
         """
         :param authoriser: Resolves a Bearer token to the owning identity. Required.
         :param service: The shared scheduling service; resolved from config when omitted.
-        :raises AKConfigError: No Authoriser was supplied — the loud initialization failure
-            that keeps unowned scheduled tasks impossible.
+        :raises AKConfigError: No Authoriser was supplied, so ownership could not be enforced.
         """
         self._log = logging.getLogger("ak.api.schedule")
         if authoriser is None:

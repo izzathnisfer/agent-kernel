@@ -58,17 +58,17 @@ class TestRecordBeforeDiscard:
 
         assert ScheduledRunRecorder.record_before_discard(raw_body) is False
         scheduler.mark_run_completed.assert_not_called()
-        # The ordinary path deliberately surfaces the same body as a bug.
+        # record() raises on the same body, because on the ordinary path it is a bug.
         with pytest.raises(ValidationError):
             ScheduledRunRecorder.record(raw_body)
 
     def test_a_failed_write_is_swallowed_and_logged(self, scheduler, caplog):
         scheduler.mark_run_completed.side_effect = RuntimeError("dynamodb unavailable")
 
+        # Still True even though nothing was written: the caller must skip broadcast and store.
         with caplog.at_level("ERROR"):
             assert ScheduledRunRecorder.record_before_discard(json.dumps({"result": "tick", "scheduled_run": SCHEDULED_RUN})) is True
 
-        # True even though nothing was written: the caller must still skip broadcast and store.
         assert "Lost the outcome of a scheduled run" in caplog.text
         for identifier in ("schedule_a", "v1", "exec-1"):
             assert identifier in caplog.text

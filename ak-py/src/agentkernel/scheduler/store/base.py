@@ -1,8 +1,7 @@
 """The ``ScheduledTaskStore`` ABC and the builder that resolves its backend.
 
-The store is a private collaborator of the ``Scheduler``, not a public seam: pluggability
-here is about supporting three storage backends behind one timer implementation, not about
-giving other components a way in.
+The store is a private collaborator of the ``Scheduler``, not a public seam. It is pluggable
+only so that three storage backends can sit behind one timer implementation.
 """
 
 import base64
@@ -123,8 +122,8 @@ class ScheduledTaskStore(ABC):
     def update_fields(self, scheduled_task_id: str, fields: dict[str, Any], *, expected_version: Optional[str] = None) -> bool:
         """Write a subset of attributes, leaving every other attribute untouched.
 
-        This is what lets a management ``PUT`` and an outcome write interleave without
-        either clobbering the other's fields — a whole-row ``put`` could not express it.
+        Lets a management ``PUT`` and an outcome write interleave without clobbering each
+        other's fields, which a whole-row ``put`` cannot express.
 
         :param scheduled_task_id: Identity of the row to update.
         :param fields: Attribute names mapped to their new values.
@@ -146,8 +145,8 @@ class ScheduledTaskStore(ABC):
     def list_by_owner(self, owner_id: str, *, limit: Optional[int] = None, cursor: Optional[str] = None) -> ScheduledTaskPage:
         """Return one page of an owner's live rows.
 
-        Each backend excludes soft-deleted rows itself, and the returned page size
-        reflects live rows — a page is never short because tombstones were filtered out.
+        Each backend excludes soft-deleted rows itself, so the page size reflects live rows
+        and is never short because tombstones were filtered out.
 
         :param owner_id: The owner whose rows to list.
         :param limit: Maximum number of rows in the page.
@@ -159,8 +158,8 @@ class ScheduledTaskStore(ABC):
     def remove(self, scheduled_task_id: str) -> None:
         """Physically remove a row, leaving no tombstone. Idempotent.
 
-        Used only to roll back a creation whose timer registration failed: a tombstone
-        there would block retrying the create at the same id.
+        Used only to roll back a creation whose timer registration failed, where a tombstone
+        would block retrying the create at the same id.
 
         :param scheduled_task_id: Identity of the row to remove.
         """
@@ -181,9 +180,9 @@ class ScheduledTaskStore(ABC):
 class ScheduledTaskStoreBuilder:
     """Resolves the scheduled-task store from ``session.type``.
 
-    The backend is deliberately not configured separately: DynamoDB sessions get a
-    dedicated table, Redis/Valkey sessions reuse their cluster with a separate keyspace, so
-    no new infrastructure is provisioned for the latter two.
+    The backend is not configured separately. DynamoDB sessions get a dedicated table;
+    Redis and Valkey sessions reuse their cluster under a separate keyspace, so those two
+    need no new infrastructure.
     """
 
     _log = logging.getLogger("ak.scheduler.store.builder")

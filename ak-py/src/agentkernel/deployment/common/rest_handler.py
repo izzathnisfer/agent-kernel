@@ -21,9 +21,8 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
     """Queue-aware REST handler; adds queue-based enqueue/poll chat routes when an input queue is configured.
 
     A chat body carrying a ``schedule`` block is registered to run later instead of being
-    enqueued for execution. That branch lives here, in the provider-agnostic base, because
-    it contains nothing AWS-specific — a future queue-mode target inheriting this class gets
-    the create path for free.
+    enqueued for execution. That branch lives in this provider-agnostic base because it
+    contains nothing AWS-specific, so any queue-mode target inheriting it gets the create path.
     """
 
     # Poll route reuses the chat path (GET vs the enqueue POST).
@@ -33,8 +32,8 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         """
         :param logger_name: Deployment-specific logger name.
         :param authoriser: Resolves the owner of a scheduled task. Required when
-            ``scheduler.enabled``, because every scheduled task must have an unforgeable
-            owner and failing at startup beats failing at the first create.
+            ``scheduler.enabled``, so a deployment that cannot establish ownership fails at
+            startup rather than at the first create.
         :raises AKConfigError: Scheduling is enabled but no Authoriser was supplied.
         """
         super().__init__()
@@ -71,8 +70,8 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         :param request: The incoming request, used to resolve the scheduled task's owner.
         """
         try:
-            # Before the session_id check: a scheduled create legitimately has none — the
-            # service derives one.
+            # Checked before session_id, which a scheduled create legitimately omits because
+            # the service derives one.
             if body.schedule is not None:
                 return await self._create_scheduled_task(body, request)
 
@@ -132,9 +131,9 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
     async def _create_scheduled_task(self, body: BaseRunRequest, request: Optional[Request]) -> JSONResponse:
         """Register a chat body to run later and acknowledge the registration.
 
-        The acknowledgement is returned directly in both REST modes: there is no run to wait
-        for, so the REST_SYNC response-store wait is skipped entirely, and run outcomes are
-        read from ``GET /api/v1/schedule/{scheduled_task_id}`` rather than by polling.
+        The acknowledgement is returned directly in both REST modes. There is no run to wait
+        for, so the REST_SYNC response-store wait is skipped and run outcomes are read from
+        ``GET /api/v1/schedule/{scheduled_task_id}`` rather than by polling.
 
         :param body: The chat body carrying the ``schedule`` block.
         :param request: The incoming request, used to resolve the owner.

@@ -1,11 +1,9 @@
 """Data shapes of the scheduled-task capability.
 
-``ScheduleSpec``, ``ScheduleMode`` and ``ScheduledRunMetadata`` are *defined* in
-``core/model.py`` and re-exported here: they are fields (or field types) on
-``BaseRunRequest``, and Pydantic resolves field annotations to real classes when the model
-class is constructed at import time, so no lazy import could satisfy them. Defining them
-in core keeps the dependency pointing one way — ``core/`` imports nothing from
-``scheduler/``.
+``ScheduleSpec``, ``ScheduleMode`` and ``ScheduledRunMetadata`` are defined in
+``core/model.py`` and re-exported here. They are fields on ``BaseRunRequest``, and Pydantic
+resolves field annotations at import time, so a lazy import cannot satisfy them. Defining
+them in core keeps the dependency one-way: ``core/`` imports nothing from ``scheduler/``.
 """
 
 from datetime import datetime
@@ -50,13 +48,13 @@ class ScheduledTask(BaseModel):
     """
 
     scheduled_task_id: str
-    # Incarnation token. Caller-chosen ids are reusable after a deleted row's TTL expires,
-    # so an outcome write carries this to prove it belongs to the row it is landing on.
+    # Incarnation token. Caller-chosen ids become reusable once a deleted row's TTL expires,
+    # so an outcome write carries this to prove it belongs to the row it lands on.
     scheduled_task_version: str
     owner_id: str
     schedule: ScheduleSpec
-    # The agent message template the timer delivers, with the provider's substitution
-    # placeholders still in place, so a GET shows exactly what will be sent.
+    # The agent message the timer delivers, with the provider's substitution placeholders
+    # still in place, so a GET shows exactly what will be sent.
     message: dict[str, Any]
     status: TaskStatus = TaskStatus.ACTIVE
     created_at: datetime
@@ -78,21 +76,20 @@ class ScheduledTaskPage(BaseModel):
 
 
 class CreateAck(BaseModel):
-    """Acknowledgement of a registration — never of a run.
+    """Acknowledgement that a task was registered, not that a run happened.
 
-    Delivered on the same channel the caller would have received a chat reply on. Run
-    outcomes are observed through ``GET /api/v1/schedule/{scheduled_task_id}``.
+    Delivered on the channel the caller would have received a chat reply on. Run outcomes are
+    observed through ``GET /api/v1/schedule/{scheduled_task_id}``.
     """
 
     status: Literal["SCHEDULED"] = "SCHEDULED"
     scheduled_task_id: str
     scheduled_task_version: str
-    # Populated for CONTINUOUS mode only. In PER_RUN the session id is a substitution
-    # template resolved at fire time, and returning the raw template would look like a
-    # usable session id without being one.
+    # CONTINUOUS mode only. A PER_RUN session id is a template resolved at fire time, which
+    # would look like a usable session id without being one.
     session_id: Optional[str] = None
-    # Best-effort: the next fire time when derivable from the expression without
-    # evaluating it; None for cron expressions. Never means "not scheduled".
+    # Best-effort: set when derivable from the expression, None for cron. None never means
+    # "not scheduled".
     next_run_at: Optional[datetime] = None
     # Correlates the create call itself, not a run — creation enqueues nothing.
     request_id: str

@@ -1,8 +1,8 @@
 """Exception hierarchy for the scheduled-task capability.
 
-Every scheduling failure is a subclass of :class:`SchedulerError`. A *run* that fails is
-not an error here — it is recorded on the row as ``last_run_status = FAILED``. These
-exceptions signal failures of the scheduling machinery only.
+Every scheduling failure is a subclass of :class:`SchedulerError`. These signal failures of
+the scheduling machinery only. A failed *run* is not an error here; it is recorded on the row
+as ``last_run_status = FAILED``.
 """
 
 
@@ -13,8 +13,8 @@ class SchedulerError(Exception):
 class ScheduleValidationError(SchedulerError):
     """The schedule expression is invalid, or finer than the provider's granularity.
 
-    Mapped to HTTP 400; raised before any provider call so a bad expression never
-    reaches the timer.
+    Mapped to HTTP 400. Raised before any provider call, so a bad expression never reaches
+    the timer.
     """
 
 

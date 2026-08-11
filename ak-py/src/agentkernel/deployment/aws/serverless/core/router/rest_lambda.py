@@ -15,8 +15,8 @@ from .common import BaseLambdaRouter
 class UnauthenticatedScheduleError(Exception):
     """A schedule request arrived with no API Gateway authorizer context.
 
-    Python cannot observe whether Terraform attached the authorizer to the route, so the
-    identity requirement is enforced per request here rather than at initialization.
+    Python cannot see whether Terraform attached the authorizer to the route, so the identity
+    requirement is enforced per request rather than at initialization.
     """
 
 
@@ -428,12 +428,10 @@ class RESTLambdaRouter(BaseLambdaRouter):
     ) -> Optional[Callable[[Dict[str, Any], Any], Any]]:
         """Resolve a route registered under a path template rather than a literal path.
 
-        This router matches on an exact string lookup of the resolved path and has no
-        path-parameter support, so a route like ``/schedule/{scheduled_task_id}`` could
-        never match. API Gateway supplies the matched resource template on the event, which
-        is exactly the key such a route is registered under.
-
-        Reached only where dispatch previously raised, so existing behaviour is unchanged.
+        This router looks routes up by exact path string and has no path-parameter support, so
+        a route like ``/schedule/{scheduled_task_id}`` could never match. API Gateway puts the
+        matched resource template on the event, which is the key such a route is registered
+        under. Only reached where dispatch previously raised, so existing behaviour is unchanged.
 
         :param event: API Gateway event.
         :param method: The normalized HTTP method.

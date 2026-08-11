@@ -5,8 +5,8 @@ Layout (keys under the configured prefix):
   - Owner index: ``{prefix}owner:{owner_id}``        -> set of scheduled_task_ids
   - Update lock: ``{prefix}lock:{scheduled_task_id}`` -> short-lived SET NX guard
 
-Unlike DynamoDB there is no sparse index to lean on — the owner set is the only index
-there is — so ``list_by_owner`` filters tombstones out on read.
+The owner set is the only index available, so unlike DynamoDB there is no sparse index to
+lean on and ``list_by_owner`` filters tombstones out on read.
 """
 
 import json
@@ -20,8 +20,8 @@ from ..errors import SchedulerConflictError
 from ..model import ScheduledTask, ScheduledTaskPage
 from .base import PageCursor, ScheduledTaskStore, TaskSerializer
 
-# A row is one JSON string, so a partial update is a read-merge-write. The lock closes
-# that window; it is short because the critical section is two round trips.
+# A row is one JSON string, so a partial update is a read-merge-write. The lock closes that
+# window and is short-lived because the critical section is only two round trips.
 UPDATE_LOCK_TTL_SECONDS = 5
 UPDATE_LOCK_ATTEMPTS = 20
 UPDATE_LOCK_RETRY_DELAY_SECONDS = 0.05
@@ -86,12 +86,12 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
             index += 1
             record = self._read_record(task_id)
             if record is None:
-                # The row key expired but the set member did not — prune it, or the index
-                # grows without bound after every TTL expiry.
+                # The row key expired but its set member did not. Prune it, or the index grows
+                # without bound after every TTL expiry.
                 self._driver.client.srem(owner_key, task_id)
                 continue
-            # A tombstone is filtered from the listing but kept in the index: the row is
-            # still readable during the grace window and must stay get-able.
+            # A tombstone is hidden from the listing but kept in the index, since the row must
+            # stay readable during the grace window.
             if not record.get("deleted"):
                 items.append(TaskSerializer.from_record(record))
 
@@ -107,8 +107,8 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
     def soft_delete(self, scheduled_task_id: str, deleted_at: datetime, ttl_seconds: int) -> None:
         self._log.debug("Soft-deleting scheduled task %s with a %ss grace window", scheduled_task_id, ttl_seconds)
         self.update_fields(scheduled_task_id, {"deleted": True, "deleted_at": deleted_at})
-        # The driver's expire() can only apply its own configured TTL, and the soft-delete
-        # window is derived per call, so this goes through the native handle.
+        # The native handle, because the driver's expire() can only apply its own configured
+        # TTL while the soft-delete window is derived per call.
         self._driver.client.expire(name=self._row_key(scheduled_task_id), time=int(ttl_seconds))
 
     def _read_record(self, scheduled_task_id: str) -> Optional[dict[str, Any]]:

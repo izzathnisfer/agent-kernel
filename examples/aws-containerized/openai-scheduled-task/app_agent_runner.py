@@ -2,13 +2,12 @@ from agentkernel.aws import ECSAgentRunner
 from agentkernel.openai import OpenAIModule
 from agents import Agent
 
-# The agent needs no scheduling awareness. A fire arrives as an ordinary agent message, so
-# this runs exactly as it would for a request that came in over HTTP.
+# The agent needs no scheduling awareness: a fire arrives as an ordinary agent message and
+# runs just as a request over HTTP would.
 #
-# The scheduling tools (create/update/delete/list_scheduled_task) are attached automatically
-# when scheduler.enabled is set and the deployment grants the runner scheduler access via
-# scheduled_task_config.enable_agent_tools. They carry their own usage guidance, so the
-# instructions below deliberately say nothing about them.
+# The scheduling tools are attached automatically when scheduler.enabled is set and
+# scheduled_task_config.enable_agent_tools grants the runner scheduler access. They carry
+# their own usage guidance, so the instructions below say nothing about them.
 assistant_agent = Agent(
     name="assistant",
     instructions="You are a helpful assistant. Give short and direct answers.",

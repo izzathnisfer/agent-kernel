@@ -597,7 +597,7 @@ class _SchedulerDynamoDBConfig(BaseModel):
     table_name: str = Field(
         default="ak-scheduled-tasks",
         description="Dedicated DynamoDB table for scheduled tasks. Partition key 'scheduled_task_id' (S), "
-        "GSI 'owner_id-index' on 'owner_id' (S) / 'created_at' (S), TTL attribute 'expiry_time'. "
+        "sparse GSI 'owner-index' on 'owner_index_key' (S) / 'created_at' (S), TTL attribute 'expiry_time'. "
         "Never a partition of the session or response-store table.",
     )
 
@@ -621,8 +621,8 @@ class _SchedulerValkeyConfig(BaseModel):
 class _SchedulerConfig(BaseModel):
     """Scheduled task support. Requires AWS, queue mode, and a durable session store.
 
-    The block carries no scheduled-task definitions: scheduled tasks are defined one way,
-    at runtime by an authenticated caller.
+    This block holds no scheduled-task definitions. Tasks are only ever defined at runtime,
+    by an authenticated caller.
     """
 
     enabled: bool = Field(default=False, description="Enable scheduled tasks")

@@ -123,10 +123,9 @@ class SchedulerFactory:
     def _validate_backend_block(config: AKConfig) -> None:
         """Reject a scheduler backend block that contradicts the resolved session type.
 
-        The store is *derived* from ``session.type`` rather than declared, so both halves
-        matter: a missing block would fail late inside a connection attempt, and a
-        populated-but-unread block means the operator believes they configured storage that
-        will never be used.
+        The store is derived from ``session.type`` rather than declared, so both directions
+        are checked: a missing block would otherwise fail late inside a connection attempt,
+        and a populated block for another backend would never be read.
 
         :param config: The loaded configuration.
         :raises AKConfigError: The required block is missing, or a non-matching one is set.

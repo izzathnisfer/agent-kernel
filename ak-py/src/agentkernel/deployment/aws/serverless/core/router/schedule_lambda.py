@@ -25,9 +25,9 @@ from ......scheduler import (
 class ScheduleEndpointsHandler:
     """Serves ``/schedule`` and ``/schedule/{scheduled_task_id}`` on API Gateway.
 
-    Identity comes from the request authorizer's ``principalId``: Python cannot observe
-    whether Terraform attached the authorizer, so a request without that context is
-    rejected per request with 401 rather than at initialization.
+    Identity comes from the request authorizer's ``principalId``. Python cannot see whether
+    Terraform attached the authorizer, so a request arriving without that context is rejected
+    with 401 rather than caught at initialization.
     """
 
     LIST_PATH = "/schedule"

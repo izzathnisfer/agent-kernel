@@ -1,8 +1,8 @@
 """The single place all scheduling logic lives.
 
-Three callers — the chat create path, the ``/api/v1/schedule`` routes, and the
-agent-callable tools — and no parallel code paths. It is **not** a peer of ``ChatService``:
-it never runs an agent, it only registers and manages schedules.
+Its three callers — the chat create path, the ``/api/v1/schedule`` routes, and the
+agent-callable tools — all go through it, so there are no parallel code paths. Unlike
+``ChatService`` it never runs an agent; it only registers and manages schedules.
 """
 
 import logging
@@ -117,8 +117,8 @@ class ScheduledTaskService:
                     owner_id=existing.owner_id,
                 ),
                 "updated_at": datetime.now(timezone.utc),
-                # A PUT on a fired one-time task re-arms it: the same scheduled task,
-                # rescheduled, so the version is retained.
+                # An update on a fired one-time task re-arms it. It is the same scheduled
+                # task rescheduled, so the version is retained.
                 "status": TaskStatus.ACTIVE,
                 "completed_at": None,
             }
@@ -221,10 +221,9 @@ class ScheduledTaskService:
     def _build_message(*, prompt: Optional[str], agent: Optional[str], owner_id: str) -> dict[str, Any]:
         """Build the agent message template the timer delivers.
 
-        The owner is stamped here from a resolved parameter, never read from a request
-        body, so it cannot be forged or overridden. ``session_id`` is deliberately absent:
-        the provider resolves it at registration, since only the provider knows how its
-        timer expresses the fire time.
+        The owner is stamped from a resolved parameter, never read from a request body, so it
+        cannot be forged. ``session_id`` is absent because only the provider knows how its
+        timer expresses the fire time, so the provider fills it in at registration.
 
         :param prompt: The prompt the agent receives on every fire.
         :param agent: The agent to run; omitted when None.

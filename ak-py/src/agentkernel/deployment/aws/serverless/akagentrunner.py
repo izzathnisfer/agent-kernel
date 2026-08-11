@@ -163,15 +163,15 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
             error_message_body = cls._construct_error_message_body(
                 error_msg=f"Failed to process message. Retried {cls._get_max_receive_count()} times"
             )
-            # Echoing the block is what makes a retry-exhausted scheduled run recordable as
-            # FAILED without any DLQ involvement. from_raw_body never raises.
+            # Echoing the block lets the output consumer record a retry-exhausted run as
+            # FAILED, with no DLQ involved. from_raw_body never raises.
             scheduled_run = ScheduledRunMetadata.from_raw_body(record.get("body"))
             if scheduled_run is None:
                 error_message_body["session_id"] = record_attributes["message_group_id"]
             else:
                 error_message_body["scheduled_run"] = scheduled_run.model_dump(mode="json")
-                # For a fire the group id is the scheduled_task_id, not a session id, so the
-                # session id has to come from the message itself.
+                # A fire's group id is the scheduled_task_id, not a session id, so the session
+                # id has to come from the message body.
                 session_id = cls._parse_session_id(record)
                 if session_id:
                     error_message_body["session_id"] = session_id

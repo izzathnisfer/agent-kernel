@@ -5,14 +5,11 @@ Layout: partition key ``scheduled_task_id``, no sort key; a sparse global second
 attribute ``expiry_time`` written only by ``soft_delete``.
 
 ``owner_index_key`` mirrors ``owner_id`` while the row is live and is removed by
-``soft_delete``, which is how ``list_by_owner``'s live-rows-only contract is met here. The
-alternative — keeping tombstones in the index and filtering them out with a
-``FilterExpression`` — filters *after* the read, so a page of ``limit`` items can come back
-with fewer (or zero) live rows while ``LastEvaluatedKey`` is still set. Dropping the index
-key instead takes tombstones out of the index entirely: no filter expression, no short
-pages, and no read capacity spent on rows nobody can see. The index key is a separate
-attribute rather than ``owner_id`` itself so the row stays complete and readable by primary
-key throughout the grace window, which is what the outcome-write guards need.
+``soft_delete``, which keeps tombstones out of the index and satisfies ``list_by_owner``'s
+live-rows-only contract. A ``FilterExpression`` would not: it filters after the read, so a
+page could come back with fewer live rows than ``limit`` while ``LastEvaluatedKey`` is still
+set. The index key is a separate attribute rather than ``owner_id`` itself so the row stays
+readable by primary key during the grace window, which the outcome-write guards need.
 """
 
 import time
@@ -103,8 +100,8 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
         if start_key is not None:
             kwargs["ExclusiveStartKey"] = start_key
 
-        # No FilterExpression: the index is sparse (soft_delete removes owner_id), so
-        # tombstones are not in it and a page is never short because one was filtered out.
+        # No FilterExpression: soft_delete removes owner_index_key, so the sparse index holds
+        # no tombstones and a page is never short because one was filtered out.
         response = self._driver.table.query(**kwargs)
         items = [TaskSerializer.from_record(item) for item in response.get("Items", [])]
         last_key = response.get("LastEvaluatedKey")
@@ -118,8 +115,8 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
         self._log.debug("Soft-deleting scheduled task %s with a %ss grace window", scheduled_task_id, ttl_seconds)
         self._driver.table.update_item(
             Key={"scheduled_task_id": scheduled_task_id},
-            # Dropping the index key keeps the GSI sparse, so the tombstone leaves the
-            # listing index entirely while the row itself stays get-able by primary key.
+            # Removing the index key drops the tombstone out of the GSI while the row itself
+            # stays readable by primary key.
             UpdateExpression="SET #deleted = :deleted, #deleted_at = :deleted_at, #ttl = :ttl REMOVE #owner_index",
             ExpressionAttributeNames={
                 "#deleted": "deleted",

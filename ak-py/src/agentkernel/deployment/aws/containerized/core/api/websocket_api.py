@@ -235,8 +235,8 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
 
         self._custom_routes: dict[str, Callable] = dict(custom_routes or {})
         self._chat_service: Optional[ChatService] = None
-        # No Authoriser check here, unlike the REST chat route: a WebSocket deployment
-        # authenticates at $connect via an AuthValidator and has no Authoriser object at all.
+        # No Authoriser check, unlike the REST chat route: a WebSocket deployment authenticates
+        # at $connect via an AuthValidator and has no Authoriser object at all.
         SchedulerFactory.validate_config()
         self._schedule_service = SchedulerFactory.service()
 
@@ -409,11 +409,9 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
     async def _create_scheduled_task(self, ctx: "ECSWebSocketRequestHandler.WSRouteContext") -> JSONResponse:
         """Register a chat frame to run later and broadcast the acknowledgement.
 
-        The acknowledgement travels the caller's live connection, sent here rather than by
-        the output consumer, so it never travels the queues.
-
-        Identity needs no new mechanism: ``build_route_context`` has already resolved
-        ``ctx.user_id`` from the authenticated connection, or raised 401.
+        The acknowledgement is sent here rather than by the output consumer, so it goes out on
+        the caller's live connection without passing through the queues. The owner is
+        ``ctx.user_id``, which ``build_route_context`` already resolved or raised 401 for.
 
         :param ctx: The resolved route context for this frame.
         :return: A success envelope, or a 400 when scheduling is disabled or invalid.
@@ -469,8 +467,8 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
             if ctx.message.body is None:
                 return self.build_error_http_response(400, "body is required")
 
-            # Before the session_id check: without this branch a frame carrying a schedule
-            # would be enqueued and executed immediately instead of scheduled.
+            # Checked before session_id: without this branch a frame carrying a schedule would
+            # be enqueued and executed immediately instead of scheduled.
             if ctx.message.body.schedule is not None:
                 return await self._create_scheduled_task(ctx)
 
