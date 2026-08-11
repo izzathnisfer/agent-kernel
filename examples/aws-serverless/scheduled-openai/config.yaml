@@ -1,0 +1,42 @@
+logging:
+  ak:
+    level: DEBUG
+
+session:
+  # Scheduling needs a durable session store shared by every replica. dynamodb, redis and
+  # valkey qualify; in_memory does not and fails the enablement check at startup.
+  type: dynamodb
+  dynamodb:
+    table_name: ""   # injected by Terraform via AK_SESSION__DYNAMODB__TABLE_NAME
+
+execution:
+  mode: rest_sync
+  queues:
+    input:
+      url: ""      # injected by Terraform via AK_EXECUTION__QUEUES__INPUT__URL
+      max_receive_count: 3
+    output:
+      url: ""      # injected by Terraform via AK_EXECUTION__QUEUES__OUTPUT__URL
+      max_receive_count: 3
+  response_store:
+    type: dynamodb
+    retry_count: 10
+    delay: 3
+    dynamodb:
+      table_name: ""   # injected by Terraform via AK_EXECUTION__RESPONSE_STORE__DYNAMODB__TABLE_NAME
+      ttl: 300
+
+# Scheduled tasks. The block carries no task definitions — tasks are created at runtime by
+# an authenticated caller, through POST /api/v1/chat or the agent's own tools.
+#
+# The empty strings are deliberate, not redundant: declaring the block is what lets the
+# AK_SCHEDULER__* env vars Terraform injects land on it. An empty value counts as unset, so
+# enabling scheduling here without the matching `scheduled_task = true` in Terraform fails
+# loudly at startup rather than half-working.
+scheduler:
+  enabled: true
+  group_name: ""        # injected by Terraform via AK_SCHEDULER__GROUP_NAME
+  target_role_arn: ""   # injected by Terraform via AK_SCHEDULER__TARGET_ROLE_ARN
+  dynamodb:
+    # Session store is DynamoDB, so scheduled tasks get their own dedicated table.
+    table_name: ""      # injected by Terraform via AK_SCHEDULER__DYNAMODB__TABLE_NAME

@@ -1,0 +1,61 @@
+[project]
+name = "aws-serverless-scheduled-openai"
+version = "0.1.0"
+description = "Demo of scheduled tasks with OpenAI Agents SDK agents in Agent Kernel on AWS Lambda in queue mode"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+# Per-Lambda dependency sets. The request/response handlers only enqueue and
+# dequeue work, so they omit the (heavy) OpenAI Agents SDK; only the agent
+# runner needs it. deploy.sh installs each package with `uv export --extra <name>`.
+request_handler = [
+    "agentkernel[aws,api]>=0.8.1",
+]
+response_handler = [
+    "agentkernel[aws,api]>=0.8.1",
+]
+agent_runner = [
+    "agentkernel[aws,openai,api]>=0.8.1",
+]
+
+[dependency-groups]
+dev = [
+    "agentkernel[test]>=0.8.1",
+    "black==26.5.1",
+    "isort>=5.0.0",
+    "mypy>=1.0.0",
+]
+# The API Gateway authorizer is its own tiny Lambda: it validates a token and returns a
+# policy, so it needs neither the agent frameworks nor the AWS deployment extras' bulk.
+auth = [
+    "agentkernel[api]>=0.8.1",
+    "annotated-types==0.7.0",
+    "pydantic==2.12.5",
+    "pydantic-settings==2.12.0",
+    "pydantic_core==2.41.5",
+    "python-dotenv==1.2.2",
+    "PyYAML==6.0.3",
+    "singleton-type==0.0.5",
+    "typing-inspection==0.4.2",
+    "typing_extensions==4.15.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.black]
+line-length = 120
+target-version = ["py312"]
