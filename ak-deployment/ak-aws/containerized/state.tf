@@ -4,12 +4,12 @@ data "aws_vpc" "provided" {
 }
 
 locals {
-  vpc_id                    = var.vpc_id != null ? var.vpc_id : module.vpc[0].vpc_id
-  vpc_cidr                  = var.vpc_id != null ? data.aws_vpc.provided[0].cidr_block : var.vpc_cidr
-  subnet_ids                = var.vpc_id != null ? var.private_subnet_ids : module.vpc[0].private_subnet_ids
-  redis_url                 = var.create_redis_cluster == true ? module.redis[0].url : null
-  valkey_url                = var.create_valkey_cluster == true ? module.valkey[0].url : null
-  dynamodb_memory_table_arn = var.create_dynamodb_memory_table == true ? module.dynamodb_memory[0].table_arn : null
+  vpc_id                     = var.vpc_id != null ? var.vpc_id : module.vpc[0].vpc_id
+  vpc_cidr                   = var.vpc_id != null ? data.aws_vpc.provided[0].cidr_block : var.vpc_cidr
+  subnet_ids                 = var.vpc_id != null ? var.private_subnet_ids : module.vpc[0].private_subnet_ids
+  redis_url                  = var.create_redis_cluster == true ? module.redis[0].url : null
+  valkey_url                 = var.create_valkey_cluster == true ? module.valkey[0].url : null
+  dynamodb_memory_table_arn  = var.create_dynamodb_memory_table == true ? module.dynamodb_memory[0].table_arn : null
   dynamodb_memory_table_name = var.create_dynamodb_memory_table == true ? module.dynamodb_memory[0].table_name : null
   dynamodb_thread_table_arn  = var.create_dynamodb_thread_table == true ? module.dynamodb_thread[0].table_arn : null
   dynamodb_thread_table_name = var.create_dynamodb_thread_table == true ? module.dynamodb_thread[0].table_name : null
@@ -59,7 +59,37 @@ locals {
       overwrite_path = "/mcp/"
     }
   } : {}
-  gateway_endpoints_map = merge(local.default_gateway_map, local.mcp_gateway_map, local.user_gateway_map)
+  # Management routes for already-created scheduled tasks. The REST service serves them at a
+  # fixed /api/v1/schedule, so each route rewrites the (configurable) gateway path back to it,
+  # the same way the chat route does. Creation stays on the chat endpoint — there is no
+  # POST /schedule.
+  schedule_endpoint_path      = join("/", compact([local.api_base_segment_with_version, "schedule"]))
+  schedule_item_endpoint_path = "${local.schedule_endpoint_path}/{scheduled_task_id}"
+  schedule_gateway_map = var.scheduled_task ? merge(
+    {
+      "GET ${local.schedule_endpoint_path}" = {
+        path           = "schedule"
+        method         = "GET"
+        overwrite_path = "/api/v1/schedule"
+      }
+    },
+    {
+      for method in ["GET", "PUT", "DELETE"] :
+      "${method} ${local.schedule_item_endpoint_path}" => {
+        path           = "schedule/{scheduled_task_id}"
+        method         = method
+        overwrite_path = "/api/v1/schedule/$request.path.scheduled_task_id"
+      }
+    }
+  ) : {}
+
+  # User endpoints stay last so an operator can still override a generated route.
+  gateway_endpoints_map = merge(
+    local.default_gateway_map,
+    local.mcp_gateway_map,
+    local.schedule_gateway_map,
+    local.user_gateway_map,
+  )
 }
 
 module "vpc" {

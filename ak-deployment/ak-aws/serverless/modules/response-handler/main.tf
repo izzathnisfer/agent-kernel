@@ -299,12 +299,6 @@ resource "aws_iam_policy" "scheduler_policy" {
         ]
         Resource = var.scheduled_task_table_arn
       },
-      {
-        # The soft-delete grace window is derived from the queue's visibility timeout.
-        Effect   = "Allow"
-        Action   = ["sqs:GetQueueAttributes"]
-        Resource = var.input_queue_arn
-      },
     ]
   })
 }

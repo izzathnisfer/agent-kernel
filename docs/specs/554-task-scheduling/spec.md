@@ -1157,11 +1157,20 @@ Terraform gate and the app-level gate line up, so neither grants access the othe
 Every component that constructs a `Scheduler` needs `sqs:GetQueueAttributes` on the input queue, to
 read the visibility timeout the soft-delete TTL derives from.
 
-5. **API Gateway routes** (serverless only) — resources and methods for `/schedule` and
-   `/schedule/{scheduled_task_id}`, each with the **existing request authorizer attached**. This is
-   the deploy-time half of the identity requirement (see *Deviations from design.md* #1): the app
-   rejects a schedule request with no authorizer context, and this wiring is what guarantees the
-   context is there.
+5. **API Gateway routes** — `GET /schedule` plus `GET`/`PUT`/`DELETE` on
+   `/schedule/{scheduled_task_id}`. Both targets need them: each gateway is an explicit route
+   allow-list with no catch-all, so a route that is not declared 404s before the request reaches the
+   application.
+   - *Serverless* — REST API resources and methods, each with the **existing request authorizer
+     attached**. This is the deploy-time half of the identity requirement (see *Deviations from
+     design.md* #1): the app rejects a schedule request with no authorizer context, and this wiring is
+     what guarantees the context is there.
+   - *Containerized* — HTTP API route keys proxied to the ALB, each with an `overwrite:path` back to
+     the application's fixed `/api/v1/schedule…` path, the way the chat route already does (the
+     gateway prefix is configurable via `api_base_path`/`api_version`, the app's path is not). The
+     item routes carry the path variable through as `$request.path.scheduled_task_id`. Identity is
+     resolved in-process by the `Authoriser` here, not by a gateway authorizer. WebSocket modes are
+     unaffected — schedule actions ride the existing `$default` route.
 
 #### Outputs
 

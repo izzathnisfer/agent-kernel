@@ -184,9 +184,3 @@ variable "scheduled_task_table_arn" {
   description = "Scheduled-task DynamoDB table ARN; null when the session store is Redis/Valkey"
   default     = null
 }
-
-variable "input_queue_arn" {
-  type        = string
-  description = "ARN of the SQS input queue; the scheduler reads its visibility timeout to derive the soft-delete grace window"
-  default     = null
-}

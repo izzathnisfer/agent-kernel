@@ -408,7 +408,7 @@ variable "scaling_config" {
 
 variable "scheduled_task" {
   type        = bool
-  description = "Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role and component IAM grants. Requires queue_mode = true."
+  description = "Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role, component IAM grants, and the /schedule API Gateway routes. Requires queue_mode = true."
   default     = false
 
   # The Terraform-side twin of SchedulerFactory.validate_config()'s queue-mode check, so

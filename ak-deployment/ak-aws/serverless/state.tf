@@ -675,10 +675,9 @@ module "response_handler" {
   })
 
   # Records run outcomes: table read and update only. It never registers or removes a
-  # schedule, so it gets no EventBridge Scheduler permissions.
+  # schedule, so it gets neither EventBridge Scheduler nor input-queue permissions.
   scheduled_task           = var.scheduled_task
   scheduled_task_table_arn = var.scheduled_task ? module.scheduler[0].table_arn : null
-  input_queue_arn          = local.input_queue_arn
 
   queue_config = {
     output_queue_arn                   = local.output_queue_arn
