@@ -3,7 +3,7 @@ from typing import Optional
 from agentkernel.api import RESTRequestHandler
 from agentkernel.api.schedule import ScheduleRESTRequestHandler
 from agentkernel.aws import AWSRestAPI, ECSIOHandler
-from agentkernel.core.thread import Authoriser
+from agentkernel.auth import Authoriser
 from agentkernel.deployment.aws.containerized.core.api import ECSQueueRequestHandler
 
 

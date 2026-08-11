@@ -8,9 +8,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ...api.handler import AgentRESTRequestHandler, BearerIdentityMixin
+from ...auth import Authoriser
 from ...core.config import AKConfig
 from ...core.model import BaseRunRequest, ExecutionMode
-from ...core.thread import Authoriser
 from ...core.util.factory import AKConfigError
 from ...scheduler import SchedulerConflictError, SchedulerFactory, SchedulerPermissionError, ScheduleValidationError
 from .queue_handler import QueueHandler

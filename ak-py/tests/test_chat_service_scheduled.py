@@ -1,12 +1,15 @@
-"""ChatService's scheduling-adjacent behaviour: the response echo, the known-fields
-guard, and keeping scheduled runs out of the owner's conversation history."""
+"""Scheduling-adjacent behaviour: ChatService's response echo and known-fields guard,
+plus ThreadRecorder keeping scheduled runs out of the owner's conversation history.
+
+Thread recording lives in the thread integration, not ChatService, so the suppression
+rule is asserted against ThreadRecorder.
+"""
 
 from unittest.mock import MagicMock
 
-import pytest
-
-from agentkernel.core.chat_service import ChatService, RequestBuilder, ResponseBuilder
+from agentkernel.core.chat_service import RequestBuilder, ResponseBuilder
 from agentkernel.core.model import AgentReplyText, AgentRequestAny, BaseRunRequest, ScheduledRunMetadata
+from agentkernel.integration.thread.recorder import ThreadRecorder
 
 SCHEDULED_RUN = ScheduledRunMetadata(
     scheduled_task_id="a",
@@ -63,25 +66,25 @@ class TestThreadSuppression:
     """Scheduled activity is kept out of the owner's regular conversation history."""
 
     def test_a_scheduled_session_creates_no_thread(self):
-        service = ChatService()
         manager = MagicMock()
 
-        requests = service._thread_pre_run(manager, _fire(), ["request"])
+        requests, attachments = ThreadRecorder(manager).pre_run(_fire(), ["request"])
 
         assert requests == ["request"]
+        assert attachments == []
+        manager.store_attachments.assert_not_called()
         manager.get_or_create_thread.assert_not_called()
         manager.append_message.assert_not_called()
 
     def test_a_scheduled_session_appends_no_assistant_message(self):
         manager = MagicMock()
-        ChatService._thread_post_run(manager, _fire(), "the report")
+        ThreadRecorder(manager).post_run(_fire(), "the report")
         manager.append_message.assert_not_called()
 
     def test_an_ordinary_session_still_creates_its_thread(self):
-        service = ChatService()
         manager = MagicMock()
         manager.store_attachments.return_value = (["request"], [])
 
-        service._thread_pre_run(manager, BaseRunRequest(prompt="hi", user_id="u1", session_id="s1"), ["request"])
+        ThreadRecorder(manager).pre_run(BaseRunRequest(prompt="hi", user_id="u1", session_id="s1"), ["request"])
 
         manager.get_or_create_thread.assert_called_once()

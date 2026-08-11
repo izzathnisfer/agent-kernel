@@ -2,7 +2,7 @@ from typing import Optional
 
 from ......api.handler import RESTRequestHandler
 from ......api.http import RESTAPI
-from ......core.thread import Authoriser
+from ......auth import Authoriser
 from .....common.queue_handler import QueueHandler
 from .....common.rest_handler import RestHandler
 from ....core.response_store import ResponseDBHandler

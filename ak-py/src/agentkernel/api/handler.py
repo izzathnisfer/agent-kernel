@@ -6,11 +6,11 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict
 
+from ..auth import Authoriser
 from ..core import Config
 from ..core.chat_service import ChatService
 from ..core.model import BaseChatRequest, BaseRunRequest, ExecutionMode
 from ..core.runtime import Runtime
-from ..core.thread import Authoriser
 
 
 class BearerIdentityMixin:

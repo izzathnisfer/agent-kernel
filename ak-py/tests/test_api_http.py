@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from agentkernel.api.http import RESTAPI
 from agentkernel.api.schedule import ScheduleRESTRequestHandler as _ScheduleHandlerClass
+from agentkernel.auth import Authoriser
 from agentkernel.auth.handler import AuthValidator, ValidationResult
-from agentkernel.core.thread import Authoriser
 from agentkernel.core.util.factory import AKConfigError
 
 

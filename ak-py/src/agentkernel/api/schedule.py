@@ -10,8 +10,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from ..auth import Authoriser
 from ..core.model import ScheduleSpec
-from ..core.thread import Authoriser
 from ..core.util.factory import AKConfigError
 from ..scheduler import (
     ScheduledTaskService,

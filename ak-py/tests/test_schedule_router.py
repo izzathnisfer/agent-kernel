@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agentkernel.api.schedule import ScheduleRESTRequestHandler
-from agentkernel.core.thread import Authoriser
+from agentkernel.auth import Authoriser
 from agentkernel.core.util.factory import AKConfigError
 from agentkernel.scheduler.model import ScheduleSpec
 from agentkernel.scheduler.service import ScheduledTaskService

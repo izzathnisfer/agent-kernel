@@ -254,11 +254,12 @@ class _ThreadNamingConfig(BaseModel):
 
 
 class _ThreadStoreConfig(BaseModel):
-    """Configuration for Conversation Thread Support. Presence of this block enables the feature."""
+    """Configuration for Conversation Thread Support (store backend, naming). The feature is
+    enabled by mounting AgentThreadRequestHandler; this block only parameterizes it."""
 
     type: str = Field(
-        default="memory",
-        description="Thread store backend: a built-in short name (memory, redis, valkey, dynamodb, cosmosdb, firestore) or a dotted path to a ThreadStore subclass",
+        default="in_memory",
+        description="Thread store backend: a built-in short name (in_memory, redis, valkey, dynamodb, cosmosdb, firestore) or a dotted path to a ThreadStore subclass",
     )
     naming: _ThreadNamingConfig = Field(default_factory=_ThreadNamingConfig, description="Auto-naming settings for the built-in naming strategies")
     redis: Optional[_ThreadRedisConfig] = None
@@ -665,7 +666,7 @@ class AKConfig(YamlBaseSettingsModified):
     multimodal: _MultimodalConfig = Field(description="Multimodal attachment memory configurations", default_factory=_MultimodalConfig)
     thread: Optional[_ThreadStoreConfig] = Field(
         default=None,
-        description="Conversation Thread Support configurations. Feature is enabled only when this block is present.",
+        description="Conversation Thread Support configurations (store backend, naming). The feature is served by mounting AgentThreadRequestHandler; this block only parameterizes it.",
     )
 
     trace: _TraceConfig = Field(description="Tracing related configurations", default_factory=_TraceConfig)

@@ -9,7 +9,6 @@ import { ScrollTrigger } from "gsap/dist/ScrollTrigger";
 import { StepTimeline } from "../components/StepTimeline";
 import PlantParticlesBackground from "../components/PlantParticlesBackground";
 import FAQ from "../components/FAQ";
-import SandboxFlowDiagram from "../components/SandboxFlowDiagram";
 import {
   MdRocketLaunch,
   MdBugReport,
@@ -86,12 +85,12 @@ function WhatsNewBanner() {
           </svg>
         </span>
         <span ref={textRef} className={styles.whatsNewText}>
-          <strong>Knowledge Base Support</strong> - ChromaDB, Neo4j &amp;
-          Starburst Galaxy built-in, plus a custom adapter API{" "}
-          to plug in any backend.
+          <strong>Agent Kernel Execution Broker</strong> - sandboxed code
+          execution for any agent: Docker, E2B, Daytona, your own EC2,{" "}
+          or bring your own provider.
         </span>
         <Link
-          to="/docs/advanced/knowledge-bases"
+          to="/blog/agent-kernel-execution-broker"
           className={styles.whatsNewLink}
           ref={linkRef}
         >
@@ -1176,10 +1175,6 @@ function SandboxSection() {
             Each execution flows through the Agent Kernel Execution Broker to
             a pluggable provider, governed by fail-closed policies.
           </p>
-        </div>
-
-        <div className={styles.sandboxDiagramWrap}>
-          <SandboxFlowDiagram />
         </div>
 
         {/* Provider logo cards */}

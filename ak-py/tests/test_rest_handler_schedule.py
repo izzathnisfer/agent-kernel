@@ -12,7 +12,7 @@ from conftest_scheduler import enable_scheduler_config, install_scheduler, reset
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agentkernel.core.thread import Authoriser
+from agentkernel.auth import Authoriser
 from agentkernel.core.util.factory import AKConfigError
 from agentkernel.deployment.common.rest_handler import RestHandler
 from agentkernel.scheduler.model import ScheduleSpec

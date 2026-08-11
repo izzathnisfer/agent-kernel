@@ -23,7 +23,8 @@ graph TB
         F[Runtime<br/>orchestrator]
         E[Session<br/>state]
         HK[Hooks<br/>pre / post]
-        SVC[AgentService / ChatService]
+        AS[AgentService<br/>agent + session lifecycle]
+        SVC[ChatService<br/>execution core + presentation]
     end
 
     subgraph FW["Framework Adapters"]
@@ -67,7 +68,8 @@ graph TB
     D --> E
     E --> F
     HK --> F
-    F --> SVC
+    F --> AS
+    AS --> SVC
 
     C --- G
     C --- H
@@ -87,17 +89,18 @@ graph TB
     E --> N
     E --> FS
 
-    SVC --> O
+    AS --> O
     SVC --> P
     SVC --> WS
-    SVC --> Q
-    SVC --> R
+    AS --> Q
+    AS --> R
     SVC --> MSG
     SVC --> DEP
 
     style A fill:#4e85c5,stroke:#fff,stroke-width:2px,color:#fff
     style F fill:#2e8555,stroke:#fff,stroke-width:2px,color:#fff
     style SVC fill:#25c2a0,stroke:#fff,stroke-width:2px,color:#fff
+    style AS fill:#25c2a0,stroke:#fff,stroke-width:2px,color:#fff
     style KB fill:#7d5ba6,stroke:#fff,stroke-width:2px,color:#fff
     style GR fill:#7d5ba6,stroke:#fff,stroke-width:2px,color:#fff
     style MM fill:#7d5ba6,stroke:#fff,stroke-width:2px,color:#fff
@@ -110,11 +113,42 @@ graph TB
 | Layer | Components | Responsibility |
 |-------|-----------|----------------|
 | Application | Your agents and tools | Domain logic, written with any supported framework |
-| Core | `Module`, `Agent`, `Runner`, `Session`, `Runtime`, hooks, `AgentService`/`ChatService` | Framework-agnostic orchestration, state, and the run/stream pipeline |
+| Core | `Module`, `Agent`, `Runner`, `Session`, `Runtime`, hooks, `AgentService` (agent/session lifecycle for stateful clients), `ChatService` (execution core `execute`/`execute_stream` plus HTTP presentation wrappers `process_*`) | Framework-agnostic orchestration, state, and the run/stream pipeline |
 | Framework adapters | OpenAI Agents SDK, CrewAI, LangGraph, Google ADK, Smolagents | Wrap native agents behind the core abstractions |
 | System plugins | Guardrails, multimodal, conversation threads, knowledge bases, tracing | Cross-cutting features implemented as hooks, tools, and services |
 | State stores | In-memory, Redis, Valkey, DynamoDB, Cosmos DB, Firestore | Pluggable persistence for sessions, threads, attachments, and responses |
 | Execution surfaces | CLI, REST (JSON + SSE), WebSocket, MCP, A2A, messaging integrations, cloud deployments | How requests reach the runtime and how replies get back out |
+
+## ChatService vs AgentService
+
+Two services sit between the execution surfaces and the `Runtime`, and they solve different problems.
+`AgentService` is a **stateful conversation object**: it holds one selected agent and one session, and
+the caller drives its lifecycle. `ChatService` is a **stateless chat-request processor**: every call
+carries the full request envelope, and agent/session resolution happens fresh per request.
+
+| | `AgentService` | `ChatService` |
+|---|----------------|---------------|
+| Statefulness | Stateful: holds the selected agent and session across calls (`select()`, `new()`, `clear()`, `load()`) | Stateless: a fresh agent/session resolution on every call |
+| Input | A prompt string (`run`) or an `AgentRequest` list (`run_multi`/`stream_multi`) | A `BaseChatRequest` envelope (prompt, agent, session_id, user_id, ...), optionally with a prebuilt `AgentRequest` list |
+| Validation and building | None: the caller prepares everything | Validates the envelope; builds the request list from the payload, or accepts a prebuilt one |
+| Output | Typed `AgentReply` / raw `StreamChunk`s | Execution core: typed reply plus session id. Presentation wrappers: JSON dicts, SSE frames, `HTTPException` |
+| Error handling | Exceptions propagate | Core: exceptions propagate. Wrappers: `ValueError` maps to 400, anything else to 500 |
+| Callers today | CLI, A2A, MCP | REST handler and deployment adapters (wrappers); messaging integrations and the thread handler (core) |
+
+**Use `ChatService`** when handling chat traffic where each request arrives self-contained with its
+`session_id`: the presentation wrappers (`process_*`) if you want the standard HTTP shapes, or the
+execution core (`execute`/`execute_stream`) if your surface owns its own transport, reply formatting,
+and error UX.
+
+**Use `AgentService`** when building an interactive or stateful client that owns a running
+conversation: selecting agents, reusing one session across turns, clearing or recreating it. The CLI's
+`!select` / `!new` / `!clear` commands are the canonical example.
+
+They are layers, not alternatives: the ChatService core drives `AgentService` internally for agent
+selection and session loading, so going through `ChatService` never bypasses `AgentService` semantics.
+And neither layer should be skipped: entry surfaces never call `Runtime` directly, and behavior that
+must apply to every run regardless of surface belongs in a `Runtime` pre/post hook. See the
+[execution flow](./execution-flow) for the per-surface layering diagram and call rubric.
 
 ## Key Design Principles
 
@@ -155,7 +189,7 @@ Pluggable via well-defined interfaces:
 
 ```mermaid
 sequenceDiagram
-    participant U as Caller (CLI / REST / Queue / WS)
+    participant U as Caller (ChatService core / CLI / A2A / MCP)
     participant SVC as AgentService
     participant R as Runtime
     participant PH as PreHooks
