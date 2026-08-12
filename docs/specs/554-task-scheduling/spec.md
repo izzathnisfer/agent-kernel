@@ -9,8 +9,11 @@ one-sentence design idea: **a scheduled task is a stored row plus an EventBridge
 registration whose target is the existing input queue, so the fire is an ordinary agent message and
 the agent runner needs no scheduling awareness.**
 
-Applicability is unchanged from the design: AWS, queue mode, the two scalable examples
-(`examples/aws-serverless/scalable-openai`, `examples/aws-containerized/openai-dynamodb-scalable`).
+Applicability is unchanged from the design: AWS, queue mode, the two scalable deployment styles.
+The capability ships with a dedicated example per style —
+`examples/aws-serverless/scheduled-openai` and `examples/aws-containerized/openai-scheduled-task` —
+rather than switching scheduling on in the pre-existing scalable examples, so the untouched examples
+stay byte-identical and the scheduled ones can carry their own config, IAM and smoke tests.
 
 ---
 
@@ -36,25 +39,42 @@ to boto3 directly rather than importing `deployment/aws/core/sqs_handler.py`.
 ak-py/src/agentkernel/scheduler/
 ├── __init__.py          # public exports: Scheduler, ScheduledTask, ScheduleSpec, ScheduledTaskService, SchedulerFactory
 ├── base.py              # Scheduler ABC
-├── model.py             # ScheduledTask, ScheduledTaskPage, RunStatus, TaskStatus; re-exports ScheduleSpec/ScheduleMode
+├── model.py             # ScheduledTask, ScheduledTaskPage, CreateAck, RunStatus, TaskStatus; re-exports ScheduleSpec/ScheduleMode
 ├── service.py           # ScheduledTaskService
-├── factory.py           # SchedulerFactory: validate_config() + build()
+├── factory.py           # SchedulerFactory: enabled() + validate_config() + build() + service()
 ├── errors.py            # SchedulerError hierarchy
+├── expression.py        # ScheduleExpression — provider-agnostic reading of a ScheduleSpec
 ├── tools.py             # get_scheduler_tools() → list[SystemTool]
-├── testing.py           # SchedulerContract — reusable provider contract suite
+├── testing.py           # InMemoryScheduledTaskStore + SchedulerContract (imports pytest; not re-exported)
 ├── providers/
 │   ├── __init__.py
-│   └── aws.py           # AWSScheduler (EventBridge Scheduler + SQS target)
+│   └── aws.py           # AWSScheduler + AWSSchedulerBuilder (EventBridge Scheduler + SQS target)
 └── store/
     ├── __init__.py
-    ├── base.py          # ScheduledTaskStore ABC + ScheduledTaskStoreBuilder
+    ├── base.py          # ScheduledTaskStore ABC, TaskSerializer, PageCursor, ScheduledTaskStoreBuilder
     ├── dynamodb.py      # DynamoDBScheduledTaskStore
+    ├── redis_like.py    # shared Redis-protocol store body
     ├── redis.py         # RedisScheduledTaskStore
     └── valkey.py        # ValkeyScheduledTaskStore
 ```
 
 `agentkernel/api/schedule.py` holds the FastAPI route layer (mirroring `api/thread.py`), keeping the
 API surface with the other REST handlers.
+`agentkernel/deployment/common/scheduled_run_recorder.py` holds `ScheduledRunRecorder`, the shared
+outcome-recording step both output consumers call — it lives under `deployment/common/` because it
+is consumer plumbing, not part of the capability's contract.
+
+**`ScheduleExpression` (`expression.py`) is a separate collaborator, not a method on the spec.**
+Reading a `ScheduleSpec` — validate, parse a rate into an interval, derive `next_run_at`, test
+one-time-ness, normalize to UTC — is needed by the service (before any provider call), by the
+provider (when rendering the expression and when completing a one-time task) and by the contract
+tests. It takes the minimum granularity as a parameter rather than importing a provider, so nothing
+in it knows which timer will run the schedule. Keeping it out of `core/model.py` also keeps
+`ScheduleSpec` a plain data shape with only its exactly-one-expression validator.
+
+**`AWSSchedulerBuilder` is split from `AWSScheduler`** for the same reason the stores are split from
+`ScheduledTaskStoreBuilder`: the provider takes explicit constructor arguments and never reads
+`AKConfig`; the builder is the one place config is read.
 
 Governing rules for the package, in the spirit of the shared-driver rules
 (`core/util/driver/`):
@@ -102,9 +122,11 @@ class ScheduledTask(BaseModel):
     deleted_at: Optional[datetime] = None
 ```
 
-`message` holds `prompt`, `agent`, `user_id` (the owner) and the resolved `session_id` — everything
-the runner needs. It is stored as the template (with the timer's substitution placeholders in place
-for `per_run`), so `GET` shows exactly what will be delivered.
+`message` holds `prompt`, `user_id` (the owner) and `agent` when one was named. It deliberately does
+**not** hold `session_id` or `scheduled_run`: only the provider knows how its timer expresses the
+fire time, so those two are added when the payload is built at registration (see *AWS provider*).
+The row therefore stores the surface-independent half of the message, and a `GET` shows the prompt
+and agent that will be delivered rather than a provider-specific template.
 
 **`ScheduleSpec`, `ScheduleMode` and `ScheduledRunMetadata` deliberately live in `core/model.py`, not
 here**, and are re-exported from `scheduler/model.py` for callers who import the capability package.
@@ -126,6 +148,13 @@ class Scheduler(ABC):
 
     The store is a private collaborator held by the implementation; no caller resolves it.
     """
+
+    @property
+    @abstractmethod
+    def minimum_granularity(self) -> timedelta:
+        """The finest interval this provider's timer supports. Exposed so callers above the
+        ABC (the service, before any provider call) can reject a too-fine schedule without
+        knowing which provider is in use."""
 
     @abstractmethod
     def upsert(self, task: ScheduledTask) -> ScheduledTask:
@@ -193,10 +222,20 @@ class ScheduledTaskStore(ABC):
         and the returned page size reflects live rows — a page is never short because
         tombstones were filtered out of it."""
     @abstractmethod
+    def remove(self, scheduled_task_id: str) -> None:
+        """Physical removal, leaving no tombstone. Idempotent. Used only to roll back a
+        creation whose timer registration failed, where a tombstone would block retrying
+        the create at the same id."""
+    @abstractmethod
     def soft_delete(self, scheduled_task_id: str, deleted_at: datetime, ttl_seconds: int) -> None: ...
 ```
 
 One concept, one name across all three backends — no per-backend method renames.
+
+`remove` and `soft_delete` are both required and are not interchangeable: `soft_delete` is the
+user-facing lifecycle operation, which must leave the row readable by primary key throughout the
+grace window for the outcome-write guards; `remove` is the rollback operation, which must leave
+nothing behind at all.
 
 `put` and `update_fields` are both required, and the split is not cosmetic. `put` is a whole-row
 write, which cannot express the disjoint-attribute-set property the *Concurrency contract* depends
@@ -226,18 +265,24 @@ bring-your-own branch, this one does not, because it resolves off `session.type`
 `type` field.
 
 **DynamoDB layout.** Partition key `scheduled_task_id` (S), no sort key. A global secondary index
-`owner_id-index` on `owner_id` (S) with sort key `created_at` (S) serves `list_by_owner` and its
+`owner-index` on `owner_index_key` (S) with sort key `created_at` (S) serves `list_by_owner` and its
 cursor. TTL attribute is `expiry_time` — the name `DynamoDBDriver.put` already uses
 (`core/util/driver/dynamodb.py:95`).
 
-**The GSI is sparse: `owner_id` is written only while the row is live, and `soft_delete` `REMOVE`s
-it.** This is how `list_by_owner`'s live-rows-only contract is met on DynamoDB. The alternative —
-keeping `owner_id` on tombstones and adding `FilterExpression=Attr("deleted").ne(True)` — filters
-*after* the read, so a page of `limit` items can come back with fewer (or zero) live rows while
-`LastEvaluatedKey` is still set, forcing the caller into a paging loop over invisible rows. Removing
-the attribute drops tombstones out of the index entirely: no filter expression, no short pages, and
-no read capacity spent on rows nobody can see. The row itself is untouched and stays `get`-able by
-primary key throughout the grace window, which is what the guards need.
+**The GSI is sparse, and its key is a dedicated mirror attribute rather than `owner_id` itself.**
+`put` writes `owner_index_key = owner_id` while the row is live, and `soft_delete` `REMOVE`s that
+one attribute. This is how `list_by_owner`'s live-rows-only contract is met on DynamoDB. The
+alternative — keeping the index key on tombstones and adding
+`FilterExpression=Attr("deleted").ne(True)` — filters *after* the read, so a page of `limit` items
+can come back with fewer (or zero) live rows while `LastEvaluatedKey` is still set, forcing the
+caller into a paging loop over invisible rows. Removing the attribute drops tombstones out of the
+index entirely: no filter expression, no short pages, and no read capacity spent on rows nobody can
+see.
+
+**Why a mirror attribute and not `owner_id`:** the row must stay `get`-able by primary key
+throughout the grace window (the guards need it) *and* readable enough to answer "who owned this",
+so `owner_id` itself is never removed. Removing a separate index key achieves the sparse-index
+effect without mutating the row's own data.
 
 The driver is constructed with **`ttl=0`**, deliberately: `DynamoDBDriver.put` stamps `expiry_time`
 on *every* put when `ttl > 0` (`dynamodb.py:93-95`), which would expire live rows. `expiry_time` is
@@ -270,11 +315,13 @@ skipped row per tombstone within a single owner's grace window.
 ### AWS provider — `scheduler/providers/aws.py`
 
 `AWSScheduler(Scheduler)` holds three collaborators, all constructed eagerly in `__init__` (no lazy
-init — see *Concurrency contract*):
+client init — see *Concurrency contract*):
 
 - `boto3.client("scheduler")` — EventBridge Scheduler
-- `boto3.client("sqs")` — used once, at construction, for `GetQueueAttributes`
+- `boto3.client("sqs")` — used only by the delete path, for `GetQueueAttributes`
 - the `ScheduledTaskStore` from `ScheduledTaskStoreBuilder.build()`
+
+The clients are created eagerly; the *call* they make is not. See *Soft-delete TTL derivation*.
 
 **Registration.** `upsert` calls `create_schedule` / `update_schedule` in the deployment's schedule
 group (`scheduler.group_name`) with a **universal target** (`Arn` = `arn:aws:scheduler:::aws-sdk:sqs:sendMessage`,
@@ -295,7 +342,8 @@ context-variable substitution into the payload.
                                        \"run_id\": \"<aws.scheduler.execution-id>\"}}",
   "MessageGroupId": "<id>",
   "MessageDeduplicationId": "<id>:<aws.scheduler.scheduled-time>",
-  "MessageAttributes": {"request_id": {"DataType": "String", "StringValue": "<aws.scheduler.execution-id>"}}
+  "MessageAttributes": {"request_id": {"DataType": "String", "StringValue": "<aws.scheduler.execution-id>"},
+                        "user_id":    {"DataType": "String", "StringValue": "<owner_id>"}}
 }
 ```
 
@@ -304,9 +352,15 @@ time; the rest are baked in at registration. `request_id` is set because **both*
 `ValueError` without it (`containerized/akagentrunner.py:63-64`,
 `serverless/akagentrunner.py:53-54`) and both output consumers require it
 (`akoutputconsumer.py:158-160`, `akresponsehandler.py:54-56`). Using the execution id makes it unique
-per fire.
+per fire. `user_id` is set for the same reason — both runners read it off the record when
+propagating attributes to the output queue — and carries the task's owner.
 
 For `ScheduleMode.CONTINUOUS` the `session_id` is the static `schedule:<id>` — no substitution.
+
+**The provider owns the session id, not the service.** `session_id` and `scheduled_run` are added to
+the stored `message` here, when the payload is built, because the `per_run` form depends on this
+timer's substitution syntax (`<aws.scheduler.scheduled-time>`). Rule #4 — nothing above the ABC is
+AWS-aware — would be broken if `ScheduledTaskService` baked an EventBridge token into a row.
 
 **Delivery attributes.** `MessageGroupId = scheduled_task_id` serializes a scheduled task's fires;
 `MessageDeduplicationId = <scheduled_task_id>:<scheduled_time>` gives at-most-once per scheduled
@@ -335,7 +389,7 @@ delete.
 `MaximumEventAgeInSeconds = 300`, so a timer-side retry can never be delivered after SQS's fixed
 5-minute FIFO deduplication window has closed.
 
-**Soft-delete TTL derivation.** Computed once in `__init__`:
+**Soft-delete TTL derivation.** Derived on first use and cached for the life of the provider:
 
 ```python
 attrs      = sqs.get_queue_attributes(QueueUrl=input_url,
@@ -350,8 +404,17 @@ ttl        = max(visibility * receives + SAFETY_MARGIN, TTL_FLOOR)
 `visibility_timeout` comes from the queue rather than `AKConfig` because it is a queue attribute set
 by Terraform (`queue_config.input_queue_visibility_timeout`, default 60 in both targets —
 `containerized/modules/queues/variables.tf:29`, `serverless/modules/queues/variables.tf:30`) and has
-no `AKConfig` field at all. `SAFETY_MARGIN = 300` seconds and `TTL_FLOOR = 900` seconds
-(`scheduler/factory.py` module constants, both documented in the config field descriptions).
+no `AKConfig` field at all. `TTL_SAFETY_MARGIN_SECONDS = 300` and `TTL_FLOOR_SECONDS = 900` are
+module constants in `scheduler/providers/aws.py` — they belong with the provider whose queue
+semantics they are sized against, not with the config factory.
+
+**The derivation is deferred, not done in `__init__`.** Only `delete()` needs the TTL, and the
+output consumers construct a `Scheduler` solely to record run outcomes. Deriving eagerly would make
+every one of them call `GetQueueAttributes` on the input queue at startup, which in turn would force
+an `sqs:GetQueueAttributes` grant and an input-queue URL onto components that otherwise touch
+neither — the response handler is deployed with neither. Deferring keeps the grant table honest
+(see *Terraform*). It is derived at most once per process: two threads racing the first read is
+harmless, since both would resolve the same value from the same queue attributes.
 
 `receives` is the **max of two sources, and both are needed.** The queue's own
 `RedrivePolicy.maxReceiveCount` is the hard ceiling on redeliveries, but
@@ -371,12 +434,15 @@ Terraform default is 5, `containerized/modules/queues/variables.tf:31`). Taking 
 sources makes the TTL an upper bound regardless of which components received the injection, and
 removes the AKConfig-only dependency the previous derivation had.
 
-(`examples/aws-containerized/openai-dynamodb-scalable/config.yaml:15` hardcodes
-`max_receive_count: 4`, which happens to equal that example's injected `5 - 1`. That agreement is
-coincidental and does not hold for a deployment that leaves the field at its default.)
+(The two scheduled examples leave `max_receive_count` at the default 3
+(`examples/aws-serverless/scheduled-openai/config.yaml:17`,
+`examples/aws-containerized/openai-scheduled-task/config.yaml:17`) while the queue's Terraform
+default is 5, so the two sources genuinely differ there and the max is doing real work. The older
+`openai-dynamodb-scalable` example hardcodes `4`, which happens to equal its injected `5 - 1`; that
+agreement is coincidental and does not generalize.)
 
-If `GetQueueAttributes` fails, `__init__` raises — initialization fails loudly rather than falling
-back to a guessed TTL. Correctness does not depend on the number: the `scheduled_task_version` guard
+If `GetQueueAttributes` fails, the delete raises `SchedulerError` rather than falling back to a
+guessed TTL. Correctness does not depend on the number: the `scheduled_task_version` guard
 rejects a cross-incarnation outcome however short the TTL is. The derivation exists to make the
 common case unsurprising.
 
@@ -410,7 +476,8 @@ tools — and no parallel code paths.
 class ScheduledTaskService:
     def __init__(self, scheduler: Scheduler): ...
 
-    def create(self, *, spec: ScheduleSpec, prompt: str, agent: str | None, owner_id: str) -> CreateAck
+    def create(self, *, spec: ScheduleSpec, prompt: str, agent: str | None, owner_id: str,
+               request_id: str | None = None) -> CreateAck
     def update(self, scheduled_task_id: str, *, owner_id: str, spec: ScheduleSpec | None,
                prompt: str | None, agent: str | None) -> ScheduledTask
     def delete(self, scheduled_task_id: str, *, owner_id: str) -> None
@@ -420,19 +487,21 @@ class ScheduledTaskService:
 
 Responsibilities, in `create` order:
 
-1. **Validate** the `ScheduleSpec` (exactly one expression; `at` in the future; granularity).
+1. **Validate** the `ScheduleSpec` via `ScheduleExpression.validate(spec, minimum_granularity)`
+   (exactly one expression; `at` in the future; granularity; no provider-native wrapper). The
+   granularity comes off the ABC, so this stays provider-agnostic.
 2. **Generate the id** when `spec.id` is absent: `f"schedule_{uuid4().hex}"`.
 3. **Resolve the incarnation.** `scheduler.get(id, include_deleted=True)`:
    - no row → fresh `scheduled_task_version = uuid4().hex`
-   - live row owned by `owner_id` → upsert, **retaining** the existing version so in-flight runs
-     still record their outcomes
+   - live row owned by `owner_id` → upsert, **retaining** the existing version *and* `created_at`,
+     so in-flight runs still record their outcomes and the row keeps its original creation time
    - live row owned by someone else → `SchedulerPermissionError` → 403
    - soft-deleted row → `SchedulerConflictError` → 409 (deletion is terminal; the id frees up when
      the TTL expires)
-4. **Resolve the session id** — `schedule:<id>` for `continuous`, the substitution template
-   `schedule:<id>:<aws.scheduler.scheduled-time>` for `per_run`. The reserved `schedule:` prefix is
-   applied here, once, because `scheduled_task_id` is caller-choosable and shares a namespace with
-   user-supplied session ids.
+4. **Build the message template** — `prompt`, `user_id`, and `agent` when one was named. The
+   session id is **not** resolved here: it depends on how the target timer expresses the fire time,
+   so the provider fills it in at registration (see *AWS provider*). The reserved `schedule:` prefix
+   travels with it.
 5. **Stamp the owner** into the row and into `message["user_id"]`. `owner_id` is a parameter
    resolved by the caller from the authenticated identity; the service never reads it from a request
    body, so it cannot be forged or overridden.
@@ -487,8 +556,9 @@ always present:
 
 | Surface | Source |
 |---|---|
-| ECS REST, serverless REST | generated — the same `str(uuid.uuid4())` shape `enqueue_and_wait` uses (`rest_handler.py:49`) |
-| ECS WebSocket, serverless WebSocket | `BaseRequest.request_id` from the inbound frame (`core/model.py:226`) when present, generated otherwise |
+| ECS REST | generated — the surface passes none, so the service falls back to `str(uuid.uuid4())`, the same shape `enqueue_and_wait` uses (`rest_handler.py`) |
+| Serverless REST | `payload.request_id` from the API Gateway envelope, generated when absent |
+| ECS WebSocket, serverless WebSocket | `BaseRequest.request_id` from the inbound frame when present, generated otherwise |
 
 Run-level correlation is a different id: `scheduled_run.run_id`, the EventBridge execution id, unique
 per fire. The two never collide and are never interchangeable — `request_id` identifies the act of
@@ -511,28 +581,26 @@ class SchedulerFactory:
 
     @staticmethod
     def build() -> Scheduler:
-        """validate_config(), then construct the provider (which reads the queue
-        visibility timeout and derives the soft-delete TTL). Raises on failure."""
+        """validate_config(), then construct the provider via AWSSchedulerBuilder.
+        Memoized per process. Raises on failure."""
+
+    @staticmethod
+    def service() -> Optional[ScheduledTaskService]:
+        """A ScheduledTaskService over the configured scheduler, or None when disabled.
+        The one place every surface obtains the service, so no route layer repeats the
+        enabled check plus construction."""
 ```
 
 `validate_config()` enforces, in order:
 
 1. `scheduler.enabled` — when false, return immediately (nothing else is checked).
-2. `execution.queues.input.url` **and** `execution.queues.output.url` are both set. Queue mode has no
-   config flag of its own; both URLs being present is how it is detected. Either unset →
-   `AKConfigError`. A non-queue deployment fails loudly, not silently.
-3. `execution.queues.input.url` ends in `.fifo`. The duplication-prevention and serialization
-   guarantees depend on a FIFO input queue; the containerized Terraform hardcodes
-   `fifo_queue = true` (`containerized/modules/queues/main.tf:17`) but serverless exposes it as a
-   toggle defaulting to true (`serverless/modules/queues/variables.tf:50`), and disabling it would
-   silently break dedup. Since FIFO queue URLs always end in `.fifo`, the suffix check enforces it.
-4. `session.type` is one of `dynamodb`, `redis`, `valkey` — scheduling needs a durable store shared
+2. `session.type` is one of `dynamodb`, `redis`, `valkey` — scheduling needs a durable store shared
    by all replicas.
-5. `scheduler.group_name` and `scheduler.target_role_arn` are non-empty. An **empty string counts as
+3. `scheduler.group_name` and `scheduler.target_role_arn` are non-empty. An **empty string counts as
    unset**, because the examples declare these as `""` placeholders that Terraform fills via
    `AK_SCHEDULER__*` (see *Terraform*); a deployment that enables scheduling in YAML without the
    Terraform wiring must fail here rather than at the first `create_schedule` call.
-6. **The backend block matching `session.type` is present and non-empty**, and no *other* backend
+4. **The backend block matching `session.type` is present and non-empty**, and no *other* backend
    block is populated:
 
    | `session.type` | Required | Rejected |
@@ -557,26 +625,48 @@ class SchedulerFactory:
    `scheduler.type` field a mismatch would be impossible to express; deriving from `session.type`
    buys the design's "no separate backend config" property at the cost of needing this validation.
 
+**Queue mode and the FIFO input queue are not checked here.** Both are genuine preconditions, but
+neither is observable from `AKConfig` in every scheduler-enabled component: each serverless Lambda
+is given only the queue URL it publishes to, so the response handler legitimately has no input URL
+and the request handler legitimately has no output URL. A URL-presence check would therefore reject
+a correctly-wired deployment. Both preconditions are enforced at deploy time instead — a
+`validation` block requiring `queue_mode = true`, and queue modules that create a FIFO input queue
+(see *Terraform*). This is a change from an earlier draft of this spec, which checked both URLs and
+the `.fifo` suffix; `test_scheduler_config.py` pins the current behaviour with an explicit
+"missing queue URL is accepted" case so the check is not reintroduced by accident.
+
 Timing: "at initialization" means process startup on ECS and cold start on serverless — in both
 cases before the first request or scheduled execution is processed. Concretely:
 
 | Component | Call site |
 |---|---|
-| ECS REST service | `RestHandler.__init__` (`deployment/common/rest_handler.py:22-26`) and `ScheduleRESTRequestHandler.__init__`, both constructed before uvicorn starts by `AWSRestAPI.run()`, which `ECSIOHandler.run()` invokes (`ecs_io_handler.py:42-46`) |
-| ECS WebSocket service | `ECSWebSocketRequestHandler.__init__`, constructed before uvicorn starts by `AWSWebsocketAPI.run()` (`ecs_io_handler.py:34-40`). `validate_config()` and `SchedulerFactory.build()` only — **not** the `Authoriser` check, which is REST-only |
-| ECS output consumer | `ECSOutputConsumer` class body, alongside the existing `_config` class attribute (`akoutputconsumer.py:24-27`) |
-| ECS agent runner | `scheduler/tools.py:get_scheduler_tools()`, reached from `SystemToolFactory.get_all()` at agent wrap time — only when the tool set is registered |
-| Serverless request handler | `DefaultEndpointsHandler.__init__` (`serverless/core/router/rest_lambda.py:17-24`) and `SystemRoutesHandler.__init__` (`ws_lambda.py:246-251`) |
-| Serverless response handler | `ResponseHandler` class body, alongside `_response_store` (`akresponsehandler.py:19-20`) |
+| ECS REST service | `RestHandler.__init__` (`deployment/common/rest_handler.py`), constructed before uvicorn starts by `AWSRestAPI.run()`, which `ECSIOHandler.run()` invokes (`ecs_io_handler.py:42-46`). `ScheduleRESTRequestHandler.__init__` reaches it transitively through `SchedulerFactory.service()` |
+| ECS WebSocket service | `ECSWebSocketRequestHandler.__init__`, constructed before uvicorn starts by `AWSWebsocketAPI.run()` (`ecs_io_handler.py:34-40`). `validate_config()` and `SchedulerFactory.service()` only — **not** the `Authoriser` check, which is REST-only |
+| ECS output consumer | the first statement of `ECSOutputConsumer.run()`, before the polling loop starts |
+| ECS agent runner | `SchedulerFactory.service()` from a tool invocation, reached only when the tool set is registered |
+| Serverless request handler | `DefaultEndpointsHandler.__init__` (`serverless/core/router/rest_lambda.py`) and `SystemRoutesHandler.__init__` (`ws_lambda.py`) |
+| Serverless response handler | the first statement of `ResponseHandler.handle()`, before the batch is processed |
+
+**Why the two output consumers validate in `run()` / `handle()` rather than in the class body.**
+`agentkernel.aws` re-exports every deployment class, so a class-body check fires on *import* — which
+means an entry point that imports the package for an unrelated component (an agent runner, say)
+would assert on wiring only the scheduler-enabled components are given, and a deployment that omits
+those env vars from one function would fail at import in the wrong process. Moving the call to the
+first statement of the entry point keeps the failure loud and still ahead of any recorded outcome,
+while scoping it to the component that actually needs the wiring.
 
 `build()` is memoized per process (a module-level singleton behind a `threading.RLock`, the
-`ConversationThreadManager.get()` pattern) so the `GetQueueAttributes` call and the boto3 clients are
-created once per process, not per request.
+`ConversationThreadManager.get()` pattern) so the boto3 clients and the store are created once per
+process, not per request. `service()` is a thin wrapper over it and is what every surface calls.
 
 ### Core model changes — `core/model.py`
 
 ```python
 SCHEDULED_SESSION_PREFIX = "schedule:"
+
+# Volatile-cache key under which ChatService binds the request's authenticated user id to
+# the session, so tool code can resolve a trustworthy owner. See Agent-callable tools.
+REQUEST_USER_ID_KEY = "ak.request.user_id"
 
 class ScheduleMode(str, Enum):
     PER_RUN = "per_run"        # session_id = schedule:<id>:<scheduled_time>
@@ -621,7 +711,7 @@ is one `dict.get("scheduled_run")` and nothing else on the overwhelmingly common
 malformed block (a real bug worth surfacing on the ordinary path); `from_raw_body` swallows
 everything, because the permanent-failure path has no error channel left.
 
-`BaseRunRequest` (`core/model.py:217-222`) gains two optional fields, both defaulting to `None`, so
+`BaseRunRequest` (`core/model.py:309-316`) gains two optional fields, both defaulting to `None`, so
 every existing caller is unaffected:
 
 ```python
@@ -644,8 +734,8 @@ keeps the import-order test trivial: importing `agentkernel.core.model` must pul
 `agentkernel.scheduler`.
 
 **`known_fields` must be extended.** `RequestBuilder._attach_additional_context`
-(`core/chat_service.py:118-130`) turns every request field not in `known_fields` into an
-`AgentRequestAny` handed to the agent. Its current set (line 125) enumerates exactly
+(`core/chat_service.py:118-145`) turns every request field not in `known_fields` into an
+`AgentRequestAny` handed to the agent. Its pre-change set enumerated exactly
 `BaseRunRequest`'s declared fields. Without adding the two new names, a scheduled fire would push its
 own `scheduled_run` block into the agent's request list as opaque context:
 
@@ -656,7 +746,7 @@ known_fields = {"request_id", "user_id", "group_id", "thread_name", "prompt", "a
 
 This is a required change, not an optimization, and it is covered by a dedicated test.
 
-**`ResponseBuilder.build_response`** (`core/chat_service.py:277-303`) gains one optional parameter
+**`ResponseBuilder.build_response`** (`core/chat_service.py:311-347`) gains one optional parameter
 and one three-line echo:
 
 ```python
@@ -669,18 +759,29 @@ def build_response(status_code, session_id, rest_api_mode, result=None, error=No
 ```
 
 `ChatService.process_chat_request` / `process_async_chat_request` pass `scheduled_run=req.scheduled_run`
-at all four call sites (success and both error paths in each). This is a generic pass-through of an
-optional block, not scheduling logic, and it is the only change on the response side. It runs before
-the `HTTPException` raise, so an errored scheduled run still carries its correlation metadata.
+at all six call sites (success and both error paths in each). The block is read through
+`ChatService._scheduled_run(req)`, a `getattr` helper, because the multipart request shape does not
+declare the field. This is a generic pass-through of an optional block, not scheduling logic, and it
+is the only change on the response side. It runs before the `HTTPException` raise, so an errored
+scheduled run still carries its correlation metadata.
 
-**Thread auto-creation is skipped for scheduled sessions.** `ChatService._thread_pre_run`
-(`core/chat_service.py:507-541`) and `_thread_post_run` (`:543-555`) return early when
-`req.session_id` starts with the reserved `schedule:` prefix, so scheduled runs never appear in the
-owner's thread listings. `_validate_thread` (`:493-505`) is unchanged: a fire carries `user_id` (the
-owner), so the existing requirement is already satisfied. The prefix constant
-(`SCHEDULED_SESSION_PREFIX = "schedule:"`) lives in `core/model.py` next to `ScheduledRunMetadata`,
-so `core/` needs no import from `scheduler/` for this check. This is fixed behaviour, not
-configurable.
+**The request's authenticated user is bound to the session.**
+`AgentHandler.bind_request_user(req.user_id)` writes `REQUEST_USER_ID_KEY` into the session's
+volatile cache, called from all four execution entry points (`execute`, `execute_sync`, and both
+stream variants). `user_id` is deliberately kept out of the agent's request context, so this is how
+tool code reaches a trustworthy identity — see *Agent-callable tools*. It is a no-op when the
+request carries no user, so ordinary traffic is unaffected.
+
+**Thread auto-creation is skipped for scheduled sessions.** The check lives in `ThreadRecorder`
+(`integration/thread/recorder.py`), the presentation-layer wrapper that owns thread bookkeeping
+around a `ChatService` run — not in `ChatService` itself, which stays the execution core and holds
+no thread policy. `pre_run` and `post_run` both return early when `req.session_id` starts with the
+reserved `schedule:` prefix, so a scheduled run creates no thread and appends no message and never
+appears in the owner's thread listings. Returning from `pre_run` **before** the `user_id` check is
+deliberate: a scheduled run has no user turn to record at all, so the requirement is moot rather
+than satisfied. The prefix constant (`SCHEDULED_SESSION_PREFIX = "schedule:"`) lives in
+`core/model.py` next to `ScheduledRunMetadata`, so neither `core/` nor `integration/` needs an
+import from `scheduler/` for this check. This is fixed behaviour, not configurable.
 
 ### Consumer changes
 
@@ -700,8 +801,8 @@ queue is FIFO on both targets (`containerized/modules/queues/main.tf:53`; server
 `fifo_queue` variable across both queues, `serverless/modules/queues/main.tf:15,60`).
 
 The **permanent-failure path does change**, because both runners construct their error body from
-scratch without touching the record body (`containerized/akagentrunner.py:122-130`;
-`serverless/akagentrunner.py:137-156`). Each now extracts the block best-effort and echoes it:
+scratch without touching the record body (`containerized/akagentrunner.py:122-133`;
+`serverless/akagentrunner.py:153-181`). Each now extracts the block best-effort and echoes it:
 
 ```python
 # after the error body is built, before it is sent to the output queue
@@ -722,46 +823,57 @@ what makes a retry-exhausted run recordable as `FAILED` without any DLQ involvem
 
 One asymmetry must be resolved. `ServerlessAgentRunner.on_permanent_failure` sets
 `error_message_body["session_id"] = record_attributes["message_group_id"]`
-(`serverless/akagentrunner.py:150`); its ECS twin does not. For a scheduled fire the group id is the
+(`serverless/akagentrunner.py:170`); its ECS twin does not. For a scheduled fire the group id is the
 `scheduled_task_id`, not a session id, so that line would write a wrong `session_id` into the error
 body. **Resolution:** when `scheduled_run` is present, the serverless runner takes `session_id` from
-the parsed body instead, and omits it when the body cannot be parsed. Non-scheduled behaviour is
-unchanged.
+the parsed body instead — via a small `_parse_session_id(record)` helper that tolerates an
+unparseable body — and omits the key when it cannot be read. Non-scheduled behaviour is unchanged.
 
-`ServerlessStreamAgentRunner` (`serverless/akagentrunner.py:159-304`) is **verified unchanged**: a
+`ServerlessStreamAgentRunner` (`serverless/akagentrunner.py:185-330`) is **verified unchanged**: a
 scheduled fire is never produced in `stream` mode — the acknowledgement is delivered at creation
 time and no fire is enqueued for a stream (see *Creation acknowledgement*).
 
 #### Output consumers — the only readers of `scheduled_run`
 
-Both consumers gain the same branch, expressed as one shared shape and applied per target. The
-presence of a `scheduled_run` block in the response body is exactly how a consumer tells a scheduled
-run from an ordinary one; the outcome status is derived from the ordinary response shape — an
-`error` key means `FAILED`, otherwise `COMPLETED` — so no scheduling-specific status or error field
-is introduced.
+Both consumers gain the same branch. The recognition-and-record step itself is **written once**, as
+`ScheduledRunRecorder` in `deployment/common/scheduled_run_recorder.py`, so the two targets cannot
+drift; each consumer contributes only the call site and its early return. The presence of a
+`scheduled_run` block in the response body is exactly how a consumer tells a scheduled run from an
+ordinary one; the outcome status is derived from the ordinary response shape — an `error` key means
+`FAILED`, otherwise `COMPLETED` — so no scheduling-specific status or error field is introduced.
+
+```python
+class ScheduledRunRecorder:
+    @classmethod
+    def record(cls, body: Any) -> bool:
+        """Record the outcome when the body carries a scheduled_run block.
+        Returns True when this was a scheduled run and the consumer should stop here."""
+
+    @classmethod
+    def record_before_discard(cls, raw_body: Any) -> bool:
+        """Last-chance record from on_permanent_failure. Never raises."""
+```
 
 ```python
 # in both consumers, before the existing broadcast/store logic
-scheduled_run = ScheduledRunMetadata.from_body(body)
-if scheduled_run is not None:
-    cls._get_scheduler().mark_run_completed(
-        scheduled_task_id=scheduled_run.scheduled_task_id,
-        scheduled_task_version=scheduled_run.scheduled_task_version,
-        scheduled_time=scheduled_run.scheduled_time,
-        status=RunStatus.FAILED if "error" in body else RunStatus.COMPLETED,
-        last_error=body.get("error"),
-    )
+if ScheduledRunRecorder.record(record.get("body")):
     return  # not broadcast, not written to the response store
 ```
 
-**`ResponseHandler.process_message`** (`serverless/akresponsehandler.py:90-109`). The branch goes
+The recorder returns a `bool` rather than the parsed block because that is all a consumer needs: the
+only decision it makes is whether to stop. It holds **no** outcome-write policy — it derives the
+status from the body and forwards a single `Scheduler.mark_run_completed` call; the guards, the
+field updates and the one-time `COMPLETED` transition all live inside the provider.
+
+**`ResponseHandler.process_message`** (`serverless/akresponsehandler.py:109-135`). The branch goes
 first, before the execution-mode fan-out. This is necessary, not cosmetic: in `async`/`stream` mode
 the handler broadcasts to the originating connection using an `endpoint_url` message attribute
-(`:69-76`, dispatched at `:102-105`) that a timer-originated message does not carry, so without the branch a
-scheduled response raises `ValueError("endpoint_url is required in SQS message attributes")`. In the
-REST modes it would write to the response store, where nobody is polling for it.
+(`:80-107`, dispatched at `:127-130`) that a timer-originated message does not carry, so without the
+branch a scheduled response raises `ValueError("endpoint_url is required in SQS message
+attributes")`. In the REST modes it would write to the response store, where nobody is polling for
+it.
 
-**`ECSOutputConsumer.process_message`** (`containerized/akoutputconsumer.py:56-83`) gets the same
+**`ECSOutputConsumer.process_message`** (`containerized/akoutputconsumer.py:72-100`) gets the same
 branch, and for the same reason rather than merely for symmetry: in WebSocket modes it too broadcasts
 using an `endpoint_url` message attribute and raises without one. The existing test
 `test_broadcast_via_websocket_raises_when_endpoint_url_missing`
@@ -769,10 +881,30 @@ using an `endpoint_url` message attribute and raises without one. The existing t
 **first** on this consumer as well, before the mode fan-out. The design describes this as the one
 branch the feature adds to an existing component; it is one branch per target, symmetric in both.
 
-`on_permanent_failure` on both consumers is **verified unchanged**. An output-queue message that
-exhausts its own retries has already failed to be recorded; adding a second store write on that path
-would double the failure modes for no benefit, and the run is still visible as "no `last_run_at`
-update" plus queue metrics.
+**`on_permanent_failure` on both consumers gains the same branch, via `record_before_discard`.** An
+earlier draft of this spec left it unchanged, reasoning that a second store write would double the
+failure modes. That was wrong on the facts: the consumers' retry limit is deliberately **one below
+the output queue's** (`max(1, output_queue_max_receive_count - 1)`), so a message reaching
+`on_permanent_failure` is swallowed and deleted, **not** dead-lettered. Without this call the
+outcome is lost outright and the row keeps a stale `last_run_*` forever — the run is not "visible as
+no update", it is indistinguishable from one that never fired.
+
+Three properties keep that write safe:
+
+- **It never raises.** Extraction goes through `from_raw_body`, and the write itself is wrapped —
+  a failure is logged with the full `scheduled_run` identity, which is then the run's only surviving
+  trace.
+- **The status still comes from the body**, not from the fact that this is the failure path. A body
+  reporting a result describes a run the agent completed where only the *recording* failed;
+  inventing `FAILED` there would report a broken task to a caller whose agent ran fine.
+- **It returns early for one more reason than `process_message` does.** A fire's group id is the
+  `scheduled_task_id`, so the existing error-entry path would file the failure under a session that
+  does not exist.
+
+Additionally, `ResponseHandler.on_permanent_failure` now reads the session id from the record's
+**system** attributes (`MessageGroupId`) instead of `message_attributes["message_group_id"]`, and
+omits the key when absent. The custom-attribute map never contained that key, so the pre-change line
+raised `KeyError` on every permanent failure — a latent bug this path had to touch anyway.
 
 Both consumers depend only on the `Scheduler` interface. Neither resolves, imports or calls the
 `ScheduledTaskStore`, and neither holds any outcome-write policy — loading the row, applying the four
@@ -783,57 +915,81 @@ without touching either consumer.
 
 #### Chat create path — ECS
 
-`RestHandler` (`deployment/common/rest_handler.py:16`) — the shared queue-aware REST base that
+`RestHandler` (`deployment/common/rest_handler.py:20`) — the shared queue-aware REST base that
 `ECSQueueRequestHandler` extends — gains an optional `authoriser` constructor parameter and a
-schedule branch:
+schedule branch. It also mixes in `BearerIdentityMixin` for `_resolve_user`:
 
 ```python
-def __init__(self, logger_name: str = "ak.deployment.queue_handler", authoriser: Optional[Authoriser] = None):
-    super().__init__()
-    self._log = logging.getLogger(logger_name)
-    self._config = AKConfig.get()
-    self._authoriser = authoriser
-    SchedulerFactory.validate_config()
-    if SchedulerFactory.enabled() and authoriser is None:
-        raise AKConfigError("scheduler.enabled requires an Authoriser on the chat route — "
-                            "every scheduled task must have an authenticated owner")
-    self._schedule_service = ScheduledTaskService(SchedulerFactory.build()) if SchedulerFactory.enabled() else None
+class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
+    def __init__(self, logger_name: str = "ak.deployment.queue_handler", authoriser: Optional[Authoriser] = None):
+        super().__init__()
+        self._log = logging.getLogger(logger_name)
+        self._config = AKConfig.get()
+        self._authoriser = authoriser
+        SchedulerFactory.validate_config()
+        if SchedulerFactory.enabled() and authoriser is None:
+            raise AKConfigError("scheduler.enabled requires an Authoriser on the chat route — "
+                                "every scheduled task must have an authenticated owner")
+        self._schedule_service = SchedulerFactory.service()   # None when disabled
 ```
 
 **Why the shared base rather than `ECSQueueRequestHandler`.** `RestHandler` lives under
 `deployment/common/`, which is provider-agnostic, and `ECSQueueRequestHandler`
-(`containerized/core/api/rest_api.py:9`) is its only subclass today — so this is a real placement
+(`containerized/core/api/rest_api.py:12`) is its only subclass today — so this is a real placement
 decision, not a default. It goes in the base because the branch contains nothing AWS-specific: it
 calls `ScheduledTaskService`, which rule #4 keeps provider-agnostic, and never names EventBridge,
 SQS or boto3. A future queue-mode target inheriting `RestHandler` gets the create path for free. On
 any deployment with no `scheduler` block `SchedulerFactory.enabled()` is `False`,
 `_schedule_service` is `None`, and `enqueue_and_wait` behaves exactly as it does today.
 
-In `POST /api/v1/chat` — the route declared by `AgentRESTRequestHandler.get_router()`
-(`api/handler.py:107`) and served by `RestHandler.enqueue_and_wait` — the branch is the first
-statement inside the existing `try`, **before** the `session_id` check (`rest_handler.py:45-46`) and
-before `request_id = str(uuid.uuid4())` (`:49`). It must precede the `session_id` check because a
-scheduled create legitimately has no session id — the service derives one:
+In `POST /api/v1/chat` — the route declared by `AgentRESTRequestHandler.get_router()` and served by
+`RestHandler.enqueue_and_wait` — the branch is the first statement inside the existing `try`,
+**before** the `session_id` check (`rest_handler.py:79`) and before
+`request_id = str(uuid.uuid4())` (`:84`). It must precede the `session_id` check because a
+scheduled create legitimately has no session id — the service derives one. `enqueue_and_wait` gains
+a second parameter, `request: Request = None`, so the branch can resolve the caller:
 
 ```python
 if body.schedule is not None:
-    if self._schedule_service is None:
-        raise HTTPException(status_code=400, detail="Scheduling is not enabled for this deployment")
-    owner_id = self._resolve_user(request)          # 401 when the token is missing or rejected
+    return await self._create_scheduled_task(body, request)
+
+# _create_scheduled_task:
+if self._schedule_service is None:
+    raise HTTPException(status_code=400, detail="Scheduling is not enabled for this deployment")
+owner_id = self._resolve_user(request)              # 401 when the token is missing or rejected
+try:
     ack = self._schedule_service.create(spec=body.schedule, prompt=body.prompt,
                                         agent=body.agent, owner_id=owner_id)
-    return JSONResponse(status_code=201, content=ack.model_dump(mode="json", exclude_none=True))
+except ScheduleValidationError as e:                # 400 — bad input, not a server fault
+    raise HTTPException(status_code=400, detail=str(e))
+except SchedulerPermissionError as e:               # 403 — a live row owned by someone else
+    raise HTTPException(status_code=403, detail=str(e))
+except SchedulerConflictError as e:                 # 409 — the id is soft-deleted
+    raise HTTPException(status_code=409, detail=str(e))
+return JSONResponse(status_code=201, content=ack.model_dump(mode="json", exclude_none=True))
 ```
+
+The three `except` clauses are explicit rather than routed through the generic handler below them,
+which turns any unclassified exception into a 500: a bad schedule expression and a foreign id are
+caller errors and must not read as server faults.
 
 Nothing is enqueued: the first message on the input queue appears when the timer fires. In
 `rest_sync` the handler does **not** wait on the response store — there is no run to wait for, so
 the sync wait is skipped entirely. In `rest_async` the same 201 body is returned;
 `GET /api/v1/chat/{session_id}` is not used for scheduling, and run outcomes are read from
-`GET /api/v1/schedule/{scheduled_task_id}`. `_resolve_user` is the same 401-on-missing/invalid-Bearer
-helper as `ThreadRESTRequestHandler._resolve_user` (`api/thread.py:36-55`), lifted into a shared
-mixin in `api/handler.py` so the two implementations do not drift.
+`GET /api/v1/schedule/{scheduled_task_id}`. `_resolve_user` is the 401-on-missing/invalid-Bearer
+helper that used to live on `ThreadRESTRequestHandler`, lifted verbatim into `BearerIdentityMixin`
+(`api/handler.py`) so the thread, schedule and chat-create routes cannot drift.
 
-`ECSQueueRequestHandler.__init__` (`containerized/core/api/rest_api.py:12-15`) forwards the
+**The `Authoriser` ABC moves with it**, from `integration/thread/authoriser.py` to
+`agentkernel/auth/authoriser.py` and re-exported from `agentkernel.auth`. It was never
+thread-specific — it resolves a Bearer token to a subject — and the schedule routes are now a second
+consumer. `integration/thread/authoriser.py` becomes a one-line re-export so
+`agentkernel.thread.Authoriser` and `agentkernel.integration.thread.Authoriser` keep working as
+documented. The one contract difference is stated on the ABC: with no `Authoriser` configured thread
+routes remain open, while the schedule routes require one.
+
+`ECSQueueRequestHandler.__init__` (`containerized/core/api/rest_api.py:15-21`) forwards the
 `authoriser`. No change is needed to `ECSIOHandler.run()` (`ecs_io_handler.py:24-25`, whose only
 parameter is `auth_validator`): the injection point already exists, because `RESTAPI.run()` accepts
 a `handlers` list (`api/http.py:90`) and `AWSRestAPI.get_default_handlers()`
@@ -852,17 +1008,30 @@ enqueued and **executed immediately instead of scheduled** — the one outcome t
 produce. It gets the branch:
 
 ```python
-# in _handle_chat, after the `ctx.message.body is None` check (:409-410),
-# before the `session_id is required` check (:413-414)
+# in _handle_chat, after the `ctx.message.body is None` check,
+# before the `session_id is required` check
 if ctx.message.body.schedule is not None:
-    if self._schedule_service is None:
-        return self.build_error_http_response(400, "Scheduling is not enabled for this deployment")
+    return await self._create_scheduled_task(ctx)
+
+# _create_scheduled_task:
+if self._schedule_service is None:
+    return self.build_error_http_response(400, "Scheduling is not enabled for this deployment", user_id=ctx.user_id)
+try:
     ack = self._schedule_service.create(
         spec=ctx.message.body.schedule, prompt=ctx.message.body.prompt,
-        agent=ctx.message.body.agent, owner_id=ctx.user_id,
+        agent=ctx.message.body.agent, owner_id=ctx.user_id, request_id=ctx.message.request_id,
     )
-    return await self._broadcast_ack(ack, ctx)
+except (SchedulerError, ValueError) as e:
+    return self.build_error_http_response(400, str(e), user_id=ctx.user_id)
+await self._broadcast_ack(ack, ctx)
+return self.build_success_http_response("Request scheduled successfully", user_id=ctx.user_id, status_code=201)
 ```
+
+The acknowledgement goes out on the connection *and* the route returns a 201 envelope: the broadcast
+is the payload the client consumes, the return value is the frame-handling result this route
+already produces for every other branch. `SchedulerError` is caught as one family here rather than
+per-subclass, because a WebSocket frame has no status-code vocabulary to map 403/404/409 onto — the
+message text carries the distinction.
 
 **Identity needs no new mechanism, and no `Authoriser`.** `build_route_context` already resolves
 `ctx.user_id` via `get_websocket_handler().get_user_id(connection_id)` and raises
@@ -904,16 +1073,19 @@ if ack is not None:
     return ack
 ```
 
-`_maybe_schedule` returns `None` when `payload.body.schedule` is absent, raises a 400-mapped error
-when scheduling is disabled, and otherwise resolves the owner from
+`_maybe_schedule` returns `None` when `payload.body.schedule` is absent, raises a 400-mapped
+`ValueError` when scheduling is disabled, and otherwise resolves the owner from
 `event["requestContext"]["authorizer"]["principalId"]` — the value `APIGatewayAuthorizer._build_policy`
-sets from `ValidationResult.subject` (`serverless/akauthorizer.py:75-92`).
+sets from `ValidationResult.subject` (`serverless/akauthorizer.py:75-92`). It returns an explicit
+`(201, ack)` pair, which is why `_handle_request` now accepts either a bare body (answered 200, the
+pre-change shape) or a `(statusCode, body)` tuple.
 
-Identity enforcement differs from ECS here, and this is a **deviation from design.md flagged for
-re-review** (see *Deviations from design.md*). Python cannot observe whether Terraform attached the
-API Gateway authorizer to the route, so the check cannot be an initialization check on serverless.
-It is enforced per request: a `schedule` block with no authorizer context on the event is rejected
-with **401**, and the Terraform module attaches the authorizer to the schedule routes.
+Identity enforcement differs from ECS here (see *Deviations from design.md* #1, now reflected in
+design.md). Python cannot observe whether Terraform attached the API Gateway authorizer to the
+route, so the check cannot be an initialization check on serverless. It is enforced per request: a
+`schedule` block with no authorizer context on the event raises `UnauthenticatedScheduleError` — a
+dedicated exception type, so it maps to **401** rather than being swallowed by the generic 400 or
+500 handlers — and the Terraform module attaches the authorizer to the schedule routes.
 
 #### Chat create path — serverless WebSocket
 
@@ -951,9 +1123,26 @@ job; there is no new creation endpoint.
 All routes require the configured identity resolver; update and delete additionally check ownership.
 
 **ECS mounting.** `agentkernel/api/schedule.py` defines
-`ScheduleRESTRequestHandler(RESTRequestHandler)`, taking a required `Authoriser` and a
-`ScheduledTaskService`. `RESTAPI.run()` auto-mounts it when `scheduler.enabled`, unless the caller
-supplied one — the exact shape of the existing thread auto-mount (`api/http.py:105-112`):
+`ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler)`:
+
+```python
+def __init__(self, authoriser: Optional[Authoriser] = None, service: Optional[ScheduledTaskService] = None):
+    if authoriser is None:
+        raise AKConfigError("scheduler.enabled requires an Authoriser on the schedule routes — "
+                            "every scheduled task must have an authenticated owner")
+    self._authoriser = authoriser
+    self._service = service or SchedulerFactory.service()
+```
+
+**`authoriser` is typed `Optional` but is not optional.** Making it a required positional parameter
+would move the failure to a `TypeError` from Python's argument binding — an error that reads as a
+programming mistake in the framework rather than a deployment misconfiguration. The `Optional` +
+explicit-raise shape produces the same loud failure at the same moment, with a message that names
+the actual problem and matches the equivalent check on `RestHandler`. `service` is injectable for
+tests and resolved from config otherwise.
+
+`RESTAPI.run()` auto-mounts the handler when `scheduler.enabled`, unless the caller supplied one —
+the exact shape of the existing thread auto-mount (`api/http.py:105-112`):
 
 ```python
 if SchedulerFactory.enabled():
@@ -963,12 +1152,25 @@ if SchedulerFactory.enabled():
 ```
 
 `ScheduleRESTRequestHandler()` with no `Authoriser` raises `AKConfigError` at construction — the
-loud initialization failure the design requires, before uvicorn binds.
+loud initialization failure the design requires, before uvicorn binds. So an application that
+enables scheduling and never supplies a handler fails to start, rather than serving routes that
+cannot establish an owner: supplying the handler through the `handlers` list *is* how the
+`Authoriser` is provided.
 
-**Serverless mounting.** The serverless REST surface is not FastAPI: `RESTLambdaRouter`
-(`serverless/core/router/rest_lambda.py:292-388`) keeps a hand-rolled `{path: {method: handler}}`
-table and dispatches on an exact string lookup of the resolved path (`:381-385`), with no
-path-parameter support. `DELETE /api/v1/schedule/{id}` therefore cannot match today.
+Route bodies are thin: each resolves the owner via `_resolve_user`, calls one service method, and
+runs inside `_mapped_errors()` — a small context manager holding the single
+`{SchedulerNotFoundError: 404, SchedulerPermissionError: 403, SchedulerConflictError: 409,
+ScheduleValidationError: 400}` table, so the mapping is declared once rather than per route.
+
+**Serverless mounting.** The serverless REST surface is not FastAPI, so `ScheduleEndpointsHandler`
+(`serverless/core/router/schedule_lambda.py`) mirrors `api/schedule.py`'s behaviour against the
+hand-rolled route table, carrying its own copy of the same status mapping plus a 401 when the
+authorizer context is missing and a 404 when scheduling is disabled. `RESTLambdaRouter.__init__`
+merges its routes in when `SchedulerFactory.enabled()`.
+
+`RESTLambdaRouter` (`serverless/core/router/rest_lambda.py`) keeps a hand-rolled
+`{path: {method: handler}}` table and dispatches on an exact string lookup of the resolved path,
+with no path-parameter support. `DELETE /api/v1/schedule/{id}` therefore cannot match today.
 
 `dispatch` gains a **resource-template fallback**, applied only where it currently raises:
 
@@ -976,13 +1178,15 @@ path-parameter support. `DELETE /api/v1/schedule/{id}` therefore cannot match to
 handler = methods.get(method)
 if not handler:
     # API Gateway supplies the matched resource template and its extracted parameters.
-    resource = event.get("resource")
-    if resource and env_base_path:
-        template = resource.removeprefix(env_base_path)
-        handler = self._routes.get(template, {}).get(method)
-        if handler:
-            return handler(event, context)
+    handler = self._resolve_by_resource_template(event, method, env_base_path)
+if not handler:
     raise ValueError(...)   # unchanged
+
+# _resolve_by_resource_template:
+resource = event.get("resource")
+if not resource or not env_base_path:
+    return None
+return self._routes.get(resource.removeprefix(env_base_path), {}).get(method)
 ```
 
 Schedule routes register under their resource templates (`/schedule`, `/schedule/{scheduled_task_id}`)
@@ -1012,14 +1216,24 @@ Following the sandbox conventions exactly: the whole capability's system-prompt 
 first tool's `description` and the rest carry empty descriptions; every tool returns a JSON string;
 machinery errors are caught and returned as `{"error": ...}` — tools never raise into the framework.
 
-**Owner binding.** A tool cannot set an arbitrary owner. `ToolContext.get().session.id`
-(`core/tool.py:73-79`) identifies the invoking session; the owner is the `user_id` carried on that
-session's request, read from the `AgentRequestAny` context entry that `_attach_additional_context`
-already injects, or — on a scheduled fire — from the fire's own `user_id`. There is no synthetic
-agent identity and no ownership handover: the agent is the mechanism, the human remains the
-principal. When no authenticated `user_id` is resolvable the tool returns
-`{"error": "no authenticated owner available for this session"}` rather than creating an unowned
-task.
+**Owner binding.** A tool cannot set an arbitrary owner. `ToolContext.get().session` identifies the
+invoking session, and the owner is read from that session's **volatile cache** under
+`REQUEST_USER_ID_KEY`, which `AgentHandler.bind_request_user` wrote from the request's `user_id` at
+the start of the run (see *Core model changes*).
+
+The volatile cache is the seam because the obvious alternative does not exist: `user_id` is in
+`known_fields`, so `_attach_additional_context` never turns it into an `AgentRequestAny` — it is
+deliberately kept out of the agent's request context, and adding it there to serve this feature
+would leak the caller's identity into every prompt. The session is already the per-request object
+tool code can reach, and the *volatile* half is right because the binding must not outlive the
+process or be persisted with the session's durable state.
+
+On a scheduled fire the bound user is the fire's own `user_id`, i.e. the task's owner, so a task
+created from a scheduled run stays with the same person. There is no synthetic agent identity and no
+ownership handover: the agent is the mechanism, the human remains the principal. When no
+authenticated `user_id` is resolvable — no `ToolContext`, no session, or nothing bound — the tool
+returns `{"error": "no authenticated owner available for this session"}` rather than creating an
+unowned task.
 
 **Runner consequence.** These tools execute in-process inside the agent runner, so when the tool set
 is registered the runner resolves a `Scheduler` and needs the same access the REST surface has:
@@ -1038,8 +1252,8 @@ inert when the block is absent:
 class _SchedulerDynamoDBConfig(BaseModel):
     table_name: str = Field(default="ak-scheduled-tasks",
         description="Dedicated DynamoDB table for scheduled tasks. Partition key 'scheduled_task_id' (S), "
-                    "GSI 'owner_id-index' on 'owner_id' (S) / 'created_at' (S), TTL attribute 'expiry_time'. "
-                    "Never a partition of the session or response-store table.")
+                    "sparse GSI 'owner-index' on 'owner_index_key' (S) / 'created_at' (S), TTL attribute "
+                    "'expiry_time'. Never a partition of the session or response-store table.")
 
 class _SchedulerRedisConfig(BaseModel):
     prefix: str = Field(default="ak:scheduled_tasks:",
@@ -1060,6 +1274,8 @@ class _SchedulerConfig(BaseModel):
     target_role_arn: Optional[str] = Field(default=None,
         description="IAM role EventBridge Scheduler assumes to send to the input queue; injected by "
                     "Terraform via AK_SCHEDULER__TARGET_ROLE_ARN")
+    region: Optional[str] = Field(default=None,
+        description="AWS region for the scheduler and its table; defaults to the boto3 environment default")
     dynamodb: Optional[_SchedulerDynamoDBConfig] = None
     redis: Optional[_SchedulerRedisConfig] = None
     valkey: Optional[_SchedulerValkeyConfig] = None
@@ -1099,9 +1315,14 @@ these modules: a root bool, `count = var.<gate> ? 1 : 0` on the module, and outp
 ```hcl
 # containerized/variables.tf and serverless/variables.tf
 variable "scheduled_task" {
-  description = "Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role, component IAM grants, and (serverless) the /schedule API Gateway routes. Requires queue_mode = true."
+  description = "Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role, component IAM grants, and the /schedule API Gateway routes. Requires queue_mode = true."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.scheduled_task || var.queue_mode
+    error_message = "scheduled_task = true requires queue_mode = true."
+  }
 }
 
 variable "scheduled_task_config" {
@@ -1115,25 +1336,24 @@ variable "scheduled_task_config" {
 }
 ```
 
-`scheduled_task = true` with `queue_mode = false` is rejected by a `validation` block on
-`scheduled_task_config`, matching the existing `scaling_config.enabled requires queue_mode = true`
-precondition (`containerized/variables.tf:396-401`). This is the Terraform-side twin of
-`SchedulerFactory.validate_config()`'s queue-mode check — the deploy fails before the app ever gets a
-chance to fail at startup.
+`scheduled_task = true` with `queue_mode = false` is rejected by the `validation` block on
+`scheduled_task` itself, matching the existing `scaling_config.enabled requires queue_mode = true`
+precondition (`containerized/variables.tf:396-401`). **This is where the queue-mode precondition is
+enforced, not in `validate_config()`** — see *`SchedulerFactory`* for why the application cannot
+check it. The deploy fails before the app is ever built.
 
 #### Resources created when `scheduled_task = true`
 
-A new `modules/scheduler/` per target, gated `count = var.scheduled_task ? 1 : 0`. Both directories
-(`containerized/modules/scheduler/` and `serverless/modules/scheduler/`) **already exist in the tree
-and are empty** — scaffolding committed ahead of this spec. They are the directories this section
-fills; nothing else in either target references them today, so they are inert until then.
+A new `modules/scheduler/` per target, gated `count = var.scheduled_task ? 1 : 0`
+(`containerized/scheduled_task.tf`, `serverless/scheduled_task.tf`).
 
-1. **Scheduled-task table.** `aws_dynamodb_table` — partition key `scheduled_task_id` (S), GSI
-   `owner_id-index` on `owner_id` (S) / `created_at` (S), TTL on `expiry_time`. Created only when
-   the deployment's session store is DynamoDB; when sessions are Redis/Valkey the module provisions
-   **nothing** here, because the existing cluster is reused with a separate keyspace. The module
-   derives which case applies from the same `session_store_type` variable the deployment already
-   uses to pick its session backend, so the two can never disagree.
+1. **Scheduled-task table.** `aws_dynamodb_table` — partition key `scheduled_task_id` (S), sparse
+   GSI `owner-index` on `owner_index_key` (S) / `created_at` (S), TTL on `expiry_time`. Created only
+   when the deployment's session store is DynamoDB; when sessions are Redis/Valkey the module
+   provisions **nothing** here, because the existing cluster is reused with a separate keyspace. The
+   module takes that decision from `create_dynamodb_memory_table` — the same variable the deployment
+   already uses to pick its session backend — rather than a scheduler-specific one, so the two can
+   never disagree.
 2. **`aws_scheduler_schedule_group`** — one per deployment, named from
    `scheduled_task_config.schedule_group_name`. It exists for namespacing and destroy-time cleanup:
    deleting the group removes every registration the deployment created, so `terraform destroy`
@@ -1143,20 +1363,35 @@ fills; nothing else in either target references them today, so they are inert un
 4. **Component IAM grants** — attached to the existing task/execution roles, deliberately unequal so
    no component gets more than its role needs:
 
-| Component | Table | EventBridge Scheduler | SQS |
+| Component | Table | EventBridge Scheduler | Other |
 |---|---|---|---|
-| REST service / request handler | read + write | create/update/delete, `Resource` scoped to the deployment's schedule group | `GetQueueAttributes` on the input queue |
-| Response handler / output consumer | read + update | **none** — it never registers or removes a schedule | `GetQueueAttributes` on the input queue |
-| Agent runner | none, unless `enable_agent_tools = true` → read + write | none, unless `enable_agent_tools = true` → create/update/delete in the group | only when `enable_agent_tools = true` |
+| REST service / request handler | `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `Query`, `DescribeTable` (table + `/index/*`) | `CreateSchedule`, `UpdateSchedule`, `DeleteSchedule`, `GetSchedule` on the schedule ARN pattern | `iam:PassRole` on the timer role; `sqs:GetQueueAttributes` on the input queue |
+| Response handler | `GetItem`, `UpdateItem`, `DescribeTable` | **none** — it never registers or removes a schedule | **none** — it never derives the TTL |
+| Agent runner | none, unless `enable_agent_tools = true` → the full set | none, unless `enable_agent_tools = true` → the full set | only when `enable_agent_tools = true` |
 
-The agent runner's grants sit behind `scheduled_task_config.enable_agent_tools` because the tools are
-opt-in in the application too (`scheduler.agents: []` scopes them away). A deployment that enables
-scheduling but not the agent tools leaves the runner with no scheduler permissions at all — the
-Terraform gate and the app-level gate line up, so neither grants access the other doesn't.
+Three details the table encodes:
 
-Every component that constructs a `Scheduler` needs `sqs:GetQueueAttributes` on the input queue, to
-read the visibility timeout the soft-delete TTL derives from.
+- **`Resource` is the schedule ARN pattern, not the schedule group ARN.** A schedule is not
+  addressed as a child of its group: the group is `…:schedule-group/<group>` while a schedule is
+  `…:schedule/<group>/<name>`. A grant scoped to `<group-arn>/*` matches no schedule at all and
+  denies every scheduler call. The module derives the correct pattern and exports it as
+  `schedule_arn_pattern`.
+- **`iam:PassRole` is required by every component that registers a schedule**, because registering
+  hands EventBridge Scheduler the role it assumes to deliver the fire. It is scoped to that one
+  role.
+- **The response handler gets no `sqs:GetQueueAttributes`**, and is given no input-queue URL either.
+  Only the delete path derives the TTL, and it is derived lazily, so a component that merely records
+  outcomes never makes the call. This is the grant the deferred derivation buys.
 
+**On containerized the REST task carries the response-handler role too**, because it hosts both the
+schedule routes and the output-consumer thread in one task. It therefore gets the full grant rather
+than a split one — the split above is real on serverless, where the two are separate Lambdas.
+
+The agent runner's grants sit behind `scheduled_task_config.enable_agent_tools` because the tools
+are opt-in in the application too (`scheduler.agents: []` scopes them away). The same flag also
+gates the `AK_SCHEDULER__*` env vars on the runner, so a deployment that enables scheduling but not
+the agent tools leaves the runner with neither the permissions nor the configuration — the Terraform
+gate and the app-level gate line up, so neither grants access the other doesn't.
 5. **API Gateway routes** — `GET /schedule` plus `GET`/`PUT`/`DELETE` on
    `/schedule/{scheduled_task_id}`. Both targets need them: each gateway is an explicit route
    allow-list with no catch-all, so a route that is not declared 404s before the request reaches the
@@ -1188,6 +1423,10 @@ when `scheduled_task = false`, matching the guarded-output convention at
 | `scheduled_task_schedule_group_name` | schedule group name | `AK_SCHEDULER__GROUP_NAME` |
 | `scheduled_task_target_role_arn` | timer execution role ARN | `AK_SCHEDULER__TARGET_ROLE_ARN` |
 
+The module additionally exports `schedule_arn_pattern` for the component IAM grants. It is not a
+root output — nothing outside the deployment consumes it — but it is the value every scheduler grant
+is scoped to (see above).
+
 **Backend-specific env vars are injected conditionally, never as a null.** Only the block matching
 the deployment's session backend is injected — the DynamoDB table name is *not* set on a
 Redis/Valkey deployment, and the keyspace prefix is not set on a DynamoDB one. This follows the
@@ -1213,9 +1452,9 @@ both reject null values, so the unconditional form would fail `terraform apply` 
 Redis/Valkey deployment. The conditional form also keeps the running container's environment honest
 — an operator reading it sees exactly the one backend that is in use.
 
-Both example deployments (`examples/aws-serverless/scalable-openai`,
-`examples/aws-containerized/openai-dynamodb-scalable`) set `scheduled_task = true` in their
-`terraform.tfvars` and declare a **placeholder `scheduler` block** in `config.yaml`, with the
+The two dedicated examples (`examples/aws-serverless/scheduled-openai`,
+`examples/aws-containerized/openai-scheduled-task`) set `scheduled_task = true` in their
+Terraform and declare a **placeholder `scheduler` block** in `config.yaml`, with the
 Terraform-supplied values left empty:
 
 ```yaml
@@ -1234,11 +1473,14 @@ alone while defaulting to `None`** — `execution` and `sandbox` are both non-`O
 the proven footing the queue URLs already use (`examples/aws-containerized/openai-dynamodb-scalable/config.yaml:14`,
 `url: ""  # injected by Terraform via AK_EXECUTION__QUEUES__INPUT__URL`).
 
-If `test_scheduler_config.py` confirms that `EnvSettingsSource` populates an absent `Optional` block
-from `AK_SCHEDULER__*` alone, the placeholder can be dropped in a follow-up — but the spec does not
-assume it. Empty strings do not weaken the enablement check: `validate_config()` treats an empty
-`group_name` or `target_role_arn` as unset and raises `AKConfigError`, so a deployment that enables
-scheduling in YAML without the Terraform wiring still fails loudly at startup.
+**The probe test resolved this: `AK_SCHEDULER__*` env vars alone *do* populate the absent `Optional`
+block, nested sub-blocks included** (`test_env_vars_alone_populate_the_absent_scheduler_block`). The
+placeholder is therefore no longer load-bearing and could be dropped, but it is kept deliberately:
+it is the only place a reader of the example's `config.yaml` learns that the deployment schedules at
+all, and which values Terraform supplies. Empty strings do not weaken the enablement check either
+way — `validate_config()` treats an empty `group_name` or `target_role_arn` as unset and raises
+`AKConfigError`, so enabling scheduling in YAML without the Terraform wiring still fails loudly at
+startup.
 
 Operational consequence to accept: a fresh environment starts with an empty table — seeding is an API
 call, not a deploy artefact.
@@ -1264,12 +1506,12 @@ Exhaustive; each is intentional with its justification.
    echo `scheduled_run`. *Intentional:* it is what makes a retry-exhausted run recordable as `FAILED`
    with no DLQ processing.
 6. **`ServerlessAgentRunner.on_permanent_failure` no longer sets `session_id` from
-   `message_group_id`** when the failed message is a scheduled fire (`serverless/akagentrunner.py:150`). For a
-   fire the group id is the `scheduled_task_id`, so the pre-change line would write a wrong
-   `session_id`. Non-scheduled behaviour is unchanged. This resolves the divergence with the ECS
-   twin, which never set the field.
+   `message_group_id`** when the failed message is a scheduled fire
+   (`serverless/akagentrunner.py:170`). For a fire the group id is the `scheduled_task_id`, so the
+   pre-change line would write a wrong `session_id`. Non-scheduled behaviour is unchanged. This
+   resolves the divergence with the ECS twin, which never set the field.
 7. **`POST /api/v1/chat` accepts a body with no `session_id`** when a `schedule` block is present
-   (`rest_handler.py:45-46` is now reached only on the non-schedule path). *Intentional:* the
+   (`rest_handler.py:79` is now reached only on the non-schedule path). *Intentional:* the
    service derives the session id; requiring the caller to invent one would be meaningless.
 8. **`RestHandler.__init__` raises `AKConfigError`** when `scheduler.enabled` and no
    `Authoriser` was supplied. *Intentional:* every scheduled task must have an unforgeable owner, and
@@ -1283,13 +1525,32 @@ Exhaustive; each is intentional with its justification.
 10. **`RESTAPI.run()` auto-mounts the schedule router** when scheduling is enabled, mirroring the
     thread auto-mount.
 11. **Sessions whose id starts with `schedule:` skip thread creation and message appending**
-    (`core/chat_service.py:507-555`). *Intentional:* scheduled activity is kept out of the owner's
+    (`integration/thread/recorder.py`). *Intentional:* scheduled activity is kept out of the owner's
     regular conversation history. Fixed behaviour, not configurable.
 12. **`ECSWebSocketRequestHandler._handle_chat` no longer enqueues a frame carrying a `schedule`
     block** (`containerized/core/api/websocket_api.py:404-425`); it creates the schedule and
     broadcasts the acknowledgement instead. *Intentional:* containerized supports `async`/`stream`
     under `queue_mode = true`, so without this branch a schedule sent over an ECS WebSocket would be
     executed immediately rather than scheduled. Frames with no `schedule` block are unaffected.
+13. **Both output consumers' `on_permanent_failure` now record a scheduled outcome before
+    discarding the message.** *Intentional and load-bearing:* the consumers' retry limit sits one
+    below the output queue's, so the message is deleted rather than dead-lettered and an unwritten
+    outcome is lost for good. Never raises; ordinary messages take the pre-change path untouched.
+14. **`ResponseHandler.on_permanent_failure` reads the session id from the record's system
+    attributes (`MessageGroupId`) instead of `message_attributes["message_group_id"]`, and omits the
+    key when absent.** *Intentional:* the custom-attribute map never carried that key, so the
+    pre-change line raised `KeyError` on every permanent failure. A latent bug on a path this
+    feature had to touch.
+15. **`AgentHandler.bind_request_user` writes the request's `user_id` into the session's volatile
+    cache** on every run (`core/chat_service.py`). *Intentional:* it is how tool code reaches a
+    trustworthy owner without putting `user_id` into the agent's request context. A no-op when the
+    request carries no user.
+16. **The `Authoriser` ABC moves from `integration/thread/authoriser.py` to
+    `agentkernel/auth/authoriser.py`.** *Intentional:* two route layers now need the same contract.
+    Purely a move — the old module re-exports it, so both documented import paths still work.
+17. **`RestHandler.enqueue_and_wait` takes a second parameter, `request: Request = None`.**
+    *Intentional:* the create branch needs the incoming request to resolve the owner. Defaulted, so
+    existing overrides and call sites are unaffected.
 
 **Non-changes** — fixed by this spec and verified against the base branch:
 
@@ -1299,7 +1560,6 @@ Exhaustive; each is intentional with its justification.
 - `ResponseStore` ABC and all three backends; the response-store data layout.
 - Session store, thread store and attachment store layouts, config and behaviour.
 - Agent-runner happy path on both targets; `ServerlessStreamAgentRunner` entirely.
-- `on_permanent_failure` on both output consumers.
 - DLQ configuration and semantics; retry policy; visibility-timeout redelivery. The DLQ stays what it
   already is — a backstop for messages that fail outside the `ApproximateReceiveCount` check.
 - `ECSIOHandler.run()`'s signature (`ecs_io_handler.py:24-25`) and `AWSRestAPI.get_default_handlers()`
@@ -1341,14 +1601,19 @@ are shared across those threads.
 - **Construction is not racy.** `SchedulerFactory.build()` memoizes behind a `threading.RLock`, and
   `AWSScheduler.__init__` creates both boto3 clients eagerly. boto3 clients are safe for concurrent
   *calls* but not concurrent *creation*, so no lazy client init is used anywhere in this package.
+  The deferred TTL derivation is not an exception to that rule: it defers a *call* on an
+  already-constructed client, and two threads racing the first read resolve the same value from the
+  same queue attributes.
 - **Drivers are already thread-safe.** `BaseDriver` serializes connect/reconnect with a per-instance
   `threading.Lock`, which is why the response stores can already be shared under `ECSOutputConsumer`.
 - **`mark_run_completed` is a read-modify-write and is not internally locked.** It does not need to
   be: SQS FIFO delivers at most one in-flight message per `MessageGroupId`, and every outcome for a
   scheduled task carries `MessageGroupId = scheduled_task_id`, so two outcomes for the same task can
   never be processed concurrently — across threads *or* across replicas. Guard 4 additionally makes a
-  late redelivery harmless. This dependency is explicit, which is why the FIFO precondition is
-  enforced at initialization rather than assumed.
+  late redelivery harmless, and the `expected_version` condition on the write makes the
+  read-modify-write itself atomic with respect to a concurrent incarnation change. This dependency
+  on FIFO is explicit, which is why the queue modules create a FIFO input queue rather than leaving
+  it to a deployer.
 - **The management API can race a consumer.** A `PUT` and an outcome write can interleave. The
   outcome write updates only the `last_run_*` fields and never the definition; `upsert` on an
   existing row writes only the definition fields and never `last_run_*`. Both go through
@@ -1370,8 +1635,8 @@ The feature must not tax ordinary traffic. What it adds, per path:
 | Every agent response | One `is None` check in `ResponseBuilder.build_response` | Negligible |
 | Every output-queue message | `ScheduledRunMetadata.from_body(body)` — one `dict.get("scheduled_run")` on an already-parsed body, returning on the miss before any validation | Negligible |
 | Retry-exhausted messages only | `ScheduledRunMetadata.from_raw_body(...)` — one best-effort JSON parse of the record body | Off the hot path |
-| Scheduled outcomes only | One store read + one store write | Proportional; only scheduled traffic pays |
-| Process startup, scheduler-enabled components only | One `GetQueueAttributes` call | Once per process, not per request |
+| Scheduled outcomes only | One store read + one conditional store write | Proportional; only scheduled traffic pays |
+| First `delete` in a process, on components that can delete | One `GetQueueAttributes` call, then cached | Once per process; components that only record outcomes never make it |
 
 No new work lands on the ordinary chat, streaming, or session paths.
 
@@ -1381,11 +1646,14 @@ No new work lands on the ordinary chat, streaming, or session paths.
 
 | Failure | Where | Behaviour |
 |---|---|---|
-| `scheduler.enabled` with a queue URL unset, a non-`.fifo` input queue, a non-durable `session.type`, or a missing `group_name`/`target_role_arn` | `SchedulerFactory.validate_config()` | `AKConfigError` at component initialization — process startup on ECS, cold start on serverless |
-| Backend block missing for the resolved `session.type`, or a non-matching backend block populated | `SchedulerFactory.validate_config()` check #6 | `AKConfigError` at initialization, naming the field. Prevents both a late `table.load()` connection failure and a silently-ignored table name |
+| `scheduler.enabled` with a non-durable `session.type`, or a missing/blank `group_name`/`target_role_arn` | `SchedulerFactory.validate_config()` | `AKConfigError` at component initialization — process startup on ECS, cold start on serverless |
+| `scheduled_task = true` with `queue_mode = false` | Terraform `validation` on `scheduled_task` | The deploy fails. Queue mode is **not** re-checked in `validate_config()` — each Lambda holds only the one queue URL it publishes to |
+| Backend block missing for the resolved `session.type`, or a non-matching backend block populated | `SchedulerFactory.validate_config()` check #4 | `AKConfigError` at initialization, naming the field. Prevents both a late `table.load()` connection failure and a silently-ignored table name |
 | `scheduler.enabled` on the ECS **REST** chat route with no `Authoriser` | `RestHandler.__init__`, `ScheduleRESTRequestHandler.__init__` | `AKConfigError` at initialization. Not applied to `ECSWebSocketRequestHandler`, which authenticates at `$connect` and has no `Authoriser` |
 | No user resolvable for an ECS WebSocket connection carrying a `schedule` block | `build_route_context` (`websocket_api.py:320-322`) | `WSRouteError(401)` → error frame, before the schedule branch is reached |
-| `GetQueueAttributes` fails | `AWSScheduler.__init__` | Raises — no fallback to a guessed TTL |
+| `GetQueueAttributes` fails | `AWSScheduler.soft_delete_ttl_seconds`, on the first `delete` | `SchedulerError` — no fallback to a guessed TTL. Reached only on the delete path, since the derivation is deferred |
+| Registration rejected by EventBridge Scheduler as malformed | `AWSScheduler._register` | A `ValidationException` from the API is re-raised as `ScheduleValidationError` → 400. Local validation cannot cover every provider rule, and a rejected expression is bad input, not a server fault |
+| Another writer holds the row's update lock (Redis/Valkey) | `_RowLock` | `SchedulerConflictError` → 409 after 20 attempts over ~1 s; the caller retries |
 | Missing optional dependency for the resolved store | `ScheduledTaskStoreBuilder.build()` | `ImportError` naming the pip extra, via `require_extra` (`core/util/factory.py:49-64`). `dynamodb` → `aws`, `redis` → `redis`, `valkey` → `valkey`. No new extra is introduced: EventBridge Scheduler is reached through boto3, already in the `aws` extra |
 | `schedule` block present while scheduling is disabled | chat create path, all **four** surfaces (ECS REST, ECS WS, serverless REST, serverless WS) | 400 (REST) / error frame (WS). Never a silent no-op, and never an immediate execution |
 | Invalid or too-fine `ScheduleSpec` | `ScheduledTaskService.create` / `update` | `ScheduleValidationError` → 400, before any AWS call. Never silently rounded |
@@ -1393,10 +1661,12 @@ No new work lands on the ordinary chat, streaming, or session paths.
 | Target id is soft-deleted | service | `SchedulerConflictError` → 409 on create/update; 404 on get (soft-deleted rows are not user-visible) |
 | No live row on update | service | `SchedulerNotFoundError` → 404. Update never creates |
 | Missing/invalid Bearer token on a management or schedule-create route | `_resolve_user` | 401 |
-| No authorizer context on a serverless schedule request | `_maybe_schedule` | 401 |
+| No authorizer context on a serverless schedule request | `_maybe_schedule` / `ScheduleEndpointsHandler._handle` | `UnauthenticatedScheduleError` → 401 on the chat create path; 401 directly on the management routes |
+| Scheduling disabled on a serverless management route | `ScheduleEndpointsHandler._handle` | 404 — the route exists in the gateway but the capability does not |
 | Row write succeeds, timer registration fails | `Scheduler.upsert` | The row is restored to its prior state (deleted when it was newly created), then the error propagates. A row without a registration would silently never fire, which is worse than a failed create |
 | Timer registration removed, row soft-delete fails | `Scheduler.delete` | Error propagates. The registration is gone, so no further fires; the caller retries the delete. Ordering is deliberate — stopping fires first is the safe half |
 | Outcome arrives for an absent, deleted, mismatched or stale row | `Scheduler.mark_run_completed` | Silent no-op: logged at WARNING, returns `False`, message acknowledged. Never retried, never dead-lettered — the run genuinely has nowhere to be recorded |
+| Outcome write fails on the output consumer's own permanent-failure path | `ScheduledRunRecorder.record_before_discard` | Swallowed and logged with the full `scheduled_run` identity. There is nothing left to record it on, so the log line is the run's only surviving trace |
 | Store or AWS failure inside `mark_run_completed` | `Scheduler.mark_run_completed` | **Raises.** The consumer's normal retry path applies. A guard rejection and an infrastructure failure are deliberately different: only the former is a no-op |
 | Timer cannot deliver to the input queue | EventBridge Scheduler | Retried per the schedule's retry policy, then the timer's DLQ. Infrastructure behaviour, outside Agent Kernel |
 | Agent run fails or exhausts retries | existing runner paths | Error body echoing `scheduled_run` reaches the output consumer like any other outcome and is recorded as `FAILED` with the retry message as `last_error` |
@@ -1407,8 +1677,11 @@ ValidationError)` and returns `None`; `from_body` catches nothing beyond the abs
 malformed `scheduled_run` block on the ordinary consumer path surfaces as a `ValidationError` rather
 than being silently dropped; the guard checks catch nothing (they are plain comparisons on a
 loaded row); store calls are not wrapped, so backend errors propagate to the consumer's retry
-machinery. No bare `except Exception` is added outside the two `on_permanent_failure` handlers, where
-the `QueueConsumer` contract already requires it.
+machinery. Broad `except Exception` appears in exactly three places, each a give-up path with no
+error channel left: the runners' and consumers' `on_permanent_failure` handlers (where the
+`QueueConsumer` contract already requires it), `ScheduledRunRecorder.record_before_discard`, and
+`AWSScheduler._restore`, where a failed rollback must not mask the registration error that caused
+it. Each logs before swallowing.
 
 ---
 
@@ -1420,14 +1693,19 @@ Run with `cd ak-py && uv run pytest`.
 
 | File | Asserts |
 |---|---|
-| `tests/test_scheduler_config.py` | `validate_config()` raises `AKConfigError` for: disabled-but-used, missing input URL, missing output URL, non-`.fifo` input URL, `session.type` in {`in_memory`, `cosmosdb`, `firestore`, a dotted path}, missing **or empty-string** `group_name`/`target_role_arn`. Returns cleanly for each valid combination. TTL derivation: `visibility_timeout × receives + 300`, floored at 900, where `receives` is the max of the queue's `RedrivePolicy.maxReceiveCount` and the AKConfig value — one case each way (queue value higher, AKConfig value higher), plus **an absent `RedrivePolicy` falling back to the AKConfig value rather than to zero**, which is the default-deployment case since `input_queue_create_dlq` defaults to `false`. `GetQueueAttributes` failure raises instead of defaulting. `enabled()` is False when the block is absent. Check #6 both ways per backend: the matching block missing or empty raises, and a non-matching block populated raises (e.g. `session.type: redis` with `scheduler.dynamodb.table_name` set) — the second is the regression guard against silently ignoring a configured-but-unused table. Plus one probe test recording whether `AK_SCHEDULER__*` env vars alone populate the absent `Optional` block — the result decides whether the examples' placeholder block can be dropped (see *Terraform*) |
-| `tests/test_scheduled_task_store.py` | Per backend, against the store contract: put/get round trip, `list_by_owner` scoping and cursor, `soft_delete` sets `deleted`/`deleted_at` and the expiry, and a soft-deleted row is still `get`-able. **`list_by_owner` excludes soft-deleted rows on every backend, and a page is not short because one was filtered.** **`update_fields` writes only the named attributes and leaves every other one untouched** (write `last_run_*`, assert the definition fields are unchanged, and the reverse), and **returns `False` without writing when `expected_version` mismatches**. DynamoDB against a mocked `DynamoDBDriver` (the `test_sessions_dynamodb.py` pattern) — asserts the driver is built with `ttl=0`, that `expiry_time` is written **only** by `soft_delete`, that `soft_delete` issues a `REMOVE owner_id` so the GSI stays sparse, and that `list_by_owner` queries the index with **no** `FilterExpression`. Redis against a fake client (the `test_sessions_valkey.py` / `test_multimodal_redis_store.py` pattern) — asserts `set()` writes no `ex`, that `soft_delete` calls `client.expire` with the derived seconds, that `list_by_owner` prunes owner-set members whose row key is gone while *retaining* members whose row is merely soft-deleted, and that `update_fields` takes and releases the `<prefix>lock:<id>` key |
-| `tests/test_scheduler_aws.py` | `AWSScheduler` against mocked boto3 `scheduler`/`sqs` clients and a fake store. `upsert` builds a universal target with `MessageGroupId = scheduled_task_id`, `MessageDeduplicationId = <id>:<scheduled_time>`, both context variables in the payload, `request_id` message attribute present, and `MaximumEventAgeInSeconds = 300`. One-time schedules set `ActionAfterCompletion="DELETE"`. Sub-minute cron/rate raises before any AWS call. `per_run` vs `continuous` session-id shape. Registration failure rolls the row back. **The four guards**, one test each, asserting a `False` return and no store write; plus a store exception propagating rather than no-op'ing. A one-time task's accepted outcome sets `status = COMPLETED` and `completed_at` |
+| `tests/test_scheduler_config.py` | `validate_config()` raises `AKConfigError` for: `session.type` in {`in_memory`, `cosmosdb`, `firestore`, a dotted path}, and missing **or empty-string** `group_name`/`target_role_arn`. Returns cleanly for each valid combination, **including with either queue URL unset** — the explicit regression guard that the queue-mode check is not reintroduced. TTL derivation: `visibility_timeout × receives + 300`, floored at 900, where `receives` is the max of the queue's `RedrivePolicy.maxReceiveCount` and the AKConfig value — one case each way (queue value higher, AKConfig value higher), plus **an absent `RedrivePolicy` falling back to the AKConfig value rather than to zero**, which is the default-deployment case since `input_queue_create_dlq` defaults to `false`. `GetQueueAttributes` failure raises instead of defaulting, and **construction makes no such call at all** — the guard that the derivation stays deferred, with a second read served from the cache. `enabled()` is False when the block is absent. Check #4 both ways per backend: the matching block missing or empty raises, and a non-matching block populated raises (e.g. `session.type: redis` with `scheduler.dynamodb.table_name` set) — the second is the regression guard against silently ignoring a configured-but-unused table. Plus the probe test confirming `AK_SCHEDULER__*` env vars alone populate the absent `Optional` block, nested sub-blocks included |
+| `tests/test_scheduled_task_store.py` | Per backend, against the store contract: put/get round trip, `list_by_owner` scoping and cursor, `soft_delete` sets `deleted`/`deleted_at` and the expiry, and a soft-deleted row is still `get`-able. **`list_by_owner` excludes soft-deleted rows on every backend, and a page is not short because one was filtered.** **`update_fields` writes only the named attributes and leaves every other one untouched** (write `last_run_*`, assert the definition fields are unchanged, and the reverse), and **returns `False` without writing when `expected_version` mismatches**. DynamoDB against a mocked `DynamoDBDriver` (the `test_sessions_dynamodb.py` pattern) — asserts the driver is built with `ttl=0`, that `expiry_time` is written **only** by `soft_delete`, that `soft_delete` issues a `REMOVE owner_index_key` so the GSI stays sparse while `owner_id` itself survives on the row, and that `list_by_owner` queries the index with **no** `FilterExpression`. Redis against a fake client (the `test_sessions_valkey.py` / `test_multimodal_redis_store.py` pattern) — asserts `set()` writes no `ex`, that `soft_delete` calls `client.expire` with the derived seconds, that `list_by_owner` prunes owner-set members whose row key is gone while *retaining* members whose row is merely soft-deleted, and that `update_fields` takes and releases the `<prefix>lock:<id>` key |
+| `tests/test_scheduler_aws.py` | `AWSScheduler` against mocked boto3 `scheduler`/`sqs` clients and the `InMemoryScheduledTaskStore`, plus a subclass of `SchedulerContract` so the provider is held to the shared obligations. `upsert` builds a universal target with `MessageGroupId = scheduled_task_id`, `MessageDeduplicationId = <id>:<scheduled_time>`, both context variables in the payload, `request_id`/`user_id` message attributes present, and `MaximumEventAgeInSeconds = 300`. One-time schedules set `ActionAfterCompletion="DELETE"`. Sub-minute cron/rate raises before any AWS call, and a provider-side `ValidationException` surfaces as `ScheduleValidationError`. `per_run` vs `continuous` session-id shape. Registration failure rolls the row back — restored to its prior state on an update, removed outright on a fresh id. **The four guards**, one test each, asserting a `False` return and no store write; plus a store exception propagating rather than no-op'ing. A one-time task's accepted outcome sets `status = COMPLETED` and `completed_at` |
 | `tests/test_scheduled_task_service.py` | Id generation (`schedule_<hex>`) vs caller-supplied; fresh version on a new id and **retained** version on a live upsert and on `update`; owner stamped from the parameter and never from the body; `schedule:` prefix on both session-id shapes; 403 on a foreign live row, 409 on a soft-deleted id, 404 on `update` with no live row; a `COMPLETED` one-time task re-armed by `PUT`. `CreateAck`: `session_id` present for `continuous` and **absent** for `per_run`; `next_run_at` equals the `at` value for a one-time schedule, equals `created_at + interval` for a `rate`, and is `None` for a `cron`; `request_id` is always present, echoing a caller-supplied id when given and generated otherwise |
 | `tests/test_schedule_router.py` | FastAPI `TestClient` over `ScheduleRESTRequestHandler` (the `test_thread_router.py` pattern, with a `StaticAuthoriser`). Construction without an `Authoriser` raises `AKConfigError`. 401 missing/invalid Bearer; list returns only the caller's rows and excludes soft-deleted; 404 on unknown and on soft-deleted `GET`; 403/409/404 on `PUT`; 403 on `DELETE`; routes absent from the app when `scheduler.enabled` is false |
 | `tests/test_scheduler_tools.py` | All four tools route through `ScheduledTaskService` (asserted with a mock service); the owner is bound from the invoking session and cannot be supplied as an argument; a service error is returned as `{"error": ...}` and never raised; `SystemToolFactory.get_all()` includes the tools only when enabled and honours `scheduler.agents` scoping |
 | `tests/test_agent_runner_permanent_failure.py` | **New file — neither non-stream runner has an existing test** (`test_akagentrunner_stream.py` and `test_ecs_akagentrunner_stream.py` cover the stream runners only), so behavioural changes #5 and #6 are otherwise untested. Both runners: a record whose body carries `scheduled_run` produces an error body echoing it verbatim; an unparseable body produces the pre-change error body and **does not raise**; the ECS runner's inline error dict and the serverless runner's `_construct_error_message_body` result (`serverless/akagentrunner.py:147-149`) are each asserted in place. Serverless only: `session_id` comes from the parsed body when `scheduled_run` is present, is **omitted** when the body cannot be parsed, and still equals `record_attributes["message_group_id"]` for a non-scheduled record (`:150`) — the regression guard for #6 |
 | `tests/test_rest_handler_schedule.py` | **New file** — covers behavioural changes #7 and #8, which `test_schedule_router.py` does not reach (that file covers the management routes only). FastAPI `TestClient` over `ECSQueueRequestHandler`: a body with a `schedule` block returns 201 with the ack and **does not** call `send_message_to_input_queue`; the same body with scheduling disabled returns 400; a body with neither `session_id` nor `schedule` still returns 400 (the pre-change behaviour at `rest_handler.py:45-46`); `RestHandler.__init__` raises `AKConfigError` when `scheduler.enabled` and no `Authoriser` is supplied, and does **not** raise when scheduling is disabled |
+| `tests/conftest_scheduler.py` | **Shared fixtures, not a test file.** `enable_scheduler_config()` / `reset_scheduler_config()` build and tear down a valid `scheduler` block, `make_scheduler()` assembles an `AWSScheduler` over mocked clients and the in-memory store, and `install_scheduler()` seeds the `SchedulerFactory` singleton. It exists because eight test modules need the same enabled-and-wired config, and duplicating that setup is how the suite drifts from `validate_config()` |
+| `tests/test_scheduled_run_recorder.py` | `ScheduledRunRecorder.record_before_discard`, the path with no error channel left: the status comes from the body and not from the fact that this is the failure path, an `error` key still maps to `FAILED`, an ordinary/non-dict/unparseable body is left to the caller, a malformed block never raises here, and a failed write is swallowed **and logged with the full identity** |
+| `tests/test_scheduler_import_isolation.py` | The enablement check fires on start, not on import: importing either output-consumer module with the wiring absent must **not** raise, while `ECSOutputConsumer.run()` and `ResponseHandler.handle()` raise `AKConfigError` before polling or processing, and proceed normally when the wiring is present. The regression guard for the `agentkernel.aws` re-export problem — the authorizer Lambda imports those classes and is deliberately given no `AK_SCHEDULER__*` environment |
+| `tests/test_ws_lambda_schedule.py` | The serverless WebSocket create path: a frame carrying a `schedule` block is **not** enqueued, the ack is broadcast as `CHAT_RESPONSE` in `async` mode and as a single `STREAM_CHUNK` with `done: True` in `stream` mode, the owner is the `$connect`-resolved `user_id`, and a disabled deployment returns 400 |
+| `tests/test_chat_service_scheduled.py` | The `known_fields` regression guard — neither `scheduled_run` nor `schedule` reaches the agent as context, while a genuinely unknown field still does; the `build_response` echo on success and on the error path, and omission for ordinary traffic; and, against `ThreadRecorder`, that a `schedule:`-prefixed session creates no thread and appends no assistant message while an ordinary session still does |
 | `tests/test_ecs_websocket_schedule.py` | **New file** — covers behavioural change #12. A chat frame carrying a `schedule` block creates the task and **`SQSHandler.send_message_to_input_queue` is never called**; the ack is broadcast as `CHAT_RESPONSE` in `async` mode and as a single `STREAM_CHUNK` with `done: True` in `stream` mode; a frame with a `schedule` block and scheduling disabled returns 400; a connection with no resolvable user still yields 401 from `build_route_context` (`websocket_api.py:320-322`); an ordinary frame with no `schedule` block is enqueued exactly as before; and constructing `ECSWebSocketRequestHandler` with `scheduler.enabled` and no `Authoriser` **does not raise** — the guard against wrongly inheriting the #8 check |
 
 ### Changed existing tests
@@ -1436,11 +1714,12 @@ Run with `cd ak-py && uv run pytest`.
 |---|---|
 | `tests/test_akresponsehandler.py` | New cases: a `scheduled_run` response calls `mark_run_completed` and is **neither broadcast nor stored**, in each of `rest_sync`, `async` and `stream` (the `async`/`stream` cases are the regression guard — the pre-change code raises on the missing `endpoint_url`). Existing patch target `agentkernel.deployment.aws.serverless.akresponsehandler.AKConfig` (line 84) is retained; the new cases additionally patch the module's scheduler accessor. All existing assertions unchanged |
 | `tests/test_model.py` | `BaseRunRequest` defaults `schedule` and `scheduled_run` to `None` and round-trips both; `ScheduleSpec` rejects zero and multiple timing expressions; `from_body` returns `None` for a dict lacking the block and parses a valid one; `from_raw_body` returns `None` for malformed JSON, a non-dict body, `None`, and a dict lacking the block, and parses both a JSON string and a dict. Plus the **import-order guard**: importing `agentkernel.core.model` loads no module under `agentkernel.scheduler` (assert against `sys.modules` in a subprocess), and `agentkernel.scheduler.model.ScheduleSpec is agentkernel.core.model.ScheduleSpec` |
-| `tests/test_chat_service_streaming.py` | Extended (or a sibling `test_chat_service_scheduled.py`) with the **`known_fields` regression guard**: a request carrying `scheduled_run` produces no `AgentRequestAny` for it; `build_response` echoes the block on success and on both error paths, and omits the key entirely when absent; a `schedule:`-prefixed session id skips `get_or_create_thread` and `append_message` |
-| `tests/test_ecs_akoutputconsumer.py` | **This file already exists** (8 tests over `process_message` in `stream`/`async` WebSocket modes plus three `on_permanent_failure` cases), so the `ECSOutputConsumer` work extends it rather than creating a new file. New cases: a response carrying `scheduled_run` calls `mark_run_completed` with the derived status and is **neither broadcast nor written to the response store**; a body with an `error` key maps to `FAILED` with `last_error`; an ordinary response is stored/broadcast exactly as before; `on_permanent_failure` is unchanged. The `async`/`stream` cases are the regression guard — `test_broadcast_via_websocket_raises_when_endpoint_url_missing` (`:51`) is the pre-change failure a timer-originated message would hit. All existing assertions unchanged |
+| `tests/test_chat_service_streaming.py` | Extended with the `bind_request_user` assertion — the request's `user_id` lands in the session's volatile cache under `REQUEST_USER_ID_KEY` on the streaming paths too. The rest of the scheduling assertions live in the sibling `test_chat_service_scheduled.py` above |
+| `tests/test_ecs_akoutputconsumer.py` | **This file already exists** (8 tests over `process_message` in `stream`/`async` WebSocket modes plus three `on_permanent_failure` cases), so the `ECSOutputConsumer` work extends it rather than creating a new file. New cases: a response carrying `scheduled_run` calls `mark_run_completed` with the derived status and is **neither broadcast nor written to the response store**; a body with an `error` key maps to `FAILED` with `last_error`; an ordinary response is stored/broadcast exactly as before; `on_permanent_failure` is unchanged. The `async`/`stream` cases are the regression guard — `test_broadcast_via_websocket_raises_when_endpoint_url_missing` (`:51`) is the pre-change failure a timer-originated message would hit. `on_permanent_failure` gains cases for behavioural change #13: a scheduled body is recorded and returns early, an ordinary one takes the pre-change path. All existing assertions unchanged |
 | `tests/test_lambda_router.py` | The resource-template fallback resolves `/schedule/{scheduled_task_id}` from `event["resource"]` and passes `pathParameters`; an unmatched path still raises `ValueError` (unchanged) |
-| `tests/test_api_http.py` | `RESTAPI.run()` mounts the schedule router when `scheduler.enabled`, skips it when a `ScheduleRESTRequestHandler` was supplied, and does not mount it when disabled |
-| `tests/test_serverless_request_handle.py` | A payload carrying a `schedule` block is not enqueued and returns the ack; identity is taken from `requestContext.authorizer.principalId`; a missing authorizer context yields 401 |
+| `tests/test_api_http.py` | `RESTAPI.run()` mounts the schedule router when `scheduler.enabled`, skips it when a `ScheduleRESTRequestHandler` was supplied, and does not mount it when disabled. Plus the failure case: **auto-mounting with no supplied handler raises `AKConfigError` before uvicorn binds**, since the auto-mounted instance has no `Authoriser` |
+| `tests/test_serverless_request_handle.py` | A payload carrying a `schedule` block is not enqueued and returns the 201 ack; identity is taken from `requestContext.authorizer.principalId`; a missing authorizer context yields 401; `_handle_request` still answers 200 for an operation returning a bare body |
+| `tests/test_rest_handler_poll.py` | Updated for `enqueue_and_wait`'s added `request` parameter (behavioural change #17); poll behaviour is otherwise unchanged |
 
 Not changed, and verified so: `test_sqs_handler.py` (the `SQSHandler` surface is untouched),
 `test_ecs_sqs_consumer_parallel.py` (`process_message`/`delete` semantics are untouched),
@@ -1454,8 +1733,9 @@ and `test_factory.py` (existing builders are untouched; the new builder is cover
 
 ## Deviations from design.md
 
-Three points where detailing revealed the design cannot be implemented exactly as written. All are
-flagged for design re-review rather than silently absorbed.
+Four points where detailing or implementation revealed the design could not be built exactly as
+written. All were raised rather than silently absorbed, and **all four are now reflected in
+design.md** — this section is kept as the record of what changed and why, not as an open list.
 
 1. **Identity-resolver enforcement is init-time on ECS but per-request on serverless REST.**
    design.md (*Ownership and identity*) requires that "enabling scheduling without one fails at
@@ -1468,17 +1748,16 @@ flagged for design re-review rather than silently absorbed.
    the *timing* of the failure differs per target. WebSocket mode is unaffected — connections are
    already unconditionally authenticated at `$connect`.
 
-2. **The `scheduler` config block carries five fields, not one.** design.md (*Management and
-   administration*) states "The `scheduler` config block carries only `enabled`." This spec reads
-   that as "carries no scheduled-task definitions" and adds `agents`, `group_name`,
-   `target_role_arn`, and the three per-backend location blocks. `group_name` and `target_role_arn`
-   are unavoidable — EventBridge Scheduler requires a schedule group and a role ARN to write to SQS,
-   and neither is derivable from existing config. The table name / key prefix are needed because the
+2. **The `scheduler` config block carries deployment wiring, not just `enabled`.** design.md
+   originally stated "The `scheduler` config block carries only `enabled`." This spec reads that as
+   "carries no scheduled-task definitions" and adds `agents`, `group_name`, `target_role_arn`,
+   `region` and the three per-backend location blocks. `group_name` and `target_role_arn` are
+   unavoidable — EventBridge Scheduler requires a schedule group and a role ARN to write to SQS, and
+   neither is derivable from existing config. The table name / key prefix are needed because the
    design also requires the scheduled-task table to be a **new** table, never a partition of the
    session table, so it cannot be derived from `session.*`. `agents` is added for parity with the
    sandbox capability's tool scoping, which the design's *Agent-callable tools* section relies on
    ("a deployment that … excludes the tool set from its agents").
-
 3. **`CreateAck` omits `session_id` in `per_run` mode.** design.md's *Creation acknowledgement*
    payload carries `session_id` unconditionally. In `per_run` the session id is a substitution
    template (`schedule:<id>:<aws.scheduler.scheduled-time>`) resolved only at fire time, so the only
@@ -1489,3 +1768,15 @@ flagged for design re-review rather than silently absorbed.
    specified as unconditional. See *`ScheduledTaskService`* for the field-by-field acknowledgement,
    which also documents `next_run_at` as best-effort for the same reason: EventBridge supplies no
    next-invocation time and this spec adds no cron-evaluator dependency to synthesize one.
+
+4. **Queue mode and the FIFO input queue are enforced in Terraform, not in `validate_config()`.**
+   design.md originally required both as initialization checks in the application:
+   "`scheduler.enabled` with either queue URL unset raises `AKConfigError`", extended with a
+   `.fifo` suffix check. Both were implemented that way and then removed, because they reject a
+   correctly-wired serverless
+   deployment: each Lambda receives only the queue URL it publishes to, so the response handler has
+   no input URL and the request handler no output URL, and an absent URL is not evidence of a
+   misconfiguration. The preconditions are unchanged; only the place they are checked moved, to a
+   `validation` block on `scheduled_task` and to queue modules that create a FIFO input queue. The
+   guarantee is arguably stronger — the deploy fails before the application is ever built — but the
+   failure is no longer visible from the app's own config validation, so it is recorded here.
