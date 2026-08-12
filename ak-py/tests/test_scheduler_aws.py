@@ -11,7 +11,7 @@ from conftest_scheduler import enable_scheduler_config, make_scheduler, reset_sc
 from agentkernel.core.model import ScheduleMode
 from agentkernel.scheduler.errors import SchedulerError, ScheduleValidationError
 from agentkernel.scheduler.model import RunStatus, ScheduleSpec, TaskStatus
-from agentkernel.scheduler.providers.aws import MAX_EVENT_AGE_SECONDS, UNIVERSAL_SQS_TARGET_ARN, AWSScheduler
+from agentkernel.scheduler.providers.aws import DEFINITION_FIELDS, MAX_EVENT_AGE_SECONDS, UNIVERSAL_SQS_TARGET_ARN, AWSScheduler
 from agentkernel.scheduler.testing import InMemoryScheduledTaskStore, SchedulerContract, build_task
 
 
@@ -235,6 +235,79 @@ class TestRollback:
             scheduler.upsert(replacement)
 
         assert store.get("schedule_a").schedule.rate == "1 hour"
+
+    def test_rolling_back_a_definition_write_leaves_run_history_alone(self, scheduler, store):
+        """The rollback restores the definition through the same field write that made the
+        change, so it cannot reset history the way a whole-row restore would."""
+        original = build_task("schedule_a")
+        scheduler.upsert(original)
+        scheduler.mark_run_completed("schedule_a", original.scheduled_task_version, datetime.now(timezone.utc), RunStatus.COMPLETED)
+        scheduler._scheduler.update_schedule.side_effect = RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            scheduler.upsert(original.model_copy(update={"schedule": ScheduleSpec(rate="2 hours")}))
+
+        restored = store.get("schedule_a")
+        assert restored.schedule.rate == "1 hour"
+        assert restored.last_run_status == RunStatus.COMPLETED
+
+    def test_a_failed_rollback_does_not_mask_the_registration_error(self, scheduler, store, monkeypatch):
+        """The caller must still see why the registration failed, not a secondary store error."""
+        task = build_task("schedule_a")
+        scheduler.upsert(task)
+        scheduler._scheduler.update_schedule.side_effect = RuntimeError("registration boom")
+        # The forward definition write succeeds; only the rollback's write fails.
+        monkeypatch.setattr(store, "update_fields", MagicMock(side_effect=[True, RuntimeError("rollback boom")]))
+
+        with pytest.raises(RuntimeError, match="registration boom"):
+            scheduler.upsert(task.model_copy(update={"schedule": ScheduleSpec(rate="2 hours")}))
+
+
+class TestDefinitionWrite:
+    """An upsert over an existing row writes definition fields only, never the whole row."""
+
+    def test_an_existing_row_is_never_whole_row_written(self, scheduler, store, monkeypatch):
+        """put() would reset every field the definition object does not carry, which is the
+        whole reason update_fields exists on the store ABC."""
+        scheduler.upsert(build_task("schedule_a"))
+        monkeypatch.setattr(store, "put", MagicMock(side_effect=AssertionError("put must not be used on the update path")))
+
+        scheduler.upsert(build_task("schedule_a", version=store.get("schedule_a").scheduled_task_version))
+
+    def test_the_definition_write_is_conditioned_on_the_incarnation(self, scheduler, store):
+        """Unconditioned, a missing row is not an error on DynamoDB — update_item would create a
+        partial one — so the version condition is what makes the three backends agree."""
+        task = build_task("schedule_a", version="v-current")
+        scheduler.upsert(task)
+        spy = MagicMock(wraps=store.update_fields)
+        store.update_fields = spy
+
+        scheduler.upsert(task.model_copy(update={"schedule": ScheduleSpec(rate="4 hours")}))
+
+        assert spy.call_args.kwargs["expected_version"] == "v-current"
+
+    def test_only_the_definition_fields_are_written(self, scheduler, store):
+        """The written set must stay disjoint from the outcome and soft-delete field sets."""
+        task = build_task("schedule_a")
+        scheduler.upsert(task)
+        spy = MagicMock(wraps=store.update_fields)
+        store.update_fields = spy
+
+        scheduler.upsert(task.model_copy(update={"schedule": ScheduleSpec(rate="5 hours")}))
+
+        assert set(spy.call_args.args[1]) == set(DEFINITION_FIELDS)
+
+    def test_the_definition_reaches_the_store_json_safe(self, scheduler, store):
+        """schedule is a nested model and encode_fields only flattens datetimes and enums, so an
+        un-serialized value would reach json.dumps on Redis as an unserializable object."""
+        task = build_task("schedule_a")
+        scheduler.upsert(task)
+        spy = MagicMock(wraps=store.update_fields)
+        store.update_fields = spy
+
+        scheduler.upsert(task.model_copy(update={"schedule": ScheduleSpec(rate="6 hours")}))
+
+        json.dumps(spy.call_args.args[1])  # must not raise
 
 
 class TestOutcomeGuards:

@@ -7,6 +7,7 @@ runner consumes it exactly as it would any other queued request.
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -16,10 +17,10 @@ from botocore.exceptions import ClientError
 from ...core.config import AKConfig
 from ...core.model import SCHEDULED_SESSION_PREFIX, ScheduleMode
 from ..base import Scheduler
-from ..errors import SchedulerError, ScheduleValidationError
+from ..errors import SchedulerConflictError, SchedulerError, ScheduleValidationError
 from ..expression import ScheduleExpression
 from ..model import RunStatus, ScheduledTask, ScheduledTaskPage, TaskStatus
-from ..store.base import ScheduledTaskStore, ScheduledTaskStoreBuilder
+from ..store.base import ScheduledTaskStore, ScheduledTaskStoreBuilder, TaskSerializer
 
 # EventBridge Scheduler's finest interval, for both cron and rate expressions.
 MINIMUM_GRANULARITY = timedelta(minutes=1)
@@ -35,6 +36,13 @@ TTL_SAFETY_MARGIN_SECONDS = 300
 # Floor for the derived soft-delete TTL, so a short visibility timeout cannot shrink the
 # grace window below what an in-flight run needs.
 TTL_FLOOR_SECONDS = 900
+
+# The fields a definition write owns. Deliberately disjoint from the outcome-write set
+# (last_run_*, last_error) and from the soft-delete set (deleted, deleted_at): that disjointness
+# is what lets a management PUT and a consumer's outcome write interleave without either
+# clobbering the other's fields. owner_id, created_at and scheduled_task_version are immutable
+# for the life of an incarnation, so only the create path writes them.
+DEFINITION_FIELDS = ("schedule", "message", "updated_at", "status", "completed_at")
 
 # Substituted by EventBridge Scheduler into the payload at fire time, so the delivered
 # message needs nothing derived by the agent runner.
@@ -109,13 +117,19 @@ class AWSScheduler(Scheduler):
         self._require_input_queue_url()
 
         previous = self._store.get(task.scheduled_task_id)
-        self._store.put(task)
-        try:
-            self._register(task)
-        except Exception:
-            # A row without a registration would silently never fire, so restore it.
-            self._restore(task.scheduled_task_id, previous)
-            raise
+        if previous is not None and previous.deleted:
+            # Reachable only when a delete lands between the service's own liveness check and
+            # this read. Writing on through would put definition fields on a tombstone and
+            # register a timer for a deleted task.
+            raise SchedulerConflictError(
+                f"scheduled task '{task.scheduled_task_id}' was deleted while this request was in flight; "
+                "the id frees up when its grace period expires"
+            )
+
+        if previous is None:
+            self._create(task)
+        else:
+            self._write_definition(task, previous)
         return task
 
     def delete(self, scheduled_task_id: str) -> None:
@@ -380,19 +394,88 @@ class AWSScheduler(Scheduler):
             "component that registers schedules."
         )
 
-    def _restore(self, scheduled_task_id: str, previous: Optional[ScheduledTask]) -> None:
-        """Undo a row write whose registration failed.
+    def _create(self, task: ScheduledTask) -> None:
+        """Write a brand-new row and register its timer.
 
-        :param scheduled_task_id: Identity of the row to restore.
-        :param previous: The row as it was before the write, or None when it was new.
+        The only path that uses a whole-row ``put``: there is no prior state to preserve, and
+        the immutable fields (``owner_id``, ``created_at``, ``scheduled_task_version``) are
+        written here and never again for this incarnation.
+
+        :param task: The scheduled task to create.
+        :raises Exception: Whatever the registration raised, after rolling the row back.
+        """
+        self._store.put(task)
+        try:
+            self._register(task)
+        except Exception:
+            # A row without a registration would silently never fire. Removed rather than
+            # tombstoned: a tombstone would block retrying the create at the same id.
+            self._rollback(task.scheduled_task_id, lambda: self._store.remove(task.scheduled_task_id))
+            raise
+
+    def _write_definition(self, task: ScheduledTask, previous: ScheduledTask) -> None:
+        """Replace an existing row's definition, leaving its run history untouched.
+
+        A field update rather than a ``put``: a whole-row write would reset ``last_run_*`` from
+        an object that never carried them, destroying the history a re-create is supposed to
+        keep — and reverting any outcome recorded since the caller read the row.
+
+        :param task: The scheduled task carrying the new definition.
+        :param previous: The row as it was, used to roll back a failed registration.
+        :raises SchedulerConflictError: The row vanished or its incarnation changed since the read.
+        :raises Exception: Whatever the registration raised, after rolling the definition back.
+        """
+        self._apply_definition(task)
+        try:
+            self._register(task)
+        except Exception:
+            self._rollback(task.scheduled_task_id, lambda: self._apply_definition(previous))
+            raise
+
+    def _apply_definition(self, task: ScheduledTask) -> None:
+        """Write just the definition fields, conditioned on the incarnation.
+
+        ``expected_version`` is not optional here. Without it a missing row is not an error on
+        DynamoDB — ``update_item`` would create a partial one — while Redis and the in-memory
+        store return False. With it all three agree, so a False means the row is gone or has
+        been recreated under a new incarnation.
+
+        :param task: The scheduled task whose definition to write.
+        :raises SchedulerConflictError: The row vanished or its incarnation changed.
+        """
+        applied = self._store.update_fields(
+            task.scheduled_task_id,
+            self._definition_fields(task),
+            expected_version=task.scheduled_task_version,
+        )
+        if not applied:
+            raise SchedulerConflictError(
+                f"scheduled task '{task.scheduled_task_id}' changed while this update was in flight — "
+                "it was deleted, or deleted and recreated. Re-read it and retry."
+            )
+
+    @staticmethod
+    def _definition_fields(task: ScheduledTask) -> dict[str, Any]:
+        """Extract the definition fields in the JSON-safe form the stores expect.
+
+        Taken from the serializer rather than the model attributes: ``schedule`` is a nested
+        model and ``encode_fields`` only flattens datetimes and enums, so passing the attribute
+        straight through would reach ``json.dumps`` on Redis as an unserializable object.
+
+        :param task: The scheduled task to read the definition from.
+        :return: The definition field names mapped to JSON-safe values.
+        """
+        record = TaskSerializer.to_record(task)
+        return {name: record[name] for name in DEFINITION_FIELDS}
+
+    def _rollback(self, scheduled_task_id: str, undo: Callable[[], None]) -> None:
+        """Run a rollback without letting its own failure mask the original error.
+
+        :param scheduled_task_id: Identity of the row being rolled back, for the log line.
+        :param undo: The rollback to attempt.
         """
         try:
-            if previous is None:
-                # A tombstone would block retrying the create at the same id, so a row that
-                # never existed before this call is removed outright.
-                self._store.remove(scheduled_task_id)
-            else:
-                self._store.put(previous)
+            undo()
         except Exception:
             self._log.exception("Failed to roll back scheduled task %s after a registration failure", scheduled_task_id)
 

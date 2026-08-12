@@ -195,3 +195,61 @@ class SchedulerContract:
         loaded = scheduler.get(task.scheduled_task_id)
         assert loaded.status == TaskStatus.COMPLETED
         assert loaded.completed_at is not None
+
+    # ------------------------------------------------- definition writes vs run history
+
+    def test_upsert_over_a_live_row_preserves_its_run_history(self, scheduler: Scheduler):
+        """A re-create carries no last_run_* fields, so a whole-row write would reset them. An
+        idempotent re-create must not erase the history the retained incarnation exists to keep."""
+        task = build_task("schedule_history")
+        scheduler.upsert(task)
+        scheduled_time = datetime.now(timezone.utc)
+        scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, scheduled_time, RunStatus.FAILED, "it blew up")
+
+        scheduler.upsert(task.model_copy(update={"schedule": ScheduleSpec(rate="2 hours")}))
+
+        loaded = scheduler.get(task.scheduled_task_id)
+        assert loaded.schedule.rate == "2 hours"
+        assert loaded.last_run_status == RunStatus.FAILED
+        assert loaded.last_run_at is not None
+        assert loaded.last_run_scheduled_time is not None
+        assert loaded.last_error == "it blew up"
+
+    def test_upsert_over_a_live_row_keeps_the_stale_outcome_guard_armed(self, scheduler: Scheduler):
+        """Resetting last_run_scheduled_time would disarm the guard that rejects an outcome for
+        an older fire, letting an in-flight run overwrite a newer one's result."""
+        task = build_task("schedule_guard")
+        scheduler.upsert(task)
+        newer = datetime.now(timezone.utc)
+        older = newer - timedelta(hours=1)
+        scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, newer, RunStatus.COMPLETED)
+
+        scheduler.upsert(task.model_copy(update={"schedule": ScheduleSpec(rate="3 hours")}))
+
+        assert scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, older, RunStatus.FAILED) is False
+        assert scheduler.get(task.scheduled_task_id).last_run_status == RunStatus.COMPLETED
+
+    def test_upsert_on_a_soft_deleted_row_is_rejected(self, scheduler: Scheduler):
+        """Deletion is terminal. A whole-row write would silently un-delete the row and register
+        a timer for it, which is reachable when a delete lands mid-request."""
+        from .errors import SchedulerConflictError
+
+        task = build_task("schedule_tombstone")
+        scheduler.upsert(task)
+        scheduler.delete(task.scheduled_task_id)
+
+        with pytest.raises(SchedulerConflictError):
+            scheduler.upsert(task)
+        assert scheduler.get(task.scheduled_task_id, include_deleted=True).deleted is True
+
+    def test_upsert_from_a_superseded_incarnation_is_rejected(self, scheduler: Scheduler):
+        """The row was deleted and recreated under a new incarnation since the caller read it,
+        so writing its definition would land on a successor that is not the same scheduled task."""
+        from .errors import SchedulerConflictError
+
+        scheduler.upsert(build_task("schedule_superseded", version="v-current"))
+        stale = build_task("schedule_superseded", version="v-previous", spec=ScheduleSpec(rate="6 hours"))
+
+        with pytest.raises(SchedulerConflictError):
+            scheduler.upsert(stale)
+        assert scheduler.get("schedule_superseded").schedule.rate == "1 hour"
