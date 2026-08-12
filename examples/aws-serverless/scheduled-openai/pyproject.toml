@@ -11,13 +11,13 @@ dependencies = []
 # dequeue work, so they omit the (heavy) OpenAI Agents SDK; only the agent
 # runner needs it. deploy.sh installs each package with `uv export --extra <name>`.
 request_handler = [
-    "agentkernel[aws,api]>=0.8.1",
+    "agentkernel[aws]>=0.8.1",
 ]
 response_handler = [
-    "agentkernel[aws,api]>=0.8.1",
+    "agentkernel[aws]>=0.8.1",
 ]
 agent_runner = [
-    "agentkernel[aws,openai,api]>=0.8.1",
+    "agentkernel[aws,openai]>=0.8.1",
 ]
 
 [dependency-groups]
@@ -30,7 +30,7 @@ dev = [
 # The API Gateway authorizer is its own tiny Lambda: it validates a token and returns a
 # policy, so it needs neither the agent frameworks nor the AWS deployment extras' bulk.
 auth = [
-    "agentkernel[api]>=0.8.1",
+    "agentkernel>=0.8.1",
     "annotated-types==0.7.0",
     "pydantic==2.12.5",
     "pydantic-settings==2.12.0",
