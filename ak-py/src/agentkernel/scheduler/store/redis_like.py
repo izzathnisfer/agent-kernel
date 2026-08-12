@@ -6,7 +6,9 @@ Layout (keys under the configured prefix):
   - Update lock: ``{prefix}lock:{scheduled_task_id}`` -> short-lived SET NX guard
 
 The owner set is the only index available, so unlike DynamoDB there is no sparse index to
-lean on and ``list_by_owner`` filters tombstones out on read.
+lean on and ``list_by_owner`` filters tombstones out on read. Its pages are ordered by id and
+its cursor is the last id read, so a page is stable against tasks created or removed while the
+caller is walking the listing.
 """
 
 import json
@@ -74,16 +76,22 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
         return TaskSerializer.from_record(record) if record is not None else None
 
     def list_by_owner(self, owner_id: str, *, limit: Optional[int] = None, cursor: Optional[str] = None) -> ScheduledTaskPage:
+        # The cursor is the last id of the previous page, not its length. An offset addresses a
+        # position in a set that shifts whenever a task is created, deleted or pruned between
+        # pages, which silently skips or repeats rows; resuming after a known id does not.
         owner_key = self._owner_key(owner_id)
-        # Sorted so an offset cursor addresses the same position across calls.
         task_ids = sorted(self._driver.smembers(owner_key))
-        offset = PageCursor.decode(cursor) or 0
+        after = PageCursor.decode(cursor)
+        pending = [task_id for task_id in task_ids if after is None or task_id > after]
 
         items: list[ScheduledTask] = []
-        index = offset
-        while index < len(task_ids) and (limit is None or len(items) < limit):
-            task_id = task_ids[index]
-            index += 1
+        last_read: Optional[str] = None
+        more_remain = False
+        for task_id in pending:
+            if limit is not None and len(items) >= limit:
+                more_remain = True
+                break
+            last_read = task_id
             record = self._read_record(task_id)
             if record is None:
                 # The row key expired but its set member did not. Prune it, or the index grows
@@ -95,7 +103,10 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
             if not record.get("deleted"):
                 items.append(TaskSerializer.from_record(record))
 
-        return ScheduledTaskPage(items=items, next_cursor=PageCursor.encode(index) if index < len(task_ids) else None)
+        # last_read, not the last item: resuming after a tombstone or a pruned member skips
+        # re-reading it, and a page whose tail is all tombstones still advances.
+        next_cursor = PageCursor.encode(last_read) if more_remain and last_read is not None else None
+        return ScheduledTaskPage(items=items, next_cursor=next_cursor)
 
     def remove(self, scheduled_task_id: str) -> None:
         self._log.debug("Removing scheduled task %s", scheduled_task_id)

@@ -60,11 +60,15 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         """True when an input queue is configured (enqueue mode); False for direct mode."""
         return self._config.execution.queues.input.url is not None
 
-    async def enqueue_and_wait(self, body: BaseRunRequest, request: Request = None):
+    async def enqueue_and_wait(self, body: BaseRunRequest, request: Request):
         """Enqueue request; REST_SYNC waits for the response, REST_ASYNC returns request_id immediately.
 
         A body carrying a ``schedule`` block is registered instead: nothing is enqueued, and
         the first message on the input queue appears when the timer fires.
+
+        ``request`` is required rather than defaulted: FastAPI injects it on every call, and it
+        must stay annotated as a bare ``Request`` for that injection to happen — under
+        ``Optional[Request]`` FastAPI stops recognising it and treats it as a body field.
 
         :param body: The chat body, optionally carrying a ``schedule`` block.
         :param request: The incoming request, used to resolve the scheduled task's owner.
@@ -128,7 +132,7 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
             self._log.error(f"Error processing request: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail={"error": str(e), "session_id": body.session_id if body else None})
 
-    async def _create_scheduled_task(self, body: BaseRunRequest, request: Optional[Request]) -> JSONResponse:
+    async def _create_scheduled_task(self, body: BaseRunRequest, request: Request) -> JSONResponse:
         """Register a chat body to run later and acknowledge the registration.
 
         The acknowledgement is returned directly in both REST modes. There is no run to wait

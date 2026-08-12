@@ -103,3 +103,34 @@ def test_a_scheduled_frame_is_rejected_when_scheduling_is_disabled(handler):
 def test_a_too_fine_schedule_is_rejected(handler):
     status, _ = handler._handle_queue_mode(_event({"prompt": "hi", "schedule": {"rate": "10 seconds"}}))
     assert status == 400
+
+
+class TestDirectMode:
+    """A deployment without queues must still schedule rather than run the frame now."""
+
+    def test_direct_chat_registers_instead_of_running_the_agent(self, handler):
+        handler._chat_service = MagicMock()
+
+        status, _ = handler._handle_direct_chat(_event(_schedule_body()))
+
+        assert status == 200
+        handler._chat_service.process_chat_request.assert_not_called()
+        assert handler.broadcast.call_args.kwargs["message"]["status"] == "SCHEDULED"
+
+    def test_direct_stream_registers_instead_of_streaming(self, handler):
+        AKConfig.get().execution.mode = ExecutionMode.STREAM
+        handler._chat_service = MagicMock()
+
+        status, body = handler._handle_stream_direct(_event(_schedule_body()))
+
+        assert status == 201
+        assert body["scheduled_task_id"] == "a"
+        handler._chat_service.process_stream_chat_sync.assert_not_called()
+
+    def test_an_ordinary_direct_frame_still_reaches_the_agent(self, handler):
+        handler._chat_service = MagicMock()
+        handler._chat_service.process_chat_request.return_value = (200, {"result": "hi"})
+
+        handler._handle_direct_chat(_event({"prompt": "hi", "session_id": "s1"}))
+
+        handler._chat_service.process_chat_request.assert_called_once()

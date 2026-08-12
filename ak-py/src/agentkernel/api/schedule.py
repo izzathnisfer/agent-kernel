@@ -74,6 +74,7 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
 
         @router.get(self.SCHEDULE_PATH)
         def list_scheduled_tasks(request: Request, limit: Optional[int] = None, cursor: Optional[str] = None):
+            self._require_service()
             owner_id = self._resolve_user(request)
             page = self._service.list(owner_id=owner_id, limit=limit, cursor=cursor)
             return {
@@ -83,12 +84,14 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
 
         @router.get(self.SCHEDULE_ITEM_PATH)
         def get_scheduled_task(scheduled_task_id: str, request: Request):
+            self._require_service()
             owner_id = self._resolve_user(request)
             with self._mapped_errors():
                 return self._service.get(scheduled_task_id, owner_id=owner_id).model_dump(mode="json")
 
         @router.put(self.SCHEDULE_ITEM_PATH)
         def update_scheduled_task(scheduled_task_id: str, body: ScheduleUpdateRequest, request: Request):
+            self._require_service()
             owner_id = self._resolve_user(request)
             with self._mapped_errors():
                 task = self._service.update(
@@ -102,12 +105,25 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
 
         @router.delete(self.SCHEDULE_ITEM_PATH)
         def delete_scheduled_task(scheduled_task_id: str, request: Request):
+            self._require_service()
             owner_id = self._resolve_user(request)
             with self._mapped_errors():
                 self._service.delete(scheduled_task_id, owner_id=owner_id)
             return {"scheduled_task_id": scheduled_task_id, "deleted": True}
 
         return router
+
+    def _require_service(self) -> None:
+        """Reject a request this handler cannot serve because scheduling is switched off.
+
+        The handler can be constructed directly by a deployment whose config has scheduling
+        disabled, leaving no service behind it. Mirrors the serverless schedule routes, which
+        answer the same 404 rather than failing inside the route body.
+
+        :raises HTTPException: 404 when scheduling is not enabled for this deployment.
+        """
+        if self._service is None:
+            raise HTTPException(status_code=404, detail="Scheduling is not enabled for this deployment")
 
     @staticmethod
     def _mapped_errors():

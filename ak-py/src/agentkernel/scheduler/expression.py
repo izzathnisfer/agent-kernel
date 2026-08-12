@@ -73,11 +73,32 @@ class ScheduleExpression:
         amount = int(match.group(1))
         if amount < 1:
             raise ScheduleValidationError(f"rate '{rate}' must specify a positive interval")
-        unit = match.group(2).lower().rstrip("s")
+        supplied_unit = match.group(2).lower()
+        unit = supplied_unit.rstrip("s")
+        ScheduleExpression._reject_plural_mismatch(rate, amount, supplied_unit, unit)
         return _RATE_UNITS[unit] * amount
 
     @staticmethod
-    def next_run_at(spec: ScheduleSpec, created_at: datetime) -> Optional[datetime]:
+    def _reject_plural_mismatch(rate: str, amount: int, supplied_unit: str, unit: str) -> None:
+        """Reject a rate whose unit does not agree in number with its amount.
+
+        Every supported timer requires the agreement — ``rate(1 minute)`` and
+        ``rate(5 minutes)``, never the other way round. Caught here so it reads as bad input on
+        the field the caller wrote, rather than as an opaque rejection from the timer.
+
+        :param rate: The rate expression, for the message.
+        :param amount: The parsed interval count.
+        :param supplied_unit: The unit exactly as written.
+        :param unit: The unit with any plural 's' removed.
+        :raises ScheduleValidationError: The unit does not agree with the amount.
+        """
+        expected = unit if amount == 1 else f"{unit}s"
+        if supplied_unit == expected:
+            return
+        raise ScheduleValidationError(f"rate '{rate}' must read '{amount} {expected}'; the unit has to agree in number with the amount")
+
+    @staticmethod
+    def next_run_at(spec: ScheduleSpec, registered_at: datetime) -> Optional[datetime]:
         """Derive the next fire time, where it is knowable without evaluating the expression.
 
         Best-effort by design: no timer API supplies a next-invocation time, and a cron
@@ -85,13 +106,14 @@ class ScheduleExpression:
         computed", never "not scheduled"; ``last_run_at`` is the authoritative history.
 
         :param spec: The schedule to read.
-        :param created_at: When the schedule was registered, the base for a rate.
+        :param registered_at: When this definition was registered with the timer, which is the
+            base a rate counts from — not when the id was first created.
         :return: The next fire time in UTC, or None for a cron expression.
         """
         if spec.at is not None:
             return ScheduleExpression.as_utc(spec.at)
         if spec.rate is not None:
-            return ScheduleExpression.as_utc(created_at) + ScheduleExpression.parse_rate(spec.rate)
+            return ScheduleExpression.as_utc(registered_at) + ScheduleExpression.parse_rate(spec.rate)
         return None
 
     @staticmethod

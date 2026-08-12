@@ -314,6 +314,46 @@ class TestRedisLayout:
         store.list_by_owner("u1")
         assert client.sets[f"{PREFIX}owner:u1"] == set()
 
+    def test_pagination_is_stable_when_a_task_is_added_between_pages(self):
+        """The cursor resumes after a known id, so an insert cannot shift a row out of view."""
+        store, _ = _fake_redis_store()
+        for index in range(4):
+            store.put(build_task(f"task-{index}", owner_id="u1"))
+
+        first = store.list_by_owner("u1", limit=2)
+        # Sorts ahead of everything already read, which an offset cursor would skip past.
+        store.put(build_task("aaa-new", owner_id="u1"))
+        second = store.list_by_owner("u1", limit=2, cursor=first.next_cursor)
+
+        assert [task.scheduled_task_id for task in first.items] == ["task-0", "task-1"]
+        assert [task.scheduled_task_id for task in second.items] == ["task-2", "task-3"]
+
+    def test_pagination_is_stable_when_a_task_is_removed_between_pages(self):
+        """An offset cursor would step over task-2 once task-0 left the set."""
+        store, _ = _fake_redis_store()
+        for index in range(4):
+            store.put(build_task(f"task-{index}", owner_id="u1"))
+
+        first = store.list_by_owner("u1", limit=2)
+        store.remove("task-0")
+        second = store.list_by_owner("u1", limit=2, cursor=first.next_cursor)
+
+        assert [task.scheduled_task_id for task in second.items] == ["task-2", "task-3"]
+
+    def test_a_page_whose_tail_is_all_tombstones_still_advances(self):
+        store, _ = _fake_redis_store()
+        for index in range(4):
+            store.put(build_task(f"task-{index}", owner_id="u1"))
+        store.soft_delete("task-2", datetime.now(timezone.utc), 900)
+        store.soft_delete("task-3", datetime.now(timezone.utc), 900)
+
+        first = store.list_by_owner("u1", limit=2)
+        second = store.list_by_owner("u1", limit=2, cursor=first.next_cursor)
+
+        assert [task.scheduled_task_id for task in first.items] == ["task-0", "task-1"]
+        assert second.items == []
+        assert second.next_cursor is None
+
     def test_update_takes_and_releases_the_row_lock(self):
         store, client = _fake_redis_store()
         store.put(build_task("a"))

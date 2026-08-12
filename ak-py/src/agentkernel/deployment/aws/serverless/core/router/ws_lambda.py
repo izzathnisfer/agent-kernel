@@ -320,6 +320,10 @@ class SystemRoutesHandler(LambdaWSHandler):
             request = ws_message_info.request
             if request.body is None:
                 raise ValueError("body is required")
+            # Checked here too, not only in queue mode: a frame carrying a schedule must never
+            # be executed immediately just because this deployment runs without queues.
+            if request.body.schedule is not None:
+                return self._register_schedule(ws_message_info).model_dump(mode="json", exclude_none=True)
             _, res_body = self._chat_service.process_chat_request(request.body)
             return res_body
 
@@ -347,6 +351,10 @@ class SystemRoutesHandler(LambdaWSHandler):
             request = ws_message_info.request
             if request.body is None:
                 raise ValueError("body is required")
+            # Checked here too, not only in queue mode: a frame carrying a schedule must never
+            # be streamed immediately just because this deployment runs without queues.
+            if request.body.schedule is not None:
+                return self._create_scheduled_task(event, ws_message_info)
             session_id = request.body.session_id
 
             endpoint_url = LambdaWSHandler.construct_endpoint_url(event)
@@ -384,18 +392,8 @@ class SystemRoutesHandler(LambdaWSHandler):
         :return: Tuple of (status_code, response_body).
         """
         user_id = ws_message_info.user_id
-        if self._schedule_service is None:
-            return (400, self._build_lambda_response(user_id=user_id, msg="Scheduling is not enabled for this deployment", success=False))
-
-        body = ws_message_info.request.body
         try:
-            ack = self._schedule_service.create(
-                spec=body.schedule,
-                prompt=body.prompt,
-                agent=body.agent,
-                owner_id=user_id,
-                request_id=ws_message_info.request.request_id,
-            )
+            ack = self._register_schedule(ws_message_info)
         except (SchedulerError, ValueError) as e:
             self._log.warning(f"Scheduled task creation failed for user_id={user_id}: {e}")
             return (400, self._build_lambda_response(user_id=user_id, msg=str(e), success=False))
@@ -404,6 +402,28 @@ class SystemRoutesHandler(LambdaWSHandler):
         response_body = self._build_lambda_response(user_id=user_id, msg="Request scheduled successfully", success=True)
         response_body["scheduled_task_id"] = ack.scheduled_task_id
         return (201, response_body)
+
+    def _register_schedule(self, ws_message_info: "LambdaWSHandler.WSMessageInfo") -> CreateAck:
+        """Register the frame's ``schedule`` block against the connection's authenticated user.
+
+        Shared by the queue-mode and direct-mode chat paths so all three agree on what a frame
+        carrying a schedule does, and failures surface in each caller's own response shape.
+
+        :param ws_message_info: The parsed frame and its authenticated user.
+        :return: The creation acknowledgement.
+        :raises ValueError: Scheduling is not enabled for this deployment.
+        :raises SchedulerError: The schedule was rejected.
+        """
+        if self._schedule_service is None:
+            raise ValueError("Scheduling is not enabled for this deployment")
+        body = ws_message_info.request.body
+        return self._schedule_service.create(
+            spec=body.schedule,
+            prompt=body.prompt,
+            agent=body.agent,
+            owner_id=ws_message_info.user_id,
+            request_id=ws_message_info.request.request_id,
+        )
 
     def _broadcast_ack(self, ack: CreateAck, event: Dict[str, Any], user_id: str) -> None:
         """Push the creation acknowledgement over the caller's connection.

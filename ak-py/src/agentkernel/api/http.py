@@ -107,8 +107,11 @@ class RESTAPI:
         if SchedulerFactory.enabled():
             from .schedule import ScheduleRESTRequestHandler
 
-            # Mount the schedule router automatically unless the user supplied their own
-            # (e.g. one constructed with a custom Authoriser).
+            # The management routes are part of the capability, so a deployment that enables
+            # scheduling always gets them. There is nothing to auto-mount, though: the handler
+            # refuses to exist without an Authoriser, so this branch either finds the one the
+            # user supplied or raises AKConfigError before uvicorn binds. That is deliberate —
+            # an open schedule route would let anyone manage anyone's tasks.
             if not any(isinstance(handler, ScheduleRESTRequestHandler) for handler in handlers):
                 cls._log.info("Scheduled tasks are enabled — mounting schedule routes")
                 routers.append(ScheduleRESTRequestHandler().get_router())

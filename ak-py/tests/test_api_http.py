@@ -473,3 +473,16 @@ class TestScheduleRouterMounting:
 
     def test_nothing_is_mounted_when_scheduling_is_disabled(self, mock_config):
         assert self._client(mock_config).get("/api/v1/schedule").status_code == 404
+
+    def test_a_handler_built_without_a_service_answers_404_rather_than_500(self, mock_config):
+        """A deployment can construct the handler directly while scheduling is switched off."""
+        handler = _ScheduleHandlerClass(authoriser=_TestAuthoriser(), service=None)
+        client = self._client(mock_config, handlers=[handler])
+
+        for response in (
+            client.get("/api/v1/schedule", headers={"Authorization": "Bearer t"}),
+            client.get("/api/v1/schedule/abc", headers={"Authorization": "Bearer t"}),
+            client.put("/api/v1/schedule/abc", json={"prompt": "x"}, headers={"Authorization": "Bearer t"}),
+            client.delete("/api/v1/schedule/abc", headers={"Authorization": "Bearer t"}),
+        ):
+            assert response.status_code == 404

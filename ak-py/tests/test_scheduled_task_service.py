@@ -197,9 +197,21 @@ class TestCreateAck:
         ack = _create(service, spec=ScheduleSpec(at=moment))
         assert ack.next_run_at == moment
 
-    def test_next_run_at_is_created_at_plus_the_interval_for_a_rate(self, service, store):
+    def test_next_run_at_is_the_registration_time_plus_the_interval_for_a_rate(self, service, store):
         ack = _create(service, spec=ScheduleSpec(rate="30 minutes", id="a"))
-        assert ack.next_run_at == store.get("a").created_at + timedelta(minutes=30)
+        assert ack.next_run_at == store.get("a").updated_at + timedelta(minutes=30)
+
+    def test_next_run_at_re_bases_when_a_create_replaces_a_live_definition(self, service, store):
+        """EventBridge re-bases a rate at registration, so an ack quoting the original
+        created_at would report a next run that has already gone by."""
+        _create(service, spec=ScheduleSpec(rate="30 minutes", id="a"))
+        original_created_at = store.get("a").created_at
+
+        ack = _create(service, spec=ScheduleSpec(rate="30 minutes", id="a"))
+
+        assert store.get("a").created_at == original_created_at
+        assert ack.next_run_at == store.get("a").updated_at + timedelta(minutes=30)
+        assert ack.next_run_at >= original_created_at + timedelta(minutes=30)
 
     def test_next_run_at_is_absent_for_a_cron(self, service):
         """No AWS API supplies it and this adds no cron-evaluator dependency."""

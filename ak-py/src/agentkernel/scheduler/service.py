@@ -291,6 +291,8 @@ class ScheduledTaskService:
             scheduled_task_version=task.scheduled_task_version,
             # Only continuous mode has a stable session; a per-run id exists only at fire time.
             session_id=(f"{SCHEDULED_SESSION_PREFIX}{task.scheduled_task_id}" if task.schedule.mode == ScheduleMode.CONTINUOUS else None),
-            next_run_at=ScheduleExpression.next_run_at(task.schedule, task.created_at),
+            # updated_at, not created_at: a create over a live id re-registers the schedule, so
+            # a rate counts from this call rather than from when the id was first taken.
+            next_run_at=ScheduleExpression.next_run_at(task.schedule, task.updated_at),
             request_id=request_id or str(uuid.uuid4()),
         )

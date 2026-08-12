@@ -172,6 +172,28 @@ class TestValidation:
         with pytest.raises(ScheduleValidationError, match="Invalid Schedule Expression"):
             scheduler.upsert(build_task("schedule_rejected"))
 
+    @pytest.mark.parametrize(
+        "rate, expected",
+        [
+            ("1 minutes", "1 minute"),
+            ("1 hours", "1 hour"),
+            ("2 minute", "2 minutes"),
+            ("30 minute", "30 minutes"),
+        ],
+    )
+    def test_a_rate_whose_unit_disagrees_with_its_amount_is_rejected_locally(self, scheduler, rate, expected):
+        """EventBridge insists on the agreement, so catching it here keeps it bad input rather
+        than an opaque rejection from the timer."""
+        with pytest.raises(ScheduleValidationError, match=expected):
+            scheduler.upsert(build_task("schedule_plural", spec=ScheduleSpec(rate=rate)))
+        scheduler._scheduler.create_schedule.assert_not_called()
+        scheduler._scheduler.update_schedule.assert_not_called()
+
+    @pytest.mark.parametrize("rate", ["1 minute", "1 Hour", "5 minutes", "2 DAYS"])
+    def test_a_rate_that_agrees_in_number_is_accepted_in_either_case(self, scheduler, rate):
+        scheduler.upsert(build_task("schedule_ok", spec=ScheduleSpec(rate=rate)))
+        assert _registration(scheduler)["ScheduleExpression"] == f"rate({rate})"
+
     def test_a_one_time_schedule_in_the_past_is_rejected(self, scheduler):
         spec = ScheduleSpec(at=datetime.now(timezone.utc) - timedelta(minutes=1))
         with pytest.raises(ScheduleValidationError, match="not in the future"):
