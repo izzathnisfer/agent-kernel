@@ -271,7 +271,8 @@ timer fires
 
 - A schedule is one of: a cron expression, a fixed rate, or a one-time instant — **exactly one**;
   naming none or more than one is rejected. It also carries a `timezone` (default `UTC`), which the
-  timer evaluates the expression in.
+  timer evaluates the **wall-clock** expressions in — cron and rate. A one-time `at` names an
+  absolute instant and is registered in UTC, so `timezone` does not shift it.
 - Minimum granularity is whatever the timer provider supports; schedules finer than that are
   rejected at create/update time (a `Scheduler` obligation — see above). Concretely, validation is
   provider-agnostic and rejects: a rate that is not `<n> <second|minute|hour|day>` or is finer than
@@ -642,8 +643,9 @@ Two of those fields are conditional, and absent fields are omitted rather than s
 
 - **`session_id` appears in continuous mode only.** A per-run session id exists only at fire time,
   so returning its template would look like a usable session id without being one.
-- **`next_run_at` is best-effort.** It is derivable from a one-time instant and from a rate, but not
-  from a cron expression — no timer API supplies a next-invocation time and a cron evaluator is not
+- **`next_run_at` is best-effort.** It is derivable from a one-time instant and from a rate — counted
+  from when the definition was registered, not from when the id was first created, since a create
+  over a live id re-bases the rate — but not from a cron expression — no timer API supplies a next-invocation time and a cron evaluator is not
   worth the dependency for a convenience field. Absent means "not computed", never "not scheduled";
   `last_run_at` on the row is the authoritative history.
 
@@ -686,9 +688,15 @@ classes and mounting mechanics per target are implementation detail deferred to 
     update.
   - Updates affect future executions only: an execution already enqueued continues to use the
     definition that existed when it was enqueued (accepted behaviour).
-  - A `PUT` on a one-time scheduled task whose `status` is `COMPLETED` re-arms it: the schedule is
-    re-registered and `status` returns to `ACTIVE` with `completed_at` cleared. The version is
-    retained — the same scheduled task, rescheduled.
+  - A `PUT` on a one-time scheduled task that has already run re-arms it, but only when the body
+    supplies a **new future `at`**: the elapsed instant cannot be re-registered, so a `PUT` without
+    one is rejected with `400` naming the field to change rather than failing on a schedule the
+    caller never sent. Given the new instant, the schedule is re-registered and `status` returns to
+    `ACTIVE` with `completed_at` cleared. The version is retained — the same scheduled task,
+    rescheduled.
+  - A replacement `schedule` block that omits `mode` keeps the task's current mode. Retiming a
+    `continuous` task therefore never silently moves it to a `per_run` session id; changing the mode
+    takes naming it explicitly.
   - `403` if the caller does not own it, `409` if it is soft-deleted.
 - **Delete — `DELETE /api/v1/schedule/{scheduled_task_id}`**. Calls `Scheduler.delete(...)`: the
   timer registration is removed, then the row is soft-deleted (see *Deletion lifecycle*). `403` if

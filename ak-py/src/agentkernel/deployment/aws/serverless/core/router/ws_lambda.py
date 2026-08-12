@@ -320,8 +320,7 @@ class SystemRoutesHandler(LambdaWSHandler):
             request = ws_message_info.request
             if request.body is None:
                 raise ValueError("body is required")
-            # Checked here too, not only in queue mode: a frame carrying a schedule must never
-            # be executed immediately just because this deployment runs without queues.
+            # A frame carrying a schedule is registered, never run now, in queue and direct mode alike.
             if request.body.schedule is not None:
                 return self._register_schedule(ws_message_info).model_dump(mode="json", exclude_none=True)
             _, res_body = self._chat_service.process_chat_request(request.body)
@@ -351,8 +350,7 @@ class SystemRoutesHandler(LambdaWSHandler):
             request = ws_message_info.request
             if request.body is None:
                 raise ValueError("body is required")
-            # Checked here too, not only in queue mode: a frame carrying a schedule must never
-            # be streamed immediately just because this deployment runs without queues.
+            # A frame carrying a schedule is registered, never streamed now, in queue and direct mode alike.
             if request.body.schedule is not None:
                 return self._create_scheduled_task(event, ws_message_info)
             session_id = request.body.session_id
@@ -406,8 +404,8 @@ class SystemRoutesHandler(LambdaWSHandler):
     def _register_schedule(self, ws_message_info: "LambdaWSHandler.WSMessageInfo") -> CreateAck:
         """Register the frame's ``schedule`` block against the connection's authenticated user.
 
-        Shared by the queue-mode and direct-mode chat paths so all three agree on what a frame
-        carrying a schedule does, and failures surface in each caller's own response shape.
+        Shared by the queue-mode and direct-mode chat paths. Errors are raised so each caller
+        can report them in its own response shape.
 
         :param ws_message_info: The parsed frame and its authenticated user.
         :return: The creation acknowledgement.

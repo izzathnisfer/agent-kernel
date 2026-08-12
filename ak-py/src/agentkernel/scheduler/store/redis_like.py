@@ -7,8 +7,7 @@ Layout (keys under the configured prefix):
 
 The owner set is the only index available, so unlike DynamoDB there is no sparse index to
 lean on and ``list_by_owner`` filters tombstones out on read. Its pages are ordered by id and
-its cursor is the last id read, so a page is stable against tasks created or removed while the
-caller is walking the listing.
+its cursor is the last id read, so paging is stable against tasks added or removed in between.
 """
 
 import json
@@ -76,9 +75,8 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
         return TaskSerializer.from_record(record) if record is not None else None
 
     def list_by_owner(self, owner_id: str, *, limit: Optional[int] = None, cursor: Optional[str] = None) -> ScheduledTaskPage:
-        # The cursor is the last id of the previous page, not its length. An offset addresses a
-        # position in a set that shifts whenever a task is created, deleted or pruned between
-        # pages, which silently skips or repeats rows; resuming after a known id does not.
+        # Resume after the previous page's last id rather than by offset: the set shifts when a
+        # task is created, deleted or pruned between pages, and an offset then skips or repeats rows.
         owner_key = self._owner_key(owner_id)
         task_ids = sorted(self._driver.smembers(owner_key))
         after = PageCursor.decode(cursor)
@@ -103,8 +101,7 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
             if not record.get("deleted"):
                 items.append(TaskSerializer.from_record(record))
 
-        # last_read, not the last item: resuming after a tombstone or a pruned member skips
-        # re-reading it, and a page whose tail is all tombstones still advances.
+        # last_read, not the last item, so a page whose tail is all tombstones still advances.
         next_cursor = PageCursor.encode(last_read) if more_remain and last_read is not None else None
         return ScheduledTaskPage(items=items, next_cursor=next_cursor)
 

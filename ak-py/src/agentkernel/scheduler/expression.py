@@ -82,9 +82,8 @@ class ScheduleExpression:
     def _reject_plural_mismatch(rate: str, amount: int, supplied_unit: str, unit: str) -> None:
         """Reject a rate whose unit does not agree in number with its amount.
 
-        Every supported timer requires the agreement — ``rate(1 minute)`` and
-        ``rate(5 minutes)``, never the other way round. Caught here so it reads as bad input on
-        the field the caller wrote, rather than as an opaque rejection from the timer.
+        The timers require the agreement — ``rate(1 minute)``, ``rate(5 minutes)``. Caught here
+        so the caller gets a validation error instead of an opaque rejection from the timer.
 
         :param rate: The rate expression, for the message.
         :param amount: The parsed interval count.
@@ -106,8 +105,8 @@ class ScheduleExpression:
         computed", never "not scheduled"; ``last_run_at`` is the authoritative history.
 
         :param spec: The schedule to read.
-        :param registered_at: When this definition was registered with the timer, which is the
-            base a rate counts from — not when the id was first created.
+        :param registered_at: When the definition was registered with the timer; a rate counts
+            from here, not from when the id was first created.
         :return: The next fire time in UTC, or None for a cron expression.
         """
         if spec.at is not None:

@@ -202,8 +202,8 @@ class TestCreateAck:
         assert ack.next_run_at == store.get("a").updated_at + timedelta(minutes=30)
 
     def test_next_run_at_re_bases_when_a_create_replaces_a_live_definition(self, service, store):
-        """EventBridge re-bases a rate at registration, so an ack quoting the original
-        created_at would report a next run that has already gone by."""
+        """EventBridge re-bases a rate at registration, so an ack from created_at would report a
+        next run that has already gone by."""
         _create(service, spec=ScheduleSpec(rate="30 minutes", id="a"))
         original_created_at = store.get("a").created_at
 

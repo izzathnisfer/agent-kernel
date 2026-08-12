@@ -66,9 +66,8 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         A body carrying a ``schedule`` block is registered instead: nothing is enqueued, and
         the first message on the input queue appears when the timer fires.
 
-        ``request`` is required rather than defaulted: FastAPI injects it on every call, and it
-        must stay annotated as a bare ``Request`` for that injection to happen — under
-        ``Optional[Request]`` FastAPI stops recognising it and treats it as a body field.
+        ``request`` must stay annotated as a bare ``Request``; under ``Optional[Request]``
+        FastAPI stops injecting it and treats it as a body field.
 
         :param body: The chat body, optionally carrying a ``schedule`` block.
         :param request: The incoming request, used to resolve the scheduled task's owner.

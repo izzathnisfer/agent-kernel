@@ -147,13 +147,15 @@ expressions — that means "not derivable without evaluating the expression", ne
 | `cron` / `rate` / `at` | The timing. **Exactly one** is required. |
 | `mode` | `per_run` (default) — every run starts a fresh conversation. `continuous` — all runs share one. |
 | `id` | Optional caller-chosen `scheduled_task_id`. Reusing one replaces the definition instead of duplicating it. |
-| `timezone` | Defaults to `UTC`. |
+| `timezone` | Defaults to `UTC`. Applies to the wall-clock expressions, `cron` and `rate`; an `at` is an absolute instant and is registered in UTC either way. |
 
 Minimum granularity is **one minute**, EventBridge Scheduler's floor. Anything finer is rejected at
 creation, not silently rounded.
 
 Give `cron` and `rate` the **bare** expression — `"0 9 * * ? *"`, not `"cron(0 9 * * ? *)"`. The
-provider adds its own wrapper, so a pre-wrapped value is rejected with a 400.
+provider adds its own wrapper, so a pre-wrapped value is rejected with a 400. A `rate` unit has to
+agree in number with its amount — `"1 minute"` and `"5 minutes"`, never `"1 minutes"` — which is
+also rejected with a 400.
 
 ```json
 { "cron": "0 9 * * ? *" }               // 09:00 daily
@@ -180,6 +182,11 @@ curl -X PUT "$BASE/api/v1/schedule/$ID" \
   -H "Authorization: Bearer alice-token" \
   -d '{"prompt": "Summarise the overnight warnings instead"}'
 
+# A one-time task that has already run needs a new future `at` before it can be changed
+curl -X PUT "$BASE/api/v1/schedule/$ONCE_ID" \
+  -H "Authorization: Bearer alice-token" \
+  -d '{"schedule": {"at": "2026-08-10T09:00:00Z"}, "prompt": "Run it again tomorrow"}'
+
 # Stop it
 curl -X DELETE "$BASE/api/v1/schedule/$ID" -H "Authorization: Bearer alice-token"
 ```
@@ -190,6 +197,10 @@ curl -X DELETE "$BASE/api/v1/schedule/$ID" -H "Authorization: Bearer alice-token
 | `403` | The task belongs to somebody else |
 | `404` | Unknown id, or a `PUT` on a task that doesn't exist (update never creates) |
 | `409` | The task was deleted and its id is still in its grace period |
+| `400` | The schedule is invalid or finer than a minute, or a one-time task that has already run was updated without a new future `at` |
+
+A replacement `schedule` block that omits `mode` keeps the task's current mode, so retiming a
+`continuous` task never moves it to a fresh per-run conversation.
 
 Ownership is real, not cosmetic — `bob-token` cannot list, read, update or delete alice's tasks.
 

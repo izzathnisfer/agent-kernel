@@ -182,8 +182,8 @@ class TestValidation:
         ],
     )
     def test_a_rate_whose_unit_disagrees_with_its_amount_is_rejected_locally(self, scheduler, rate, expected):
-        """EventBridge insists on the agreement, so catching it here keeps it bad input rather
-        than an opaque rejection from the timer."""
+        """EventBridge insists on the agreement, so catching it here gives the caller a
+        validation error instead of an opaque rejection from the timer."""
         with pytest.raises(ScheduleValidationError, match=expected):
             scheduler.upsert(build_task("schedule_plural", spec=ScheduleSpec(rate=rate)))
         scheduler._scheduler.create_schedule.assert_not_called()
