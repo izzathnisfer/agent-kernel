@@ -3,8 +3,35 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentkernel.deployment.aws.containerized.akagentrunner import ECSStreamAgentRunner
+from agentkernel.deployment.aws.containerized.akagentrunner import ECSAgentRunner, ECSStreamAgentRunner
 from agentkernel.deployment.aws.core.sqs_handler import SQSHandler
+
+SCHEDULED_RUN = {
+    "scheduled_task_id": "schedule_a",
+    "scheduled_task_version": "v1",
+    "scheduled_time": "2026-08-09T09:00:00Z",
+    "run_id": "exec-1",
+}
+
+
+def _make_fire_record(message_id: str = "m-fire"):
+    """Build a timer-delivered fire.
+
+    It carries a scheduled_run block and, crucially, no endpoint_url: at registration time
+    there was no client connection, so the timer stamps only request_id and user_id.
+    """
+    return {
+        "MessageId": message_id,
+        "Body": json.dumps({"prompt": "tick", "session_id": "ak-scheduled:schedule_a", "scheduled_run": SCHEDULED_RUN}),
+        "Attributes": {
+            "MessageGroupId": "schedule_a",
+            "MessageDeduplicationId": "schedule_a:2026-08-09T09:00:00Z",
+        },
+        "MessageAttributes": {
+            "request_id": {"StringValue": "exec-1", "DataType": "String"},
+            "user_id": {"StringValue": "user-1", "DataType": "String"},
+        },
+    }
 
 
 def _make_record(
@@ -154,3 +181,56 @@ def test_on_permanent_failure_catches_own_exceptions():
     """on_permanent_failure must never raise — ECSSQSConsumer relies on this to delete the message."""
     bad_record = {"MessageId": "m1", "Body": "not json", "Attributes": {}, "MessageAttributes": {}}
     ECSStreamAgentRunner.on_permanent_failure(bad_record)
+
+
+def test_a_scheduled_fire_runs_as_a_non_stream_execution():
+    """A fire carries no endpoint_url, so the stream path raises on receive, exhausts retries and
+    records nothing. It must run through the whole-response path, which echoes scheduled_run."""
+    record = _make_fire_record()
+    mock_chat_service = MagicMock()
+    mock_chat_service.process_chat_request.return_value = (200, {"result": "tick", "scheduled_run": SCHEDULED_RUN})
+
+    with (
+        patch.object(ECSAgentRunner, "_get_chat_service", return_value=mock_chat_service),
+        patch.object(SQSHandler, "send_message_to_output_queue") as mock_send,
+    ):
+        ECSStreamAgentRunner.process_message(record)
+
+    mock_chat_service.process_chat_request.assert_called_once()
+    mock_chat_service.process_stream_chat_sync.assert_not_called()
+
+    mock_send.assert_called_once()
+    assert mock_send.call_args.kwargs["message_body"]["scheduled_run"] == SCHEDULED_RUN
+
+
+def test_a_failed_scheduled_fire_publishes_an_outcome_the_recorder_can_read():
+    """The stream error path emits a StreamChunk, which has no field for the scheduled_run block,
+    so the outcome would never be recorded and last_run_* would stay stale forever."""
+    record = _make_fire_record()
+
+    with patch.object(SQSHandler, "send_message_to_output_queue") as mock_send:
+        ECSStreamAgentRunner.on_permanent_failure(record)
+
+    mock_send.assert_called_once()
+    body = mock_send.call_args.kwargs["message_body"]
+    assert body["scheduled_run"] == SCHEDULED_RUN
+    assert body.get("error") is not None
+    # A StreamChunk would carry done=True; the non-stream error body has no such field.
+    assert "done" not in body
+
+
+def test_an_interactive_stream_request_is_untouched_by_the_scheduled_fire_branch():
+    """The delegation must key off the scheduled_run block alone, not off a missing endpoint_url,
+    so ordinary streaming keeps its chunk fan-out and its endpoint_url requirement."""
+    record = _make_record({"prompt": "hello", "session_id": "s1"})
+    mock_chat_service = MagicMock()
+    mock_chat_service.process_stream_chat_sync = lambda req, sse_format=False: iter([json.dumps({"delta": "hi", "done": True})])
+
+    with (
+        patch.object(ECSStreamAgentRunner, "_get_chat_service", return_value=mock_chat_service),
+        patch.object(SQSHandler, "send_message_to_output_queue") as mock_send,
+    ):
+        ECSStreamAgentRunner.process_message(record)
+
+    assert mock_send.call_count == 1
+    mock_chat_service.process_chat_request.assert_not_called()

@@ -189,6 +189,9 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
 
     Each streaming chunk from the agent is sent as a separate message to the output SQS queue.
     The ResponseHandler then broadcasts each chunk via WebSocket to the connected client.
+
+    Scheduled fires are the exception: they run as ordinary non-stream executions, delegated
+    to ServerlessAgentRunner. See _is_scheduled_fire.
     """
 
     _log = logging.getLogger("ak.aws.streamagentrunner")
@@ -197,6 +200,23 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
     @classmethod
     def _get_max_receive_count(cls) -> int:
         return AKConfig.get().execution.queues.input.max_receive_count
+
+    @classmethod
+    def _is_scheduled_fire(cls, record: dict) -> bool:
+        """Tell a timer-delivered fire from an interactive streaming request.
+
+        A fire has no client connection to stream to: the timer stamps only request_id and
+        user_id, never the endpoint_url this runner requires, and a StreamChunk has nowhere to
+        carry the scheduled_run block the response handler records outcomes from. So a fire is
+        run as an ordinary non-stream execution, whose response echoes that block.
+
+        The presence of the block is the same signal the response handler already fans out on,
+        ahead of its own execution-mode branch.
+
+        :param record: SQS record (``dict``) passed from the Lambda event.
+        :return: True when this record is one fire of a scheduled task.
+        """
+        return ScheduledRunMetadata.from_raw_body(record.get("body")) is not None
 
     @classmethod
     def _get_chat_service(cls) -> ChatService:
@@ -284,6 +304,13 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
         :param record: SQS record (``dict``) containing the chat request payload
         :return: None
         """
+        if cls._is_scheduled_fire(record):
+            cls._log.info("Scheduled fire — running as a non-stream execution")
+            # ServerlessAgentRunner is a sibling, not a base class, so the delegation names it
+            # outright: that binds cls to it and picks up its endpoint_url-optional attribute
+            # extraction and its whole-response send.
+            return ServerlessAgentRunner.process_message(record)
+
         cls._log.info(f"Processing stream message: {record}")
         body = cls._parse_body(record)
         record_attributes = cls._get_record_attributes(raw_queue_message=record)
@@ -309,6 +336,11 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
         :param record: SQS record (``dict``) that failed processing after all retries
         :return: None
         """
+        if cls._is_scheduled_fire(record):
+            # ServerlessAgentRunner's version echoes the scheduled_run block, which is what lets
+            # the response handler record the run as FAILED instead of leaving last_run_* stale.
+            return ServerlessAgentRunner.on_permanent_failure(record)
+
         cls._log.info(f"Permanent failure: {record}: Retried message {cls._get_max_receive_count()} times. Sending error chunk to Output Queue")
         try:
             record_attributes = cls._get_record_attributes(raw_queue_message=record)

@@ -660,6 +660,13 @@ Two of those fields are conditional, and absent fields are omitted rather than s
   in the REST modes, a system/error message on the connection in the WebSocket modes.
 - The acknowledgement confirms **registration**, not execution. Run outcomes are observed through
   `GET /api/v1/schedule/{scheduled_task_id}`.
+- **The table above governs the acknowledgement only. A fire always executes as a non-stream
+  execution, in every mode — including `stream`.** The two are produced at different moments by
+  different actors: the ack by the request handler at create time, the fire by the timer later. A
+  fire has no client connection to stream to — there was none when the schedule was registered — so
+  streaming it has no meaning and no destination. It therefore runs the whole-response path, which is
+  also the only one that carries the correlation block run outcomes are recorded from. A `stream`
+  deployment is fully supported for scheduling; it simply does not stream the runs.
 
 ### Management API — `/api/v1/schedule`
 

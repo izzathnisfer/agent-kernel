@@ -834,9 +834,51 @@ body. **Resolution:** when `scheduled_run` is present, the serverless runner tak
 the parsed body instead — via a small `_parse_session_id(record)` helper that tolerates an
 unparseable body — and omits the key when it cannot be read. Non-scheduled behaviour is unchanged.
 
-`ServerlessStreamAgentRunner` (`serverless/akagentrunner.py:185-330`) is **verified unchanged**: a
-scheduled fire is never produced in `stream` mode — the acknowledgement is delivered at creation
-time and no fire is enqueued for a stream (see *Creation acknowledgement*).
+#### Stream runners — a scheduled fire is a non-stream execution
+
+Both stream runners **do** receive fires, and both must route them to the non-stream path.
+
+It is tempting to reason that a fire is never produced in `stream` mode because the acknowledgement
+is delivered at creation time and nothing is enqueued for a stream (see *Creation acknowledgement*).
+That conflates two moments: the *ack* is produced at create time, but the *fire* is produced later
+by the timer, which knows nothing about `execution.mode`. In a stream deployment the input-queue
+consumer **is** the stream runner — `ECSAgentRunner.run()` dispatches to `ECSStreamAgentRunner` when
+`execution.mode == STREAM` (`containerized/akagentrunner.py:141-142`), and
+`ServerlessAgentRunner.handle()` does the same (`serverless/akagentrunner.py:27-29`) — so every fire
+lands there.
+
+Left alone, a fire cannot run *or* be recorded, for two independent reasons:
+
+1. Both stream runners require `endpoint_url` in `_get_record_attributes`
+   (`containerized/akagentrunner.py:174-177`, `serverless/akagentrunner.py:224-225`), and a timer
+   payload carries only `request_id` and `user_id` — there is no client connection at registration
+   time to name one. Every fire therefore raises on receive and exhausts its retries.
+2. `on_permanent_failure` calls `_get_record_attributes` as its first statement inside its own
+   `try`, so it raises the identical error and publishes nothing. Even with an `endpoint_url`, the
+   stream failure path emits a `StreamChunk`, which has no field to carry the `scheduled_run` block
+   the output consumers record outcomes from. The outcome is never written and `last_run_*` stays
+   stale forever, while the row still reads `status: ACTIVE` — indistinguishable from a schedule
+   whose first fire has not arrived.
+
+**Resolution:** a scheduled fire is treated as an ordinary non-stream execution. Each stream runner
+detects one by the presence of a `scheduled_run` block in the record body — the same signal the
+output consumers already fan out on, ahead of their own execution-mode branch — and delegates the
+whole record to the non-stream implementation, whose response echoes that block and is therefore
+recordable. This is also the only correct destination: `process_chat_request` passes `scheduled_run`
+into `ResponseBuilder.build_response` (`chat_service.py:489-492`), whereas the streaming generators
+yield `StreamChunk`s that cannot carry it.
+
+The delegation names the non-stream class outright rather than going through `super()`. This matters
+on ECS, where `ECSStreamAgentRunner` *is* a subclass: `super().process_message(record)` would leave
+`cls` bound to the stream class, so `cls._get_record_attributes` would still resolve to the override
+demanding `endpoint_url` — the very thing being avoided. Naming `ECSAgentRunner` binds `cls` to it
+and picks up its `endpoint_url`-optional extraction and whole-response send. On serverless
+`ServerlessStreamAgentRunner` is a *sibling* of `ServerlessAgentRunner`, so explicit naming is the
+only option there anyway; the two platforms end up with the same shape.
+
+Interactive streaming is untouched: the branch keys off the `scheduled_run` block alone, never off a
+missing `endpoint_url`, so an ordinary stream request keeps both its chunk fan-out and its
+`endpoint_url` requirement.
 
 #### Output consumers — the only readers of `scheduled_run`
 
@@ -1613,6 +1655,12 @@ Exhaustive; each is intentional with its justification.
 17. **`RestHandler.enqueue_and_wait` takes a second parameter, `request: Request = None`.**
     *Intentional:* the create branch needs the incoming request to resolve the owner. Defaulted, so
     existing overrides and call sites are unaffected.
+18. **Both stream runners route a record carrying `scheduled_run` to the non-stream runner**
+    (`containerized/akagentrunner.py`, `serverless/akagentrunner.py`). *Intentional:* a fire has no
+    `endpoint_url`, so the pre-change stream path raised on every receive, exhausted its retries, and
+    then swallowed the identical error in `on_permanent_failure` — publishing nothing, so the outcome
+    was never recorded and `last_run_*` stayed stale while the row still read `ACTIVE`. Interactive
+    streaming is unaffected: the branch keys off the block alone, never off a missing `endpoint_url`.
 
 **Non-changes** — fixed by this spec and verified against the base branch:
 
@@ -1621,7 +1669,9 @@ Exhaustive; each is intentional with its justification.
   (`sqs_handler.py:346,388`); `QueueHandler.QueueMessageBody` and `SendMessageAttributes`.
 - `ResponseStore` ABC and all three backends; the response-store data layout.
 - Session store, thread store and attachment store layouts, config and behaviour.
-- Agent-runner happy path on both targets; `ServerlessStreamAgentRunner` entirely.
+- Agent-runner happy path on both targets. Both stream runners for **interactive** traffic: their
+  chunk fan-out, dedup-suffix scheme and `endpoint_url` requirement are unchanged, and only a record
+  carrying a `scheduled_run` block takes the new non-stream branch (behavioural change #18).
 - DLQ configuration and semantics; retry policy; visibility-timeout redelivery. The DLQ stays what it
   already is — a backstop for messages that fail outside the `ApproximateReceiveCount` check.
 - `ECSIOHandler.run()`'s signature (`ecs_io_handler.py:24-25`) and `AWSRestAPI.get_default_handlers()`
@@ -1763,6 +1813,7 @@ Run with `cd ak-py && uv run pytest`.
 | `tests/test_schedule_router.py` | FastAPI `TestClient` over `ScheduleRESTRequestHandler` (the `test_thread_router.py` pattern, with a `StaticAuthoriser`). Construction without an `Authoriser` raises `AKConfigError`. 401 missing/invalid Bearer; list returns only the caller's rows and excludes soft-deleted; 404 on unknown and on soft-deleted `GET`; 403/409/404 on `PUT`; 403 on `DELETE`; routes absent from the app when `scheduler.enabled` is false |
 | `tests/test_scheduler_tools.py` | All four tools route through `ScheduledTaskService` (asserted with a mock service); the owner is bound from the invoking session and cannot be supplied as an argument; a service error is returned as `{"error": ...}` and never raised; `SystemToolFactory.get_all()` includes the tools only when enabled and honours `scheduler.agents` scoping |
 | `tests/test_agent_runner_permanent_failure.py` | **New file — neither non-stream runner has an existing test** (`test_akagentrunner_stream.py` and `test_ecs_akagentrunner_stream.py` cover the stream runners only), so behavioural changes #5 and #6 are otherwise untested. Both runners: a record whose body carries `scheduled_run` produces an error body echoing it verbatim; an unparseable body produces the pre-change error body and **does not raise**; the ECS runner's inline error dict and the serverless runner's `_construct_error_message_body` result (`serverless/akagentrunner.py:147-149`) are each asserted in place. Serverless only: `session_id` comes from the parsed body when `scheduled_run` is present, is **omitted** when the body cannot be parsed, and still equals `record_attributes["message_group_id"]` for a non-scheduled record (`:150`) — the regression guard for #6 |
+| `tests/test_ecs_akagentrunner_stream.py`, `tests/test_akagentrunner_stream.py` | **These files already exist** and cover the stream runners, so the scheduled-fire routing extends them rather than adding a file. Each gains a `_make_fire_record()` builder carrying a `scheduled_run` block and, deliberately, **no `endpoint_url`** — the shape the timer actually delivers. New cases, identical on both platforms: a fire calls `process_chat_request` and **not** `process_stream_chat_sync`, sending exactly one whole-response message whose body echoes `scheduled_run`; a fire's `on_permanent_failure` publishes an error body carrying `scheduled_run` and **no `done` key**, asserting it is the non-stream error body and not a `StreamChunk`; and an ordinary stream request still fans out chunks and never reaches `process_chat_request` — the regression guard that the branch keys off the block alone, not off a missing `endpoint_url`. All existing assertions unchanged, including the two that pin the `endpoint_url` requirement for interactive streaming |
 | `tests/test_rest_handler_schedule.py` | **New file** — covers behavioural changes #7 and #8, which `test_schedule_router.py` does not reach (that file covers the management routes only). FastAPI `TestClient` over `ECSQueueRequestHandler`: a body with a `schedule` block returns 201 with the ack and **does not** call `send_message_to_input_queue`; the same body with scheduling disabled returns 400; a body with neither `session_id` nor `schedule` still returns 400 (the pre-change behaviour at `rest_handler.py:45-46`); `RestHandler.__init__` raises `AKConfigError` when `scheduler.enabled` and no `Authoriser` is supplied, and does **not** raise when scheduling is disabled |
 | `tests/conftest_scheduler.py` | **Shared fixtures, not a test file.** `enable_scheduler_config()` / `reset_scheduler_config()` build and tear down a valid `scheduler` block, `make_scheduler()` assembles an `AWSScheduler` over mocked clients and the in-memory store, and `install_scheduler()` seeds the `SchedulerFactory` singleton. It exists because eight test modules need the same enabled-and-wired config, and duplicating that setup is how the suite drifts from `validate_config()` |
 | `tests/test_scheduled_run_recorder.py` | `ScheduledRunRecorder.record_before_discard`, the path with no error channel left: the status comes from the body and not from the fact that this is the failure path, an `error` key still maps to `FAILED`, an ordinary/non-dict/unparseable body is left to the caller, a malformed block never raises here, and a failed write is swallowed **and logged with the full identity** |
@@ -1786,9 +1837,7 @@ Run with `cd ak-py && uv run pytest`.
 
 Not changed, and verified so: `test_sqs_handler.py` (the `SQSHandler` surface is untouched),
 `test_ecs_sqs_consumer_parallel.py` (`process_message`/`delete` semantics are untouched),
-`test_akagentrunner_stream.py` and `test_ecs_akagentrunner_stream.py` (both stream runners are
-untouched; the non-stream runners' `on_permanent_failure` change is covered by the new
-`test_agent_runner_permanent_failure.py`), `test_store_builders.py`
+`test_store_builders.py`
 and `test_factory.py` (existing builders are untouched; the new builder is covered in
 `test_scheduled_task_store.py`).
 

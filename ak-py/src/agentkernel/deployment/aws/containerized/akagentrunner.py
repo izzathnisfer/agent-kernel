@@ -154,12 +154,32 @@ class ECSStreamAgentRunner(ECSAgentRunner):
     for the shared queue/chat-service plumbing; only endpoint_url validation and the chunk
     fan-out (process_message/on_permanent_failure) differ.
 
+    Scheduled fires are the exception: they run as ordinary non-stream executions, delegated
+    back to ECSAgentRunner. See _is_scheduled_fire.
+
     Note: unlike Lambda's ESM (which supports partial-batch failure reporting), ECSSQSConsumer
     leaves the whole message in the queue for a full redelivery if process_message raises
     mid-stream — a pre-existing characteristic of ECSSQSConsumer, not specific to streaming.
     """
 
     _log = logging.getLogger("ak.ecs.streamagentrunner")
+
+    @classmethod
+    def _is_scheduled_fire(cls, record: dict) -> bool:
+        """Tell a timer-delivered fire from an interactive streaming request.
+
+        A fire has no client connection to stream to: the timer stamps only request_id and
+        user_id, never the endpoint_url this runner requires, and a StreamChunk has nowhere to
+        carry the scheduled_run block the output consumer records outcomes from. So a fire is
+        run as an ordinary non-stream execution, whose response echoes that block.
+
+        The presence of the block is the same signal the output consumers already fan out on,
+        ahead of their own execution-mode branch.
+
+        :param record: boto3 SQS message dict.
+        :return: True when this record is one fire of a scheduled task.
+        """
+        return ScheduledRunMetadata.from_raw_body(record.get("Body")) is not None
 
     @classmethod
     def _get_record_attributes(cls, raw_queue_message: dict) -> dict:
@@ -206,6 +226,13 @@ class ECSStreamAgentRunner(ECSAgentRunner):
     @classmethod
     def process_message(cls, record: dict) -> None:
         """Implements ECSSQSConsumer.process_message for STREAM mode."""
+        if cls._is_scheduled_fire(record):
+            cls._log.info("Scheduled fire %s — running as a non-stream execution", record.get("MessageId"))
+            # Delegated on ECSAgentRunner explicitly, not through super(): super() would leave cls
+            # bound to this class, so _get_record_attributes would still be the override that
+            # demands endpoint_url — the very thing a fire does not carry.
+            return ECSAgentRunner.process_message(record)
+
         message_id = record.get("MessageId")
         # Included in the dedup suffix below so a retry's chunks never collide with a prior attempt's.
         receive_count = record.get("Attributes", {}).get("ApproximateReceiveCount", "1")
@@ -232,6 +259,11 @@ class ECSStreamAgentRunner(ECSAgentRunner):
     @classmethod
     def on_permanent_failure(cls, record: dict) -> None:
         """Implements ECSSQSConsumer.on_permanent_failure. Catches own exceptions."""
+        if cls._is_scheduled_fire(record):
+            # ECSAgentRunner's version echoes the scheduled_run block, which is what lets the
+            # output consumer record the run as FAILED instead of leaving last_run_* stale.
+            return ECSAgentRunner.on_permanent_failure(record)
+
         cls._log.error(f"Permanent failure for message {record.get('MessageId')}")
         try:
             record_attributes = cls._get_record_attributes(raw_queue_message=record)
