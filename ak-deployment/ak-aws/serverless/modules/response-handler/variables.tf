@@ -175,7 +175,7 @@ variable "websocket_mode" {
 
 variable "scheduled_task" {
   type        = bool
-  description = "Whether this component needs scheduled-task access"
+  description = "Whether this component needs scheduled-task table access; false when scheduled tasks are off or the deployment has no scheduled-task table"
   default     = false
 }
 

@@ -675,8 +675,10 @@ module "response_handler" {
   })
 
   # Records run outcomes: table read and update only. It never registers or removes a
-  # schedule, so it gets neither EventBridge Scheduler nor input-queue permissions.
-  scheduled_task           = var.scheduled_task
+  # schedule, so it gets neither EventBridge Scheduler nor input-queue permissions. The
+  # flag folds in the table gate as well, so the module keys its count off a value known
+  # at plan time rather than the not-yet-created table's ARN.
+  scheduled_task           = var.scheduled_task && var.create_dynamodb_memory_table
   scheduled_task_table_arn = var.scheduled_task ? module.scheduler[0].table_arn : null
 
   queue_config = {

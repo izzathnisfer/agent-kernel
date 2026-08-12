@@ -284,7 +284,7 @@ resource "aws_lambda_event_source_mapping" "response_handler_output_queue" {
 # removes a schedule.
 
 resource "aws_iam_policy" "scheduler_policy" {
-  count = var.scheduled_task && var.scheduled_task_table_arn != null ? 1 : 0
+  count = var.scheduled_task ? 1 : 0
   name  = "${var.product_alias}-${var.env_alias}-${var.response_handler.function_name}-scheduler"
 
   policy = jsonencode({
@@ -304,7 +304,7 @@ resource "aws_iam_policy" "scheduler_policy" {
 }
 
 resource "aws_iam_role_policy_attachment" "scheduler_attachment" {
-  count      = var.scheduled_task && var.scheduled_task_table_arn != null ? 1 : 0
+  count      = var.scheduled_task ? 1 : 0
   role       = aws_iam_role.response_handler_lambda_role.name
   policy_arn = aws_iam_policy.scheduler_policy[0].arn
 }
