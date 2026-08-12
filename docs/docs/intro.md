@@ -8,7 +8,7 @@ slug: /
 **The Operating System for Scalable & Compliant Enterprise AI Agents.**
 
 :::tip What's New
-⏰ **Scheduled Tasks** - Run agents on a timer. Create a schedule through the chat endpoint, manage it over REST or agent-callable tools, and let the existing queue path execute it. [Learn more →](/docs/advanced/scheduled-tasks)
+⏰ **Scheduled Tasks** - Run agents on a timer. Create a schedule through the chat endpoint, manage it over REST or agent-callable tools, and let the existing queue path execute it. [Learn more →](./advanced/scheduled-tasks.md)
 
 📦 **Sandbox** - Let agents execute code and shell commands in an isolated, permission-bounded environment, with pluggable providers, workload profiles, and per-user identity. [Learn more →](/docs/advanced/sandbox)
 
@@ -136,7 +136,7 @@ Easily extend Agent Kernel with custom framework adapters, memory back-ends, and
 - **Multi-Agent Collaboration**: Leverage multi-agent hierarchies of supported agentic frameworks
 - **Multimodal Attachments**: Image and file support with pluggable attachment storage and on-demand vision analysis
 - **Sandbox**: Execute agent-generated code and shell commands in an isolated, permission-bounded environment, with pluggable providers (`local_subprocess`, `docker`, `e2b`, `daytona`, `ec2_ssm`), workload profiles, policy enforcement, and per-user identity. [Learn more →](/docs/advanced/sandbox)
-- **Scheduled Tasks**: Time-triggered agent runs on a cron, rate, or one-time schedule, created through the chat endpoint and managed over REST or agent-callable tools. Delivered onto the existing input queue, so scheduled runs inherit the same retries, guardrails and tracing (AWS queue mode). [Learn more →](/docs/advanced/scheduled-tasks)
+- **Scheduled Tasks**: Time-triggered agent runs on a cron, rate, or one-time schedule, created through the chat endpoint and managed over REST or agent-callable tools. Delivered onto the existing input queue, so scheduled runs inherit the same retries, guardrails and tracing (AWS queue mode). [Learn more →](./advanced/scheduled-tasks.md)
 - **Conversation Threads**: Persistent, named threads with auto-naming and REST read APIs
 - **Structured Output**: Typed/JSON agent replies (`AgentReplyAny`) across OpenAI, LangGraph, ADK, CrewAI, Smolagents, and Pydantic AI
 - **Agent Testing Capability**: Built in Agent test framework so that you can write automated tests easily
