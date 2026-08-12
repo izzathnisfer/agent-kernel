@@ -195,8 +195,9 @@ curl -X DELETE "$BASE/api/v1/schedule/$ID" -H "Authorization: Bearer alice-token
 |---|---|
 | `401` | No authorizer context on the request (missing or rejected token) |
 | `403` | The task belongs to somebody else |
-| `404` | Unknown id, or a `PUT` on a task that doesn't exist (update never creates) |
-| `409` | The task was deleted and its id is still in its grace period |
+| `404` | Unknown id on `GET`/`PUT` (update never creates), **or a soft-deleted id on `GET`** — a tombstone reads as absent, not as a conflict |
+| `409` | `PUT` on a soft-deleted id, or a create reusing one, while its grace period is still running |
+| `200` | Every `DELETE` — it is **idempotent**, so an unknown or already-deleted id also returns `{"deleted": true}` |
 | `400` | The schedule is invalid or finer than a minute, or a one-time task that has already run was updated without a new future `at` |
 
 A replacement `schedule` block that omits `mode` keeps the task's current mode, so retiming a

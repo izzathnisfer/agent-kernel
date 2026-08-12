@@ -249,13 +249,28 @@ curl -X PUT "$BASE/api/v1/schedule/$ID" \
 curl -X DELETE "$BASE/api/v1/schedule/$ID" -H "Authorization: Bearer $TOKEN"
 ```
 
+Three codes are the same on every route:
+
 | Status | When |
 |---|---|
-| `400` | Invalid or too-fine schedule; scheduling disabled; a one-time task that has already run updated without a new future `at` |
+| `400` | The replacement `schedule` is invalid or finer than a minute, or a one-time task that has already run was updated without a new future `at` (`PUT` only) |
 | `401` | Missing, malformed or rejected bearer token |
 | `403` | The task belongs to somebody else |
-| `404` | Unknown id, or a `PUT` on a task that does not exist — **update never creates** |
-| `409` | The task was deleted and its id is still within its grace period |
+
+The rest depend on the route, because `DELETE` is idempotent and a soft-deleted task is not a
+user-visible state:
+
+| | Unknown id | Soft-deleted id (still in its grace window) |
+|---|---|---|
+| `GET /{id}` | `404` | `404` — a tombstone reads as absent, never as a conflict |
+| `PUT /{id}` | `404` — **update never creates** | `409` — the id stays reserved until the window expires |
+| `DELETE /{id}` | `200` | `200` — **idempotent**, so both return `{"deleted": true}` |
+| `POST /api/v1/chat` reusing the id | creates the task | `409` |
+
+`GET /api/v1/schedule` returns neither state: soft-deleted rows are simply absent from the listing.
+
+When scheduling is disabled, the management routes return `404` — the capability does not exist — but
+a `schedule` block on `POST /api/v1/chat` returns `400`.
 
 Update semantics worth knowing:
 

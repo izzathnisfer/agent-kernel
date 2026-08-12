@@ -126,8 +126,20 @@ happens through `POST /api/v1/chat` — see above.
 | `DELETE /api/v1/schedule/{scheduled_task_id}` | Remove the timer registration and soft-delete the row |
 
 All four require an identity resolver and are scoped to the caller's own tasks: `401` without a
-usable token, `403` for another owner's task, `404` for an unknown id, `409` while a deleted id is
-still in its grace period. On the FastAPI surfaces the router mounts automatically unless the
+usable token, `403` for another owner's task. Beyond those the code depends on the route, because
+`DELETE` is idempotent and a soft-deleted task is not a user-visible state:
+
+| | Unknown id | Soft-deleted id |
+|---|---|---|
+| `GET /{id}` | `404` | `404` — a tombstone reads as absent, never as a conflict |
+| `PUT /{id}` | `404` — update never creates | `409` — the id stays reserved for its grace period |
+| `DELETE /{id}` | `200` | `200` — idempotent, so both return `{"deleted": true}` |
+
+`GET /api/v1/schedule` returns neither: soft-deleted rows are simply absent from the listing. With
+scheduling disabled these routes return `404` — the capability does not exist — whereas a `schedule`
+block on `POST /api/v1/chat` returns `400`.
+
+On the FastAPI surfaces the router mounts automatically unless the
 application supplies its own `ScheduleRESTRequestHandler` — which is how the `Authoriser` is
 provided, so an application that enables scheduling and supplies none fails before the server binds.
 WebSocket deployments never mount these routes: they have no `Authoriser` at all, and take the owner
