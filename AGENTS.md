@@ -37,6 +37,7 @@ ak-py/                  The agentkernel PyPI package (core framework, all Python
     integration/         Slack, WhatsApp, Messenger, Instagram, Telegram, Teams, Gmail
     knowledgebase/       ChromaDB, Neo4j, Starburst backends
     guardrail/           OpenAI, AWS Bedrock, Walled AI guardrail providers
+    scheduler/           Scheduled tasks: Scheduler ABC + AWS provider, task store backends, service, tools
     trace/               Langfuse, OpenLLMetry tracing adapters
     skills/              Bundled end-user skills (see table above) — not dev docs
   tests/                 pytest suite, mirrors src/ structure

@@ -243,6 +243,54 @@ For the full example see [examples/aws-containerized/openai-dynamodb-scalable](h
 
 For queue mode internals see [Queue Mode Guide](../advanced/queue-mode-guide.md).
 
+### Scheduled Tasks
+
+Queue mode is also the prerequisite for [scheduled tasks](../advanced/scheduled-tasks.md) — agents
+that run on a timer. One gate turns the whole capability on:
+
+```hcl
+queue_mode     = true   # required
+scheduled_task = true
+
+scheduled_task_config = {
+  table_name          = null   # null -> "<prefix>-scheduled-tasks"
+  schedule_group_name = null   # null -> "<prefix>-schedules"
+  enable_agent_tools  = false  # grant the agent runner scheduler access
+}
+```
+
+`scheduled_task = true` creates the scheduled-task table, an EventBridge Scheduler schedule group,
+the IAM role the timer assumes to write to the input queue, the per-component IAM grants and the
+`/api/v1/schedule` routes. `false` (the default) creates none of them. A `validation` block rejects
+`scheduled_task = true` with `queue_mode = false`.
+
+The table is created only when the session store is DynamoDB (`create_dynamodb_memory_table`); on
+Redis or Valkey the existing cluster is reused under a separate keyspace.
+
+**You do not wire the environment variables yourself.** The module injects
+`AK_SCHEDULER__ENABLED`, `AK_SCHEDULER__GROUP_NAME`, `AK_SCHEDULER__TARGET_ROLE_ARN` and the one
+location variable matching the session store into the ECS tasks. What your `config.yaml` must do is
+**declare the block**, since `scheduler` defaults to absent and an undeclared block gives the
+injected values nowhere to land:
+
+```yaml
+scheduler:
+  enabled: true
+  group_name: ""        # injected via AK_SCHEDULER__GROUP_NAME
+  target_role_arn: ""   # injected via AK_SCHEDULER__TARGET_ROLE_ARN
+  dynamodb:
+    table_name: ""      # injected via AK_SCHEDULER__DYNAMODB__TABLE_NAME
+```
+
+The empty strings are deliberate: an empty value counts as unset, so enabling scheduling in
+`config.yaml` without `scheduled_task = true` in Terraform fails loudly at startup instead of
+half-working.
+
+The REST task hosts both the create path and the output-consumer thread, so it carries the full
+grant; the agent runner gets scheduler permissions only when `enable_agent_tools = true`.
+
+For the full example see [examples/aws-containerized/openai-scheduled-task](https://github.com/yaalalabs/agent-kernel/tree/develop/examples/aws-containerized/openai-scheduled-task).
+
 ## WebSocket Mode
 
 Set `execution_mode = "async"` to front the ECS service with a **WebSocket API Gateway**

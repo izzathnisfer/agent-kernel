@@ -274,6 +274,58 @@ scaling_config = {
 }
 ```
 
+### Scheduled Task Config Object
+
+| Variable | Description | Type | Default | Required |
+|---|---|---|---|---|
+| `scheduled_task` | Master gate for scheduled tasks. Creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role, component IAM grants and the `/schedule` routes. Requires `queue_mode = true` | `bool` | `false` | no |
+| `scheduled_task_config` | Scheduled task settings. Ignored when `scheduled_task = false` | `object` | `{}` | no |
+
+```hcl
+queue_mode     = true   # required — a validation block rejects scheduled_task without it
+scheduled_task = true
+
+scheduled_task_config = {
+  table_name          = null   # null -> "<prefix>-scheduled-tasks"
+  schedule_group_name = null   # null -> "<prefix>-schedules"
+  enable_agent_tools  = false  # grant the agent runner table + scheduler access
+}
+```
+
+- **One gate.** `scheduled_task = false` (the default) creates none of the scheduler resources and
+  leaves the deployment byte-identical to a deployment without the feature.
+- **The table follows the session store.** A dedicated DynamoDB table is created only when
+  `create_dynamodb_memory_table = true`. With a Redis or Valkey session store the existing cluster
+  is reused under a separate keyspace and no new infrastructure is provisioned.
+- **IAM grants are deliberately unequal.** The REST service gets full table read/write, EventBridge
+  Scheduler create/update/delete within the deployment's group, `iam:PassRole` on the timer role and
+  `sqs:GetQueueAttributes` on the input queue (for the soft-delete TTL derivation) — it also hosts
+  the output-consumer thread. The agent runner gets **nothing** unless
+  `enable_agent_tools = true`, which grants it the same access so the agent-callable scheduling
+  tools can work.
+- **Destroy is clean.** Deleting the schedule group removes every registration the deployment made,
+  so `terraform destroy` leaves no orphaned timers.
+
+**Environment wiring is automatic.** The REST service and agent-runner modules inject
+`AK_SCHEDULER__ENABLED`, `AK_SCHEDULER__GROUP_NAME`, `AK_SCHEDULER__TARGET_ROLE_ARN` and the single
+location variable matching the session store (`AK_SCHEDULER__DYNAMODB__TABLE_NAME`, or
+`AK_SCHEDULER__REDIS__PREFIX` / `AK_SCHEDULER__VALKEY__PREFIX`). The application's `config.yaml`
+only has to **declare the block** so those values have somewhere to land — `scheduler` defaults to
+absent:
+
+```yaml
+scheduler:
+  enabled: true
+  group_name: ""        # injected
+  target_role_arn: ""   # injected
+  dynamodb:
+    table_name: ""      # injected
+```
+
+An empty value counts as unset, so enabling scheduling in `config.yaml` without `scheduled_task = true` here fails at startup rather than half-working.
+
+See [examples/aws-containerized/openai-scheduled-task](../../../examples/aws-containerized/openai-scheduled-task) and the [Scheduled Tasks guide](https://kernel.yaala.ai/docs/advanced/scheduled-tasks).
+
 `queue_config.batch_size` is injected into both the REST service and Agent Runner ECS tasks as `AK_EXECUTION__QUEUES__BATCH_SIZE`. It only applies to ECS containerized deployments (never serverless/Lambda, which controls batch size via the Event Source Mapping) and is intentionally controlled only via Terraform — it must never be set in `config.yaml`.
 
 ### API Gateway Access Logging
@@ -587,6 +639,13 @@ output "websocket_api_stage_name"         # WebSocket API Gateway stage name
 output "websocket_endpoint_url"           # Management API endpoint used for PostToConnection
 output "websocket_connection_table_name"  # DynamoDB connections table name
 output "websocket_connection_table_arn"   # DynamoDB connections table ARN
+
+# Scheduled tasks (`scheduled_task = true`) — null otherwise
+output "scheduled_task_enabled"              # Whether scheduled tasks are enabled
+output "scheduled_task_table_name"           # Scheduled-task table name (DynamoDB session store only)
+output "scheduled_task_table_arn"            # Scheduled-task table ARN (DynamoDB session store only)
+output "scheduled_task_schedule_group_name"  # EventBridge Scheduler schedule group name
+output "scheduled_task_target_role_arn"      # Role the timer assumes to deliver a fire
 ```
 
 ## Requirements

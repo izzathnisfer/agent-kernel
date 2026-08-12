@@ -140,6 +140,18 @@ thread:
     table_name: "ak-agent-threads"
     ttl: 0
 
+# Scheduled tasks (optional - AWS queue mode only. See /docs/advanced/scheduled-tasks)
+# Holds no task definitions: tasks are only ever created at runtime by an authenticated caller.
+scheduler:
+  enabled: true
+  agents: [assistant]  # Agents the scheduling tools attach to; omit = all, [] = none
+  group_name: ""  # EventBridge Scheduler group - injected by Terraform
+  target_role_arn: ""  # IAM role the timer assumes - injected by Terraform
+  region: us-east-1  # Optional; defaults to the boto3 environment default
+  # Exactly one location block, matching session.type
+  dynamodb:
+    table_name: "ak-scheduled-tasks"
+
 # Messaging platform integrations
 slack:
   agent: ""  # Default agent for Slack
@@ -611,6 +623,34 @@ export AK_EXECUTION__RESPONSE_STORE__DYNAMODB__TTL=604800
 - For `async` (WebSocket) mode, queues are optional but response_store is not used since responses are broadcast directly through the WebSocket connection
 - When queues are not configured, the request handler processes requests directly without queuing
 
+### Scheduled Tasks (AWS Queue Mode)
+
+```bash
+# Master switch. Requires AWS, queue_mode = true, and a durable session store
+export AK_SCHEDULER__ENABLED=true
+
+# Terraform outputs - the deployment values the capability cannot derive
+export AK_SCHEDULER__GROUP_NAME=myproduct-dev-agent-schedules
+export AK_SCHEDULER__TARGET_ROLE_ARN=arn:aws:iam::123456789012:role/myproduct-dev-agent-scheduler-target
+export AK_SCHEDULER__REGION=us-east-1
+
+# Exactly one location block, matching session.type
+export AK_SCHEDULER__DYNAMODB__TABLE_NAME=ak-scheduled-tasks
+export AK_SCHEDULER__REDIS__PREFIX=ak:scheduled_tasks:
+export AK_SCHEDULER__VALKEY__PREFIX=ak:scheduled_tasks:
+```
+
+**Notes**:
+- The scheduled-task store follows `session.type` — DynamoDB sessions get a dedicated table;
+  Redis/Valkey sessions reuse the same cluster under a separate keyspace. `in_memory` is rejected.
+- Populating a location block that does not match `session.type` is rejected at startup, not
+  silently ignored.
+- `group_name` and `target_role_arn` are mandatory when enabled; an empty string counts as unset.
+- `scheduler.agents` (config file only) scopes which agents get the scheduling tools — omit for
+  all, `[]` for none.
+
+See the [Scheduled Tasks](../advanced/scheduled-tasks.md) guide.
+
 ### Logging Configuration (Optional)
 
 ```bash
@@ -805,6 +845,20 @@ execution:
     dynamodb:
       table_name: "agent-responses"  # DynamoDB table name for response storage
       ttl: 604800                     # DynamoDB TTL in seconds (0 to disable)
+
+# Scheduled tasks (optional - AWS queue mode only; feature is off unless enabled)
+scheduler:
+  enabled: false                # Master switch
+  agents: null                  # Agents the scheduling tools attach to; null = all, [] = none
+  group_name: ""                # EventBridge Scheduler schedule group (Terraform output)
+  target_role_arn: ""           # IAM role the timer assumes to send to the input queue (Terraform output)
+  region: null                  # AWS region; null = the boto3 environment default
+  dynamodb:                     # Used when session.type is 'dynamodb'
+    table_name: "ak-scheduled-tasks"  # Dedicated table; never a partition of another table
+  redis:                        # Used when session.type is 'redis'
+    prefix: "ak:scheduled_tasks:"     # Separate keyspace on the session cluster
+  valkey:                       # Used when session.type is 'valkey'
+    prefix: "ak:scheduled_tasks:"     # Separate keyspace on the session cluster
 
 # Logging configuration (optional)
 # If omitted, default loggers will not be overridden

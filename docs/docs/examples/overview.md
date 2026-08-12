@@ -78,6 +78,7 @@ AWS ECS/Fargate deployment examples:
 - **`openai-websocket-scalable/`** - OpenAI agents on AWS ECS over a WebSocket API in queue mode: the REST/IO service enqueues chat frames and pushes responses, while a separately-scalable Agent Runner service processes them from SQS
 - **`openai-stream/`** - OpenAI agents on AWS ECS over a WebSocket API in direct (non-queue), STREAM execution mode: the reply is delivered token-by-token as `STREAM_CHUNK` messages instead of one final `CHAT_RESPONSE`
 - **`openai-stream-queue-mode/`** - OpenAI agents on AWS ECS over a WebSocket API in queue-based STREAM execution mode: the Agent Runner streams token-by-token chunks onto the Output Queue so it can scale independently of ingress
+- **`openai-scheduled-task/`** - OpenAI agents on AWS ECS with [scheduled tasks](../advanced/scheduled-tasks.md): agents that run on a timer, created through the chat endpoint and managed over `/api/v1/schedule`, with an `Authoriser` supplying each task's owner
 
 ### 📁 AWS Serverless Examples (`/examples/aws-serverless`)
 
@@ -89,6 +90,7 @@ AWS Lambda serverless deployment examples:
 - **`openai/`** - OpenAI agents running on AWS Lambda
 - **`websocket-openai/`** - OpenAI agents with WebSocket API for real-time bidirectional communication
 - **`streaming-openai/`** - OpenAI agents with WebSocket token-level streaming (`execution.mode: stream`)
+- **`scheduled-openai/`** - OpenAI agents on AWS Lambda with [scheduled tasks](../advanced/scheduled-tasks.md): the same timer-driven loop as the ECS example, with the task owner coming from an API Gateway authorizer's `principalId`
 
 ### 📁 Azure Containerized Examples (`/examples/azure-containerized`)
 

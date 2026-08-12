@@ -123,6 +123,17 @@ Let agents run code and shell commands in an isolated, permission-bounded enviro
 
 [Learn more →](https://kernel.yaala.ai/docs/advanced/sandbox)
 
+### ⏰ Scheduled Tasks
+
+Let agents run on a timer — a recurring report, a periodic check, a nightly cleanup — with no caller in the loop.
+
+- **Create through the endpoint you already use** — `POST /api/v1/chat` takes an optional `schedule` block (`cron`, `rate`, or a one-time `at`); `/api/v1/schedule` manages what exists.
+- **No new execution path** — the timer puts an ordinary agent message on the existing input queue, so a scheduled run inherits your retries, DLQ, guardrails, hooks and tracing unchanged.
+- **No polling, no leader election** — timing is delegated to infrastructure, so a scaled-to-zero deployment still fires and replicas have nothing to race over.
+- **Owned, never anonymous** — every task belongs to an authenticated identity, stamped server-side. Agents can schedule their own work through four built-in tools, but an agent is never the owner.
+
+AWS queue-mode deployments (scalable Lambda and ECS). [Learn more →](https://kernel.yaala.ai/docs/advanced/scheduled-tasks)
+
 ### 🧠 Memory, Sessions & Knowledge Bases
 
 | Layer | Backends |

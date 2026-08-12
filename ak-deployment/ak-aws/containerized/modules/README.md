@@ -258,6 +258,38 @@ When `scaling_config.enabled = true`:
    - If `BacklogPerTask < backlog_target`: Scale in
    - Cooldown periods prevent rapid scaling
 
+### 4. `scheduler/`
+
+**Purpose**: Creates the infrastructure behind [scheduled tasks](https://kernel.yaala.ai/docs/advanced/scheduled-tasks) — agent messages delivered onto the input queue by a timer. Created only when `scheduled_task = true`, which requires `queue_mode = true`.
+
+**Resources Created**:
+
+- DynamoDB scheduled-task table — partition key `scheduled_task_id`, sparse `owner-index` GSI for owner-scoped listing, TTL on `expiry_time` for soft-delete expiry. Created only when the session store is DynamoDB (`create_scheduled_task_table`); with Redis/Valkey the existing session cluster is reused under a separate keyspace and nothing new is provisioned.
+- EventBridge Scheduler schedule group — namespaces the deployment's registrations so `terraform destroy` removes them all
+- Timer execution role — assumed by EventBridge Scheduler, granting `sqs:SendMessage` on the input queue only
+
+**Input Variables**:
+
+```hcl
+scheduled_task_config = {
+  table_name          = null   # null -> "<prefix>-scheduled-tasks"
+  schedule_group_name = null   # null -> "<prefix>-schedules"
+  enable_agent_tools  = false  # grant the agent runner scheduler access
+}
+
+create_scheduled_task_table = true   # follows the session store type
+input_queue_arn             = "..."  # the timer's delivery target
+```
+
+**Outputs**:
+
+- `table_name` / `table_arn`
+- `schedule_group_name`
+- `schedule_arn_pattern` — matches every schedule in the group (`…:schedule/<group>/*`); scopes the component IAM grants. A schedule is not addressed as a child of its group's ARN, so a grant scoped to the group ARN would match nothing.
+- `target_role_arn`
+
+The REST service and agent-runner modules consume these to attach their IAM grants: the REST service always (it hosts the create path and the output-consumer thread), the agent runner only when `enable_agent_tools = true`.
+
 ## Usage Examples
 
 ### Basic (Non-Queue Mode)

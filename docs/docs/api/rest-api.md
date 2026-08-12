@@ -46,6 +46,31 @@ Execute an agent with a message.
 }
 ```
 
+**Scheduling instead of running:** when [scheduled tasks](../advanced/scheduled-tasks.md) are
+enabled, the body accepts an optional `schedule` block. The message is then registered to run later
+instead of being run now, and the response is a `201` acknowledgement rather than an agent reply:
+
+```json
+{
+  "agent": "report",
+  "prompt": "Summarise the overnight error log",
+  "schedule": { "cron": "0 9 * * ? *", "mode": "per_run" }
+}
+```
+
+```json
+{
+  "status": "SCHEDULED",
+  "scheduled_task_id": "schedule_5f1c...",
+  "scheduled_task_version": "...",
+  "request_id": "..."
+}
+```
+
+There is no separate creation endpoint. `session_id` is derived rather than supplied, and the owner
+is stamped from the caller's authenticated identity. Requires AWS queue mode; a `schedule` block is
+rejected with `400` when scheduling is disabled, and is not accepted on `/api/v1/chat-multipart`.
+
 ### GET /api/v1/agents
 
 List all available agents.
@@ -86,6 +111,25 @@ When [conversation threads](../advanced/threads.md) are enabled by mounting `Age
 **`GET /api/v1/threads/{session_id}`** returns a single thread with its paginated message history (`limit`, `cursor`).
 
 On the thread handler's chat routes, `user_id` is **required**; the default handler's routes are unaffected. An optional `Authoriser` can protect the read routes by resolving the Bearer token to a `user_id`; requests for another user's thread then return 403. Without an `Authoriser`, the routes are open.
+
+### Scheduled Task Endpoints
+
+When [scheduled tasks](../advanced/scheduled-tasks.md) are enabled (`scheduler.enabled: true`; AWS
+queue mode only), four routes are mounted to query and manage **already-created** tasks. Creation
+happens through `POST /api/v1/chat` — see above.
+
+| Route | Behaviour |
+|---|---|
+| `GET /api/v1/schedule` | List the caller's tasks; paginated via `limit` and an opaque `cursor` |
+| `GET /api/v1/schedule/{scheduled_task_id}` | Definition plus last-run status (`last_run_at`, `last_run_status`, `last_error`) |
+| `PUT /api/v1/schedule/{scheduled_task_id}` | Change the `schedule` block and/or the message (`prompt`, `agent`); omitted fields keep their value, and update never creates |
+| `DELETE /api/v1/schedule/{scheduled_task_id}` | Remove the timer registration and soft-delete the row |
+
+All four require an identity resolver and are scoped to the caller's own tasks: `401` without a
+usable token, `403` for another owner's task, `404` for an unknown id, `409` while a deleted id is
+still in its grace period. On the FastAPI surfaces the router mounts automatically unless the
+application supplies its own `ScheduleRESTRequestHandler` — which is how the `Authoriser` is
+provided.
 
 ## Error Handling
 

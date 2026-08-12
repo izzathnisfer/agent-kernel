@@ -504,6 +504,8 @@ module "serverless_api_auth" {
 | `response_handler` | Response handler configuration object (see table below) | `object` | `{}` | no |
 | `agent_runner` | Agent runner configuration object (see table below) | `object` | `{}` | no |
 | `queue_config` | SQS queues configuration object (see table below) | `object` | `{}` | no |
+| `scheduled_task` | Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role, component IAM grants and the `/schedule` API Gateway routes. Requires `queue_mode = true` | `bool` | `false` | no |
+| `scheduled_task_config` | Scheduled task configuration object (see table below). Ignored when `scheduled_task = false` | `object` | `{}` | no |
 | `tags` | Additional tags for resources | `map(string)` | `{}` | no |
 | `vpc_cidr` | CIDR block for the VPC | `string` | `"10.0.0.0/16"` | no |
 | `public_subnet_cidrs` | CIDR blocks for the public subnets | `list(string)` | `["10.0.1.0/24", "10.0.2.0/24"]` | no |
@@ -674,6 +676,33 @@ The root `queue_config` object drives the SQS queues created for queue mode. All
 
 **Note**: When `queue_mode = true`, the response handler and agent runner package paths must be provided. The queue configuration defaults can be used as-is, or you can override only the queue names and sizing values you need.
 
+### Scheduled Task Configuration
+
+`scheduled_task = true` is the single gate for [scheduled tasks](https://kernel.yaala.ai/docs/advanced/scheduled-tasks) — agents that run on a timer. A `validation` block rejects it when `queue_mode = false`.
+
+| Field | Description | Type | Default | Required |
+|-------|-------------|------|---------|----------|
+| `table_name` | Scheduled-task DynamoDB table name | `string` | `null` → `"<prefix>-scheduled-tasks"` | no |
+| `schedule_group_name` | EventBridge Scheduler schedule group name | `string` | `null` → `"<prefix>-schedules"` | no |
+| `enable_agent_tools` | Grant the agent runner table and scheduler access so the agent-callable scheduling tools work | `bool` | `false` | no |
+
+```hcl
+queue_mode     = true   # required
+scheduled_task = true
+
+scheduled_task_config = {
+  enable_agent_tools = true
+}
+```
+
+- **Environment wiring is automatic.** The module injects `AK_SCHEDULER__ENABLED`, `AK_SCHEDULER__GROUP_NAME`, `AK_SCHEDULER__TARGET_ROLE_ARN` and the single location variable matching the session store into the Lambdas. The application's `config.yaml` only has to declare the `scheduler` block (with `""` placeholders) so those values have somewhere to land — `scheduler` defaults to absent, and an empty value counts as unset, so enabling scheduling in the app without `scheduled_task = true` here fails at startup rather than half-working.
+- **The table follows the session store.** A dedicated DynamoDB table is created only when `create_dynamodb_memory_table = true`; with a Redis or Valkey session store the existing cluster is reused under a separate keyspace and no new infrastructure is provisioned.
+- **IAM grants are deliberately unequal.** The request handler gets full table read/write, EventBridge Scheduler create/update/delete within the deployment's group, `iam:PassRole` on the timer role and `sqs:GetQueueAttributes` on the input queue. The response handler gets table read and update only. The agent runner gets nothing unless `enable_agent_tools = true`.
+- **An authorizer is effectively mandatory.** The schedule routes read the owner from the API Gateway authorizer's `principalId` (`ValidationResult.subject`). The module attaches the authorizer to every route including the four `/schedule` routes, with no per-route opt-out; omit the `authorizer` block and every schedule request is rejected with `401`.
+- **Destroy is clean.** Deleting the schedule group removes every registration the deployment made.
+
+See [examples/aws-serverless/scheduled-openai](../../../examples/aws-serverless/scheduled-openai).
+
 ## 📤 Outputs
 
 | Name | Description |
@@ -724,6 +753,11 @@ The root `queue_config` object drives the SQS queues created for queue mode. All
 | `ws_connection_handler_lambda_function_invoke_arn` | Invoke ARN of the WebSocket connection handler Lambda function (returns null when not in a WebSocket mode (`async`/`stream`)) |
 | `ws_connection_handler_lambda_role_arn` | ARN of the WebSocket connection handler Lambda execution role (returns null when not in a WebSocket mode (`async`/`stream`)) |
 | `ws_connection_handler_lambda_role_name` | Name of the WebSocket connection handler Lambda execution role (returns null when not in a WebSocket mode (`async`/`stream`)) |
+| `scheduled_task_enabled` | Whether scheduled tasks are enabled for this deployment |
+| `scheduled_task_table_name` | Scheduled-task DynamoDB table name (returns null unless `scheduled_task = true` with a DynamoDB session store) |
+| `scheduled_task_table_arn` | Scheduled-task DynamoDB table ARN (returns null unless `scheduled_task = true` with a DynamoDB session store) |
+| `scheduled_task_schedule_group_name` | EventBridge Scheduler schedule group name (returns null when `scheduled_task = false`) |
+| `scheduled_task_target_role_arn` | IAM role EventBridge Scheduler assumes to deliver a fire to the input queue (returns null when `scheduled_task = false`) |
 
 ## ✨ Features
 

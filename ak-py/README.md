@@ -12,6 +12,7 @@ Agent Kernel is a lightweight **AI agent runtime** and adapter layer for buildin
 - **Session Management**: Built-in session abstraction with pluggable storage backends
 - **Knowledge Bases**: Unified `KnowledgeBase` interface with ChromaDB, Neo4j, and Starburst/Trino backends via `KnowledgeBuilder`
 - **Sandbox**: Execute agent-generated code and shell commands in an isolated, permission-bounded environment with pluggable providers (`local_subprocess`, `docker`, `e2b`, `daytona`, `ec2_ssm`), workload profiles, policy enforcement, and per-user identity
+- **Scheduled Tasks**: Run agents on a cron, rate, or one-time schedule — created through the chat endpoint, managed over REST or agent-callable tools, and executed on the existing queue path (AWS queue mode)
 - **Flexible Deployment**: Interactive CLI, REST API, serverless, or containerized deployment — see the "Multi-Cloud Deployment" section below
 - **Pluggable Architecture**: Easy to extend with custom framework adapters
 - **MCP Server**: Built-in Model Context Protocol server for exposing agents as MCP tools and exposing any custom tool
@@ -1054,6 +1055,64 @@ Key fields:
 
 See the [Sandbox guide](https://kernel.yaala.ai/docs/advanced/sandbox) for the full
 reference and the `examples/sandbox` and `examples/sandbox/identity` examples.
+
+#### Scheduled Task Configuration
+
+Enable scheduled tasks to run agents on a timer. A scheduled task is a stored agent message plus
+the schedule that fires it; when it comes due, EventBridge Scheduler puts an **ordinary agent
+message** on the existing SQS input queue and the agent runner executes it on the normal path.
+
+Create tasks through `POST /api/v1/chat` with an optional `schedule` block — there is no separate
+creation endpoint — and manage them through `GET`/`PUT`/`DELETE` on `/api/v1/schedule`. Agents in
+scope also gain four tools (`create_scheduled_task`, `update_scheduled_task`,
+`delete_scheduled_task`, `list_scheduled_tasks`).
+
+**Availability: AWS queue-mode scalable deployments only** (scalable serverless Lambda and
+scalable containerized ECS, both with `queue_mode = true`). Azure, GCP and non-queue AWS
+deployments are not supported in this version.
+
+```yaml
+session:
+  type: dynamodb              # dynamodb | redis | valkey — in_memory is rejected
+
+scheduler:
+  enabled: true
+  agents: [assistant]         # agents the scheduling tools attach to; omit = all, [] = none
+  group_name: ""              # EventBridge Scheduler group — injected as AK_SCHEDULER__GROUP_NAME
+  target_role_arn: ""         # timer execution role — injected as AK_SCHEDULER__TARGET_ROLE_ARN
+  region: us-east-1           # optional; defaults to the boto3 environment default
+  dynamodb:                   # exactly one location block, matching session.type
+    table_name: ak-scheduled-tasks
+```
+
+Key fields:
+
+- **`enabled`** (`AK_SCHEDULER__ENABLED`, default `false`) — master switch. When off, a `schedule`
+  block on a chat request is rejected with 400 and the `/api/v1/schedule` routes are not mounted.
+- **`agents`** — agent names the scheduling tools attach to; omit for all agents, `[]` for none.
+- **`group_name`** / **`target_role_arn`** — Terraform outputs, injected as
+  `AK_SCHEDULER__GROUP_NAME` / `AK_SCHEDULER__TARGET_ROLE_ARN`. Mandatory when enabled; an empty
+  string counts as unset, so a deployment missing the wiring fails at startup rather than at the
+  first registration.
+- **`dynamodb.table_name`** / **`redis.prefix`** / **`valkey.prefix`** — **which one is read is not
+  configured**: the scheduled-task store follows `session.type`. DynamoDB sessions get a dedicated
+  table; Redis or Valkey sessions reuse the same cluster under a separate keyspace, with no new
+  infrastructure. Populating a block for a different backend is rejected at startup rather than
+  silently ignored.
+
+The block carries **no task definitions** — tasks are only ever created at runtime by an
+authenticated caller. Every scheduled task is owned by an authenticated identity stamped
+server-side, so scheduling requires an identity resolver: an `Authoriser` on the FastAPI surfaces
+(missing one raises `AKConfigError` at startup) or the API Gateway authorizer's `principalId` on
+serverless REST.
+
+Terraform side: one gate, `scheduled_task = true` (requires `queue_mode = true`), plus
+`scheduled_task_config.enable_agent_tools` to grant the agent runner the access its scheduling
+tools need.
+
+See the [Scheduled Tasks guide](https://kernel.yaala.ai/docs/advanced/scheduled-tasks) for the full
+reference, and the `examples/aws-containerized/openai-scheduled-task` and
+`examples/aws-serverless/scheduled-openai` examples.
 
 #### Messaging Platform Integrations
 
