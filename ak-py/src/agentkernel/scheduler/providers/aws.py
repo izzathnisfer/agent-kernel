@@ -29,19 +29,16 @@ MINIMUM_GRANULARITY = timedelta(minutes=1)
 # later than that would not be deduplicated. Capping event age keeps every retry inside it.
 MAX_EVENT_AGE_SECONDS = 300
 
-# Added to the derived soft-delete TTL so the id stays reserved a little past the longest
-# execution an already-enqueued fire can have.
+# Added to the derived soft-delete TTL so the id stays reserved past the longest possible
+# in-flight execution.
 TTL_SAFETY_MARGIN_SECONDS = 300
 
-# Floor for the derived soft-delete TTL, so a short visibility timeout cannot shrink the
-# grace window below what an in-flight run needs.
+# Floor for the derived soft-delete TTL, so a short visibility timeout can't shrink the grace
+# window below what an in-flight run needs.
 TTL_FLOOR_SECONDS = 900
 
-# The fields a definition write owns. Deliberately disjoint from the outcome-write set
-# (last_run_*, last_error) and from the soft-delete set (deleted, deleted_at): that disjointness
-# is what lets a management PUT and a consumer's outcome write interleave without either
-# clobbering the other's fields. owner_id, created_at and scheduled_task_version are immutable
-# for the life of an incarnation, so only the create path writes them.
+# Disjoint from the outcome fields (last_run_*, last_error) and the soft-delete fields (deleted,
+# deleted_at), so a management PUT and a consumer's outcome write can interleave without clobbering.
 DEFINITION_FIELDS = ("schedule", "message", "updated_at", "status", "completed_at")
 
 # Substituted by EventBridge Scheduler into the payload at fire time, so the delivered
@@ -118,9 +115,8 @@ class AWSScheduler(Scheduler):
 
         previous = self._store.get(task.scheduled_task_id)
         if previous is not None and previous.deleted:
-            # Reachable only when a delete lands between the service's own liveness check and
-            # this read. Writing on through would put definition fields on a tombstone and
-            # register a timer for a deleted task.
+            # A delete landed between the service's liveness check and this read; writing on
+            # would resurrect a tombstone and register a timer for a deleted task.
             raise SchedulerConflictError(
                 f"scheduled task '{task.scheduled_task_id}' was deleted while this request was in flight; "
                 "the id frees up when its grace period expires"

@@ -14,9 +14,8 @@ from .model import ScheduleSpec
 # "<n> <unit>" — the rate grammar every supported timer shares.
 _RATE_PATTERN = re.compile(r"^\s*(\d+)\s+(minute|minutes|hour|hours|day|days|second|seconds)\s*$", re.IGNORECASE)
 
-# A spec carries the bare expression and the provider adds its own wrapper, so a pasted-in
-# native form must be rejected here. A wrapped cron passes the field count below and the
-# doubly-wrapped result would only fail later at the timer, as an opaque server error.
+# Rejects an already-wrapped native form up front; the provider adds its own wrapper, so
+# letting one through would double-wrap it into an opaque failure at the timer.
 _WRAPPED_PATTERN = re.compile(r"^\s*(cron|rate|at)\s*\((.*)\)\s*$", re.IGNORECASE | re.DOTALL)
 
 _RATE_UNITS = {

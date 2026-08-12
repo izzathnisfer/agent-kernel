@@ -228,9 +228,8 @@ class ECSStreamAgentRunner(ECSAgentRunner):
         """Implements ECSSQSConsumer.process_message for STREAM mode."""
         if cls._is_scheduled_fire(record):
             cls._log.info("Scheduled fire %s — running as a non-stream execution", record.get("MessageId"))
-            # Delegated on ECSAgentRunner explicitly, not through super(): super() would leave cls
-            # bound to this class, so _get_record_attributes would still be the override that
-            # demands endpoint_url — the very thing a fire does not carry.
+            # Named explicitly, not via super(): super() would keep cls bound to this class's
+            # _get_record_attributes override, which requires endpoint_url that a fire lacks.
             return ECSAgentRunner.process_message(record)
 
         message_id = record.get("MessageId")

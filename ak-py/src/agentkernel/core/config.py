@@ -619,9 +619,8 @@ class _SchedulerValkeyConfig(BaseModel):
     )
 
 
-# session.type -> the scheduler block that parameterizes the matching store. The scheduled-task
-# store is never selected separately: it follows session.type, so there is exactly one block per
-# durable session backend and no way to point the two at different technologies.
+# session.type -> the scheduler block that parameterizes its store; the store always follows
+# session.type, so it is never chosen independently.
 _SCHEDULER_STORE_BLOCKS = {
     "dynamodb": _SchedulerDynamoDBConfig,
     "redis": _SchedulerRedisConfig,

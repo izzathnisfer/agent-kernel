@@ -6,14 +6,11 @@ from typing import Any, Callable, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-# Prefix for session ids derived for scheduled runs. Since scheduled_task_id is
-# caller-chosen and shares a namespace with user-supplied session ids, without the prefix a
-# user session named after a scheduled task would share conversation state with its runs.
+# Prefix for scheduled-run session ids, so they can't collide with a user session of the same name.
 SCHEDULED_SESSION_PREFIX = "schedule:"
 
-# Volatile-cache key under which ChatService binds the request's authenticated user id to the
-# session. Tool code needs the caller's identity to own a scheduled task, but user_id is kept
-# out of the agent's request context, so it travels on the session instead.
+# Volatile-cache key ChatService uses to bind the caller's user id to the session, since tools
+# need it but it isn't part of the agent's request context.
 REQUEST_USER_ID_KEY = "ak.request.user_id"
 
 

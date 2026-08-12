@@ -306,9 +306,8 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
         """
         if cls._is_scheduled_fire(record):
             cls._log.info("Scheduled fire — running as a non-stream execution")
-            # ServerlessAgentRunner is a sibling, not a base class, so the delegation names it
-            # outright: that binds cls to it and picks up its endpoint_url-optional attribute
-            # extraction and its whole-response send.
+            # ServerlessAgentRunner is a sibling, not a base class — named explicitly so cls binds
+            # to its endpoint_url-optional attribute extraction and whole-response send.
             return ServerlessAgentRunner.process_message(record)
 
         cls._log.info(f"Processing stream message: {record}")

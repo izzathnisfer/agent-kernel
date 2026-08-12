@@ -17,14 +17,9 @@ from .store.base import DURABLE_SESSION_TYPES
 if TYPE_CHECKING:
     from .service import ScheduledTaskService
 
-# session.type -> (the scheduler config block that parameterizes its store, the field that
-# carries the value, whether the deployment must supply that value).
-#
-# The scheduled-task store follows session.type, so the block is never a choice of backend —
-# only the parameters of the one already selected. A DynamoDB table is created per deployment
-# and its name cannot be guessed, so it must be supplied. The Redis and Valkey keyspace
-# prefixes are constants and those stores reuse the session cluster's own URL, so nothing has
-# to be declared or injected for them at all.
+# session.type -> (config block, field, whether the deployment must supply it). A DynamoDB
+# table name can't be guessed, so it's required; Redis/Valkey reuse the session cluster's URL
+# with a constant prefix, so neither needs a supplied value.
 _REQUIRED_BACKEND_FIELD = {
     "dynamodb": ("dynamodb", "table_name", True),
     "redis": ("redis", "prefix", False),
@@ -148,9 +143,8 @@ class SchedulerFactory:
                 f"for the scheduled-task store; it is injected by Terraform via "
                 f"AK_SCHEDULER__{required_block.upper()}__{required_field.upper()}."
             )
-        # A declared-but-blank value is always a wiring failure, never a request for the
-        # default: the examples ship these as "" placeholders for Terraform to fill, and an
-        # empty Redis prefix would put scheduled tasks in the session keyspace root.
+        # A declared-but-blank value is a wiring failure, not a request for the default — the
+        # examples ship "" placeholders for Terraform to fill.
         if block is not None and not (getattr(block, required_field) or "").strip():
             raise AKConfigError(
                 f"scheduler.{required_block}.{required_field} is declared but empty. Remove it to accept the "

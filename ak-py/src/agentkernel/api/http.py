@@ -21,9 +21,7 @@ class RESTAPI:
     _custom_routers = []
     _auth_token_validators = []
 
-    # The schedule management routes are REST-only and need an ``Authoriser`` to resolve the
-    # caller. Subclasses serving a transport that has no ``Authoriser`` at all — the WebSocket
-    # API — turn this off, because for them the auto-mount could only ever fail at startup.
+    # Requires an Authoriser to resolve the caller; transports without one (e.g. WebSocket) disable this.
     _auto_mount_schedule_routes: ClassVar[bool] = True
 
     @classmethod

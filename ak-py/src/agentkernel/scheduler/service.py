@@ -120,9 +120,7 @@ class ScheduledTaskService:
                     owner_id=existing.owner_id,
                 ),
                 "updated_at": datetime.now(timezone.utc),
-                # Re-arms a fired one-time task: the guard above has already required the new
-                # instant, so this is the same scheduled task rescheduled and the version is
-                # retained. A no-op for a recurring task, which is never COMPLETED.
+                # Re-arms a fired one-time task (a no-op for a recurring one, which is never COMPLETED).
                 "status": TaskStatus.ACTIVE,
                 "completed_at": None,
             }
