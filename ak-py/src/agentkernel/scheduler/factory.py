@@ -17,11 +17,18 @@ from .store.base import DURABLE_SESSION_TYPES
 if TYPE_CHECKING:
     from .service import ScheduledTaskService
 
-# session.type -> (the scheduler config block it requires, the field that must be set).
+# session.type -> (the scheduler config block that parameterizes its store, the field that
+# carries the value, whether the deployment must supply that value).
+#
+# The scheduled-task store follows session.type, so the block is never a choice of backend —
+# only the parameters of the one already selected. A DynamoDB table is created per deployment
+# and its name cannot be guessed, so it must be supplied. The Redis and Valkey keyspace
+# prefixes are constants and those stores reuse the session cluster's own URL, so nothing has
+# to be declared or injected for them at all.
 _REQUIRED_BACKEND_FIELD = {
-    "dynamodb": ("dynamodb", "table_name"),
-    "redis": ("redis", "prefix"),
-    "valkey": ("valkey", "prefix"),
+    "dynamodb": ("dynamodb", "table_name", True),
+    "redis": ("redis", "prefix", False),
+    "valkey": ("valkey", "prefix", False),
 }
 
 
@@ -121,29 +128,40 @@ class SchedulerFactory:
 
     @staticmethod
     def _validate_backend_block(config: AKConfig) -> None:
-        """Reject a scheduler backend block that contradicts the resolved session type.
+        """Reject a scheduler store block that contradicts the resolved session type.
 
-        The store is derived from ``session.type`` rather than declared, so both directions
-        are checked: a missing block would otherwise fail late inside a connection attempt,
-        and a populated block for another backend would never be read.
+        The store follows ``session.type`` and is never selected separately, so the only
+        failures possible here are a deployment value that was not injected and a block for a
+        backend that will never be read.
 
         :param config: The loaded configuration.
-        :raises AKConfigError: The required block is missing, or a non-matching one is set.
+        :raises AKConfigError: A required deployment value is missing, a declared value is
+            blank, or a block for another backend is set.
         """
         session_type = config.session.type.lower()
-        required_block, required_field = _REQUIRED_BACKEND_FIELD[session_type]
+        required_block, required_field, deployment_supplied = _REQUIRED_BACKEND_FIELD[session_type]
 
         block = getattr(config.scheduler, required_block, None)
-        if block is None or not (getattr(block, required_field) or "").strip():
+        if deployment_supplied and block is None:
             raise AKConfigError(
-                f"session.type is '{session_type}', so scheduler.{required_block}.{required_field} must be set " "for the scheduled-task store."
+                f"session.type is '{session_type}', so scheduler.{required_block}.{required_field} must be set "
+                f"for the scheduled-task store; it is injected by Terraform via "
+                f"AK_SCHEDULER__{required_block.upper()}__{required_field.upper()}."
+            )
+        # A declared-but-blank value is always a wiring failure, never a request for the
+        # default: the examples ship these as "" placeholders for Terraform to fill, and an
+        # empty Redis prefix would put scheduled tasks in the session keyspace root.
+        if block is not None and not (getattr(block, required_field) or "").strip():
+            raise AKConfigError(
+                f"scheduler.{required_block}.{required_field} is declared but empty. Remove it to accept the "
+                f"default, or supply a value (Terraform injects AK_SCHEDULER__{required_block.upper()}__{required_field.upper()})."
             )
 
         for other_block in _REQUIRED_BACKEND_FIELD:
             if other_block != required_block and getattr(config.scheduler, other_block, None) is not None:
                 raise AKConfigError(
                     f"scheduler.{other_block} is configured but session.type is '{session_type}', so it would never be read. "
-                    f"Remove it, or set session.type to '{other_block}'."
+                    f"The scheduled-task store follows the session store. Remove it, or set session.type to '{other_block}'."
                 )
 
     @staticmethod

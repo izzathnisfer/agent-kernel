@@ -619,6 +619,16 @@ class _SchedulerValkeyConfig(BaseModel):
     )
 
 
+# session.type -> the scheduler block that parameterizes the matching store. The scheduled-task
+# store is never selected separately: it follows session.type, so there is exactly one block per
+# durable session backend and no way to point the two at different technologies.
+_SCHEDULER_STORE_BLOCKS = {
+    "dynamodb": _SchedulerDynamoDBConfig,
+    "redis": _SchedulerRedisConfig,
+    "valkey": _SchedulerValkeyConfig,
+}
+
+
 class _SchedulerConfig(BaseModel):
     """Scheduled task support. Requires AWS, queue mode, and a durable session store.
 
@@ -643,6 +653,24 @@ class _SchedulerConfig(BaseModel):
     dynamodb: Optional[_SchedulerDynamoDBConfig] = Field(default=None, description="Scheduled-task table when session.type is dynamodb")
     redis: Optional[_SchedulerRedisConfig] = Field(default=None, description="Scheduled-task keyspace when session.type is redis")
     valkey: Optional[_SchedulerValkeyConfig] = Field(default=None, description="Scheduled-task keyspace when session.type is valkey")
+
+    def store_block(self, session_type: str) -> Optional[BaseModel]:
+        """Return the store block matching the session backend, defaulted when not declared.
+
+        The scheduled-task store follows ``session.type``, so the block is looked up by that
+        type rather than chosen. An undeclared block is defaulted rather than an error: a
+        deployment only has to declare the one value it cannot supply a default for, which is
+        the DynamoDB table name. The Redis and Valkey keyspace prefixes are constants, and
+        those stores reuse the session cluster's own URL.
+
+        :param session_type: The resolved, lower-cased ``session.type``.
+        :return: The declared or defaulted block, or None when the type has no store block.
+        """
+        block_type = _SCHEDULER_STORE_BLOCKS.get(session_type)
+        if block_type is None:
+            return None
+        declared = getattr(self, session_type, None)
+        return declared if declared is not None else block_type()
 
 
 class AKConfig(YamlBaseSettingsModified):

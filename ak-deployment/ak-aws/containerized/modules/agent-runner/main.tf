@@ -28,29 +28,21 @@ locals {
   # opt-in — so the whole block is injected only when they are enabled.
   scheduler_tools_enabled = var.scheduled_task && var.scheduled_task_config.enable_agent_tools
 
-  # Exactly one backend block may be injected: SchedulerFactory._validate_backend_block
-  # rejects a populated block that does not match session.type with AKConfigError at startup,
-  # so a deployment that has more than one store available must still resolve to one. The
-  # precedence mirrors the scheduled-task table's own gate (DynamoDB first).
-  scheduler_store_backend = (
-    var.scheduled_task_table_name != null ? "dynamodb" :
-    var.redis_url != null ? "redis" :
-    var.valkey_url != null ? "valkey" : null
-  )
-
-  # Only the backend block matching the deployment's session store is injected: the ECS
-  # environment map rejects nulls.
+  # Only the DynamoDB table name is injected, and the root passes it as non-null only when the
+  # session store is DynamoDB (the table is gated on create_dynamodb_memory_table). The
+  # scheduled-task store follows session.type, so nothing here selects a backend; it supplies
+  # the one value that cannot be defaulted, because the table is created per deployment.
+  # Redis and Valkey need nothing: those stores reuse the session cluster's own URL under a
+  # constant keyspace prefix that the application defaults.
   scheduler_environment = local.scheduler_tools_enabled ? merge(
     {
       AK_SCHEDULER__ENABLED         = "true"
       AK_SCHEDULER__GROUP_NAME      = var.scheduled_task_schedule_group_name
       AK_SCHEDULER__TARGET_ROLE_ARN = var.scheduled_task_target_role_arn
     },
-    local.scheduler_store_backend == "dynamodb" ? {
+    var.scheduled_task_table_name != null ? {
       AK_SCHEDULER__DYNAMODB__TABLE_NAME = var.scheduled_task_table_name
     } : {},
-    local.scheduler_store_backend == "redis" ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
-    local.scheduler_store_backend == "valkey" ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
   ) : {}
 }
 

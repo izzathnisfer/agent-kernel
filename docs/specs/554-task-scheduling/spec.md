@@ -1494,42 +1494,51 @@ table name is *not* set on a Redis/Valkey deployment, and the keyspace prefix is
 DynamoDB one. This follows the conditional-merge shape the session store env vars already use
 (`containerized/modules/rest-service/main.tf:1-25`, e.g.
 `var.dynamodb_memory_table_arn != null ? { AK_SESSION__DYNAMODB__TABLE_NAME = ... } : {}`), with one
-difference that matters: **the gate is the session backend, not the mere existence of a store.**
-Each module therefore resolves exactly one backend first, in the same precedence the scheduled-task
-table's own gate follows, and keys all three blocks off that:
+difference that matters: **Terraform injects a store parameter, never a store choice.**
+
+The scheduled-task store follows `session.type` and is resolved in the application
+(`ScheduledTaskStoreBuilder.build()` reads `config.session.type` and nothing else), so there is no
+backend for Terraform to select. It supplies only the one value that cannot be defaulted:
 
 ```hcl
-scheduler_store_backend = (
-  var.scheduled_task_table_name != null ? "dynamodb" :
-  var.redis_url != null ? "redis" :
-  var.valkey_url != null ? "valkey" : null
-)
-
 scheduler_environment = var.scheduled_task ? merge(
   {
     AK_SCHEDULER__ENABLED         = "true"
     AK_SCHEDULER__GROUP_NAME      = var.scheduled_task_schedule_group_name
     AK_SCHEDULER__TARGET_ROLE_ARN = var.scheduled_task_target_role_arn
   },
-  local.scheduler_store_backend == "dynamodb" ? { AK_SCHEDULER__DYNAMODB__TABLE_NAME = var.scheduled_task_table_name } : {},
-  local.scheduler_store_backend == "redis" ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
-  local.scheduler_store_backend == "valkey" ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
+  var.scheduled_task_table_name != null ? { AK_SCHEDULER__DYNAMODB__TABLE_NAME = var.scheduled_task_table_name } : {},
 ) : {}
 ```
 
-Gating a prefix on a URL being non-null is *not* equivalent, and on serverless it is wrong: there,
-`local.redis_url` is non-null when `create_redis_cluster || create_redis_response_store`, so a
-supported combination — DynamoDB sessions plus a Redis *response store* — would inject
+A DynamoDB table is created per deployment and its name cannot be guessed, so it must be injected.
+The Redis and Valkey keyspace prefixes are constants, and those stores **reuse the session cluster's
+own URL** — already injected as `AK_SESSION__REDIS__URL` / `AK_SESSION__VALKEY__URL` — so nothing
+scheduler-specific is declared or injected for them at all. `scheduler.redis` / `scheduler.valkey`
+may be omitted entirely; `_SchedulerConfig.store_block()` defaults an undeclared block.
+
+The single remaining gate is exact, not a precedence: `scheduled_task_table_name` is non-null iff
+`create_scheduled_task_table`, which is `var.create_dynamodb_memory_table` (`scheduled_task.tf:20`)
+— the same input `session.type: dynamodb` corresponds to. No multi-way resolution is needed, and
+none is performed.
+
+This is what removes the earlier failure. Gating a prefix on a URL being non-null was wrong on
+serverless: `local.redis_url` is non-null when `create_redis_cluster || create_redis_response_store`,
+so a supported combination — DynamoDB sessions plus a Redis *response store* — injected
 `AK_SCHEDULER__DYNAMODB__TABLE_NAME` and `AK_SCHEDULER__REDIS__PREFIX` together. Two populated
-blocks is precisely what check #4 rejects: `SchedulerFactory._validate_backend_block` raises
-`AKConfigError` for a populated block that does not match `session.type`, so every
-scheduler-enabled component would crash-loop at startup. The serverless root therefore resolves the
-backend from the *session* variables directly
-(`var.create_dynamodb_memory_table` → `var.create_redis_cluster` → `var.create_valkey_cluster`),
-which is the same input the scheduled-task table is already gated on.
+blocks is precisely what check #4 rejects, so every scheduler-enabled component crash-looped at
+startup. With no prefix injected by anything, that class of conflict cannot arise.
+
+The one genuine operator error left — creating two session stores, which leaves `session.type`
+ambiguous — is now caught at **plan** time by a `validation` block on
+`create_dynamodb_memory_table` (both roots) asserting that at most one of
+`create_dynamodb_memory_table` / `create_redis_cluster` / `create_valkey_cluster` is true. That
+turns a boot-time crash-loop in every component into one `terraform plan` error naming the actual
+mistake. Cross-variable references in `validation` require Terraform ≥ 1.9; both roots pin
+`>= 1.9.5`.
 
 Injecting a `null` is not merely untidy: the ECS `environment` map and Lambda `environment.variables`
-both reject null values, so the unconditional form would fail `terraform apply` on every
+both reject null values, so an unconditional form would fail `terraform apply` on every
 Redis/Valkey deployment. The conditional form also keeps the running container's environment honest
 — an operator reading it sees exactly the one backend that is in use.
 
@@ -1549,9 +1558,12 @@ The full env contract, beyond the four `AK_SCHEDULER__*` values in the outputs t
 
 | Env var | Value | Injected on |
 |---|---|---|
-| `AK_SCHEDULER__REDIS__PREFIX` | `ak:scheduled_tasks:` | Redis-session deployments only |
-| `AK_SCHEDULER__VALKEY__PREFIX` | `ak:scheduled_tasks:` | Valkey-session deployments only |
 | `AK_EXECUTION__QUEUES__INPUT__URL` | input queue URL | every component that registers schedules — request handler / REST service always, agent runner when `enable_agent_tools` |
+
+Nothing is injected for the Redis or Valkey keyspace. `AK_SCHEDULER__REDIS__PREFIX` and
+`AK_SCHEDULER__VALKEY__PREFIX` remain settable by hand for an operator who wants a non-default
+keyspace, but no deployment sets them: the default `ak:scheduled_tasks:` is complete, and those
+stores take their connection from `session.redis.url` / `session.valkey.url`.
 
 The two dedicated examples (`examples/aws-serverless/scheduled-openai`,
 `examples/aws-containerized/openai-scheduled-task`) set `scheduled_task = true` in their

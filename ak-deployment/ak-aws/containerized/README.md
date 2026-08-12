@@ -307,11 +307,15 @@ scheduled_task_config = {
   so `terraform destroy` leaves no orphaned timers.
 
 **Environment wiring is automatic.** The REST service and agent-runner modules inject
-`AK_SCHEDULER__ENABLED`, `AK_SCHEDULER__GROUP_NAME`, `AK_SCHEDULER__TARGET_ROLE_ARN` and the single
-location variable matching the session store (`AK_SCHEDULER__DYNAMODB__TABLE_NAME`, or
-`AK_SCHEDULER__REDIS__PREFIX` / `AK_SCHEDULER__VALKEY__PREFIX`). The application's `config.yaml`
-only has to **declare the block** so those values have somewhere to land — `scheduler` defaults to
-absent:
+`AK_SCHEDULER__ENABLED`, `AK_SCHEDULER__GROUP_NAME` and `AK_SCHEDULER__TARGET_ROLE_ARN`, plus
+`AK_SCHEDULER__DYNAMODB__TABLE_NAME` when — and only when — the session store is DynamoDB.
+
+Nothing scheduler-specific is injected for Redis or Valkey sessions: the scheduled-task store
+follows `session.type` and reuses the session cluster's own URL under a separate keyspace, so those
+deployments need no `scheduler.redis` / `scheduler.valkey` block at all. Only the DynamoDB table name
+is injected, because that table is created per deployment and its name cannot be defaulted. The
+application's `config.yaml` has to **declare that one block** so the value has somewhere to land —
+`scheduler` defaults to absent:
 
 ```yaml
 scheduler:

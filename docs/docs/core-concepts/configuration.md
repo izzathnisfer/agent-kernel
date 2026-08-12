@@ -634,10 +634,14 @@ export AK_SCHEDULER__GROUP_NAME=myproduct-dev-agent-schedules
 export AK_SCHEDULER__TARGET_ROLE_ARN=arn:aws:iam::123456789012:role/myproduct-dev-agent-scheduler-target
 export AK_SCHEDULER__REGION=us-east-1
 
-# Exactly one location block, matching session.type
+# DynamoDB sessions only: the scheduled-task table is separate from the session table,
+# created per deployment, so its name has to be supplied.
 export AK_SCHEDULER__DYNAMODB__TABLE_NAME=ak-scheduled-tasks
-export AK_SCHEDULER__REDIS__PREFIX=ak:scheduled_tasks:
-export AK_SCHEDULER__VALKEY__PREFIX=ak:scheduled_tasks:
+
+# Redis/Valkey sessions need none of this — the scheduled-task store reuses the session
+# cluster's own URL under the default 'ak:scheduled_tasks:' keyspace. Set a prefix only to
+# override that default:
+# export AK_SCHEDULER__REDIS__PREFIX=ak:scheduled_tasks:
 ```
 
 **Notes**:

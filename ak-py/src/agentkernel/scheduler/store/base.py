@@ -197,23 +197,26 @@ class ScheduledTaskStoreBuilder:
         config = AKConfig.get()
         store_type = config.session.type.lower()
         scheduler_config = config.scheduler
+        # Defaulted when the deployment did not declare it — the block only ever parameterizes
+        # the store that session.type already selected.
+        store_block = scheduler_config.store_block(store_type)
         ScheduledTaskStoreBuilder._log.info("Building '%s' scheduled task store", store_type)
 
         if store_type == "dynamodb":
             with require_extra("aws", "scheduler with session.type: dynamodb"):
                 from .dynamodb import DynamoDBScheduledTaskStore
 
-            return DynamoDBScheduledTaskStore(table_name=scheduler_config.dynamodb.table_name, region=scheduler_config.region)
+            return DynamoDBScheduledTaskStore(table_name=store_block.table_name, region=scheduler_config.region)
         if store_type == "redis":
             with require_extra("redis", "scheduler with session.type: redis"):
                 from .redis import RedisScheduledTaskStore
 
-            return RedisScheduledTaskStore(url=config.session.redis.url, prefix=scheduler_config.redis.prefix)
+            return RedisScheduledTaskStore(url=config.session.redis.url, prefix=store_block.prefix)
         if store_type == "valkey":
             with require_extra("valkey", "scheduler with session.type: valkey"):
                 from .valkey import ValkeyScheduledTaskStore
 
-            return ValkeyScheduledTaskStore(url=config.session.valkey.url, prefix=scheduler_config.valkey.prefix)
+            return ValkeyScheduledTaskStore(url=config.session.valkey.url, prefix=store_block.prefix)
 
         raise AKConfigError(
             f"scheduler requires a durable session store; session.type '{config.session.type}' is not one of {list(DURABLE_SESSION_TYPES)}"

@@ -123,6 +123,16 @@ variable "create_dynamodb_memory_table" {
   type        = bool
   description = "Create a dynamodb table to store the Agent memory"
   default     = false
+  nullable    = false
+  validation {
+    # The application's session.type names exactly one backend, and the scheduled-task store
+    # follows it. Creating two session stores leaves Terraform guessing which one that is —
+    # caught here rather than as a startup crash-loop in every scheduler-enabled component.
+    condition = length([
+      for created in [var.create_dynamodb_memory_table, var.create_redis_cluster, var.create_valkey_cluster] : created if created
+    ]) <= 1
+    error_message = "At most one of create_dynamodb_memory_table, create_redis_cluster, create_valkey_cluster may be true — they are the session store, and session.type names only one."
+  }
 }
 
 variable "create_redis_response_store" {

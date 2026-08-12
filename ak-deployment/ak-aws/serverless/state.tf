@@ -85,26 +85,23 @@ locals {
   # combination; keying off them would inject two backend blocks, which
   # SchedulerFactory._validate_backend_block rejects with AKConfigError at startup.
   # The precedence mirrors the scheduled-task table's own gate (DynamoDB first).
-  scheduler_store_backend = (
-    var.create_dynamodb_memory_table ? "dynamodb" :
-    var.create_redis_cluster ? "redis" :
-    var.create_valkey_cluster ? "valkey" : null
-  )
-
-  # Only the backend block matching the deployment's session store is injected: Lambda's
-  # environment map rejects nulls, and an operator reading the function's environment
-  # should see exactly the one backend that is in use.
+  # Only the DynamoDB table name is injected, and only when that is the session store. The
+  # scheduled-task store follows session.type, so nothing here selects a backend; it supplies
+  # the one value that cannot be defaulted, because the table is created per deployment.
+  # Redis and Valkey need nothing: those stores reuse the session cluster's own URL (already
+  # injected as AK_SESSION__REDIS__URL / AK_SESSION__VALKEY__URL) under a constant keyspace
+  # prefix that the application defaults. Injecting a prefix keyed off cluster existence is
+  # what previously sent two backend blocks to a DynamoDB-sessions deployment that also had a
+  # Redis response store, which validate_config() rejects at startup.
   scheduler_environment = var.scheduled_task ? merge(
     {
       AK_SCHEDULER__ENABLED         = "true"
       AK_SCHEDULER__GROUP_NAME      = module.scheduler[0].schedule_group_name
       AK_SCHEDULER__TARGET_ROLE_ARN = module.scheduler[0].target_role_arn
     },
-    local.scheduler_store_backend == "dynamodb" ? {
+    var.create_dynamodb_memory_table ? {
       AK_SCHEDULER__DYNAMODB__TABLE_NAME = module.scheduler[0].table_name
     } : {},
-    local.scheduler_store_backend == "redis" ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
-    local.scheduler_store_backend == "valkey" ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
   ) : {}
 
   # Scheduling reaches the agent runner only through the agent-callable tools, which are

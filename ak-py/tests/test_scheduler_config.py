@@ -60,8 +60,19 @@ def test_missing_or_blank_timer_wiring_is_rejected(field, value):
         SchedulerFactory.validate_config()
 
 
-def test_missing_backend_block_is_rejected():
+def test_a_blank_dynamodb_table_name_is_rejected():
+    """The examples ship this as a "" placeholder for Terraform to fill, so a blank value is a
+    wiring failure, never a request for the default."""
     enable_scheduler_config(dynamodb=_SchedulerDynamoDBConfig(table_name=""))
+    with pytest.raises(AKConfigError, match="scheduler.dynamodb.table_name"):
+        SchedulerFactory.validate_config()
+
+
+def test_an_absent_dynamodb_block_is_rejected():
+    """The table is created per deployment, so its name cannot be defaulted — unlike the
+    Redis/Valkey prefixes, it has to be supplied."""
+    enable_scheduler_config()
+    AKConfig.get().scheduler.dynamodb = None
     with pytest.raises(AKConfigError, match="scheduler.dynamodb.table_name"):
         SchedulerFactory.validate_config()
 
@@ -79,10 +90,21 @@ def test_valkey_block_on_a_dynamodb_deployment_is_rejected():
         SchedulerFactory.validate_config()
 
 
-def test_redis_deployment_requires_its_prefix():
+def test_a_blank_redis_prefix_is_rejected():
+    """An empty prefix would put scheduled tasks in the session keyspace root, so a declared
+    blank is rejected rather than silently replaced by the default."""
     enable_scheduler_config(session_type="redis", redis=_SchedulerRedisConfig(prefix=""))
     with pytest.raises(AKConfigError, match="scheduler.redis.prefix"):
         SchedulerFactory.validate_config()
+
+
+@pytest.mark.parametrize("session_type", ["redis", "valkey"])
+def test_an_absent_keyspace_block_is_accepted(session_type):
+    """The scheduled-task store follows session.type and reuses the session cluster's own URL
+    under a constant prefix, so a Redis/Valkey deployment declares and is injected nothing."""
+    enable_scheduler_config(session_type=session_type)
+    setattr(AKConfig.get().scheduler, session_type, None)
+    SchedulerFactory.validate_config()  # must not raise
 
 
 class TestSoftDeleteTTL:

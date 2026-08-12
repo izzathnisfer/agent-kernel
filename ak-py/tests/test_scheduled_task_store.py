@@ -381,6 +381,35 @@ class TestStoreBuilder:
         monkeypatch.setattr("agentkernel.scheduler.store.dynamodb.DynamoDBDriver", lambda **kwargs: MagicMock())
         assert isinstance(ScheduledTaskStoreBuilder.build(), DynamoDBScheduledTaskStore)
 
+    def test_redis_sessions_reuse_the_session_cluster_under_the_default_keyspace(self, monkeypatch):
+        """The store follows session.type, so an undeclared block resolves to the default
+        prefix over the session cluster's own URL — nothing to declare, nothing to inject."""
+        from agentkernel.core.config import _RedisConfig
+
+        config = enable_scheduler_config(session_type="redis")
+        config.session.redis = _RedisConfig(url="redis://session-cluster:6379")
+        config.scheduler.redis = None
+
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        monkeypatch.setattr("agentkernel.scheduler.store.redis.RedisDriver", _capture)
+
+        store = ScheduledTaskStoreBuilder.build()
+
+        assert isinstance(store, RedisScheduledTaskStore)
+        # The session cluster's own URL, and the default keyspace prefix nobody declared.
+        assert captured["url"] == "redis://session-cluster:6379"
+        assert captured["prefix"] == PREFIX
+
+    def test_the_scheduled_task_keyspace_is_disjoint_from_the_session_keyspace(self):
+        """Sharing the cluster is only safe because the prefix separates the two keyspaces."""
+        assert PREFIX.strip() != ""
+        assert PREFIX.endswith(":")
+
 
 class TestPageCursor:
     def test_a_cursor_round_trips(self):
