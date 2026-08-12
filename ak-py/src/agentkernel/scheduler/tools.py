@@ -55,7 +55,7 @@ class _ToolSupport:
         cron: Optional[str],
         rate: Optional[str],
         at: Optional[str],
-        mode: str,
+        mode: Optional[str],
         scheduled_task_id: Optional[str],
     ) -> ScheduleSpec:
         """Build a ``ScheduleSpec`` from the model's flat tool arguments.
@@ -63,14 +63,16 @@ class _ToolSupport:
         :param cron: Cron expression, or None.
         :param rate: Rate expression, or None.
         :param at: ISO-8601 one-time instant, or None.
-        :param mode: ``per_run`` or ``continuous``.
+        :param mode: ``per_run`` or ``continuous``. None leaves the field unset, which is how
+            an update keeps the task's current mode instead of resetting it to the default.
         :param scheduled_task_id: Caller-chosen id, or None to have one generated.
         :return: The parsed schedule.
         :raises ValueError: The arguments do not form a valid schedule.
         """
-        return ScheduleSpec.model_validate(
-            {"id": scheduled_task_id, "cron": cron, "rate": rate, "at": at, "mode": ScheduleMode(mode)},
-        )
+        payload: dict[str, Any] = {"id": scheduled_task_id, "cron": cron, "rate": rate, "at": at}
+        if mode is not None:
+            payload["mode"] = ScheduleMode(mode)
+        return ScheduleSpec.model_validate(payload)
 
     @staticmethod
     def summarize(task: ScheduledTask) -> dict[str, Any]:
@@ -146,7 +148,7 @@ def update_scheduled_task(
     rate: Optional[str] = None,
     at: Optional[str] = None,
     agent: Optional[str] = None,
-    mode: str = "per_run",
+    mode: Optional[str] = None,
 ) -> str:
     """
     Change an existing scheduled task's prompt or timing. Does not create new tasks.
@@ -156,9 +158,10 @@ def update_scheduled_task(
         prompt: Replacement prompt; omit to keep the current one.
         cron: Replacement cron expression.
         rate: Replacement fixed interval.
-        at: Replacement ISO-8601 one-time instant.
+        at: Replacement ISO-8601 one-time instant. A one-time task that has already run needs
+            a new future instant here before anything else about it can be changed.
         agent: Replacement agent; omit to keep the current one.
-        mode: Conversation mode applied when the timing is replaced.
+        mode: Replacement conversation mode; omit to keep the current one.
 
     Returns:
         JSON with the updated task; or {"error": ...} on failure.
@@ -246,14 +249,16 @@ def get_scheduler_tools() -> list[SystemTool]:
         "- create_scheduled_task(prompt, cron, rate, at, agent, mode, scheduled_task_id): register a "
         "prompt to run later. Give exactly one of cron, rate or at.\n"
         "- update_scheduled_task(scheduled_task_id, prompt, cron, rate, at, agent, mode): change an "
-        "existing task. It never creates one.\n"
+        "existing task. It never creates one. A one-time task that has already run needs a new "
+        "future at before anything about it can be changed — ask the user when it should run next.\n"
         "- delete_scheduled_task(scheduled_task_id): stop a task from ever running again.\n"
         "- list_scheduled_tasks(limit, cursor): list the tasks belonging to this user.\n"
         "Timing: cron takes six fields (minute hour day-of-month month day-of-week year) and rate "
         'takes "<n> minutes|hours|days". The finest schedule is one minute; anything finer is '
         "rejected rather than rounded.\n"
         'mode="per_run" starts a fresh conversation each run; mode="continuous" keeps one running '
-        "conversation across runs.\n"
+        "conversation across runs. Omitting mode on an update keeps whichever the task already "
+        "uses, so retiming a task never moves its conversation.\n"
         "Every task belongs to the user of this conversation — you cannot schedule on someone "
         "else's behalf, and you never choose an owner.\n"
         'If a tool result contains an "error" field the operation FAILED: report the error to the '

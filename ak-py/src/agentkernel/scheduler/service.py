@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from ..core.model import SCHEDULED_SESSION_PREFIX
 from .base import Scheduler
-from .errors import SchedulerConflictError, SchedulerNotFoundError, SchedulerPermissionError
+from .errors import SchedulerConflictError, SchedulerNotFoundError, SchedulerPermissionError, ScheduleValidationError
 from .expression import ScheduleExpression
 from .model import CreateAck, ScheduledTask, ScheduledTaskPage, ScheduleMode, ScheduleSpec, TaskStatus
 
@@ -101,10 +101,13 @@ class ScheduledTaskService:
         :raises SchedulerNotFoundError: There is no live row at that id.
         :raises SchedulerPermissionError: The caller does not own it.
         :raises SchedulerConflictError: The id is soft-deleted.
+        :raises ScheduleValidationError: The schedule is invalid or too fine, or the task is a
+            one-time task that has already run and no new instant was supplied.
         """
         existing = self._require_live(scheduled_task_id, owner_id)
+        self._require_instant_to_rearm(existing, spec)
 
-        schedule = spec or existing.schedule
+        schedule = existing.schedule if spec is None else self._with_existing_mode(spec, existing.schedule)
         if spec is not None:
             ScheduleExpression.validate(schedule, self._scheduler.minimum_granularity)
 
@@ -117,8 +120,9 @@ class ScheduledTaskService:
                     owner_id=existing.owner_id,
                 ),
                 "updated_at": datetime.now(timezone.utc),
-                # An update on a fired one-time task re-arms it. It is the same scheduled
-                # task rescheduled, so the version is retained.
+                # Re-arms a fired one-time task: the guard above has already required the new
+                # instant, so this is the same scheduled task rescheduled and the version is
+                # retained. A no-op for a recurring task, which is never COMPLETED.
                 "status": TaskStatus.ACTIVE,
                 "completed_at": None,
             }
@@ -205,6 +209,45 @@ class ScheduledTaskService:
             raise SchedulerConflictError(f"scheduled task '{scheduled_task_id}' is deleted and cannot be restored")
         self._require_owner(existing, owner_id)
         return existing
+
+    @staticmethod
+    def _require_instant_to_rearm(existing: ScheduledTask, spec: Optional[ScheduleSpec]) -> None:
+        """Require a new instant before a one-time task that has already run may be updated.
+
+        Its ``at`` has elapsed, so re-registering the schedule unchanged would be rejected as a
+        schedule in the past. Asking for the replacement here names the field the caller has to
+        change, rather than failing on a schedule they never supplied.
+
+        :param existing: The live row being updated.
+        :param spec: The replacement schedule, or None when the caller supplied none.
+        :raises ScheduleValidationError: The task has already run and no new instant was given.
+        """
+        if spec is not None or not ScheduleExpression.is_one_time(existing.schedule):
+            return
+        # Either signal is enough: status is COMPLETED once the run's outcome is recorded, and
+        # the instant is in the past from the moment it fires.
+        has_run = existing.status == TaskStatus.COMPLETED or ScheduleExpression.as_utc(existing.schedule.at) <= datetime.now(timezone.utc)
+        if not has_run:
+            return
+        raise ScheduleValidationError(
+            f"one-time scheduled task '{existing.scheduled_task_id}' has already run; " "supply a schedule with a new future 'at' to re-arm it"
+        )
+
+    @staticmethod
+    def _with_existing_mode(spec: ScheduleSpec, existing: ScheduleSpec) -> ScheduleSpec:
+        """Carry the current conversation mode onto a replacement schedule that names none.
+
+        ``mode`` has a model default, so a caller changing only the timing would otherwise
+        silently move a continuous task to per-run — which changes its session id and abandons
+        the conversation it had been accumulating.
+
+        :param spec: The replacement schedule as supplied.
+        :param existing: The schedule being replaced.
+        :return: The replacement, taking the existing mode when the caller named none.
+        """
+        if "mode" in spec.model_fields_set:
+            return spec
+        return spec.model_copy(update={"mode": existing.mode})
 
     @staticmethod
     def _require_owner(task: ScheduledTask, owner_id: str) -> None:

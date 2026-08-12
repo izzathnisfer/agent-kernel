@@ -115,6 +115,27 @@ class TestRegistration:
         scheduler.upsert(build_task("schedule_a"))
         assert "ActionAfterCompletion" not in _registration(scheduler)
 
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            ScheduleSpec(cron="0 9 * * ? *", timezone="Asia/Colombo"),
+            ScheduleSpec(rate="30 minutes", timezone="Asia/Colombo"),
+        ],
+    )
+    def test_wall_clock_expressions_are_evaluated_in_the_specs_timezone(self, scheduler, spec):
+        scheduler.upsert(build_task("schedule_a", spec=spec))
+        assert _registration(scheduler)["ScheduleExpressionTimezone"] == "Asia/Colombo"
+
+    def test_a_one_time_instant_is_registered_in_utc_whatever_the_spec_timezone(self, scheduler):
+        """The instant is rendered already converted to UTC, so declaring the spec's own
+        timezone next to it would apply the offset twice and fire hours away."""
+        at = datetime(2030, 1, 1, 9, 0, tzinfo=timezone.utc)
+        scheduler.upsert(build_task("schedule_once", spec=ScheduleSpec(at=at, timezone="Asia/Colombo")))
+
+        request = _registration(scheduler)
+        assert request["ScheduleExpression"] == "at(2030-01-01T09:00:00)"
+        assert request["ScheduleExpressionTimezone"] == "UTC"
+
     def test_a_missing_registration_is_created_rather_than_updated(self, scheduler):
         scheduler._scheduler.update_schedule.side_effect = ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "UpdateSchedule")
         scheduler.upsert(build_task("schedule_a"))

@@ -98,6 +98,15 @@ class TestRouting:
         scheduler_tools.update_scheduled_task("a", rate="2 hours")
         assert service.update.call_args.kwargs["spec"].rate == "2 hours"
 
+    def test_retiming_leaves_the_mode_for_the_service_to_carry_over(self, service, tool_context):
+        """An unset mode is what tells the service to keep the task's current one."""
+        scheduler_tools.update_scheduled_task("a", rate="2 hours")
+        assert "mode" not in service.update.call_args.kwargs["spec"].model_fields_set
+
+    def test_an_explicit_mode_is_passed_through(self, service, tool_context):
+        scheduler_tools.update_scheduled_task("a", rate="2 hours", mode="continuous")
+        assert service.update.call_args.kwargs["spec"].mode == ScheduleMode.CONTINUOUS
+
     def test_delete_routes_through_the_service(self, service, tool_context):
         result = json.loads(scheduler_tools.delete_scheduled_task("a"))
         service.delete.assert_called_once_with("a", owner_id=OWNER)

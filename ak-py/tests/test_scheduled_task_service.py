@@ -142,6 +142,44 @@ class TestLifecycle:
         assert task.completed_at is None
         assert task.scheduled_task_version == ack.scheduled_task_version
 
+    def test_re_arming_a_completed_one_time_task_needs_a_new_instant(self, service):
+        future = datetime.now(timezone.utc) + timedelta(days=1)
+        ack = _create(service, spec=ScheduleSpec(at=future, id="once"))
+        service._scheduler.mark_run_completed("once", ack.scheduled_task_version, datetime.now(timezone.utc), RunStatus.COMPLETED)
+
+        with pytest.raises(ScheduleValidationError, match="already run"):
+            service.update("once", owner_id=OWNER, prompt="changed")
+
+    def test_a_one_time_task_whose_instant_has_passed_needs_a_new_one(self, store, service):
+        """Its outcome may never have been recorded, so COMPLETED is not the only signal."""
+        _create(service, spec=ScheduleSpec(at=datetime.now(timezone.utc) + timedelta(seconds=30), id="once"))
+        elapsed = service._scheduler.get("once")
+        elapsed.schedule.at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        store.put(elapsed)
+
+        with pytest.raises(ScheduleValidationError, match="already run"):
+            service.update("once", owner_id=OWNER, prompt="changed")
+
+    def test_a_pending_one_time_task_can_still_be_updated_in_place(self, service):
+        _create(service, spec=ScheduleSpec(at=datetime.now(timezone.utc) + timedelta(days=1), id="once"))
+        assert service.update("once", owner_id=OWNER, prompt="changed").message["prompt"] == "changed"
+
+    def test_a_replacement_schedule_that_names_no_mode_keeps_the_current_one(self, service):
+        """Retiming a continuous task must not move it to a per-run session id."""
+        _create(service, spec=ScheduleSpec(rate="1 hour", id="a", mode=ScheduleMode.CONTINUOUS))
+
+        task = service.update("a", owner_id=OWNER, spec=ScheduleSpec(rate="2 hours"))
+
+        assert task.schedule.mode == ScheduleMode.CONTINUOUS
+        assert task.schedule.rate == "2 hours"
+
+    def test_a_replacement_schedule_may_still_change_the_mode_explicitly(self, service):
+        _create(service, spec=ScheduleSpec(rate="1 hour", id="a", mode=ScheduleMode.CONTINUOUS))
+
+        task = service.update("a", owner_id=OWNER, spec=ScheduleSpec(rate="1 hour", mode=ScheduleMode.PER_RUN))
+
+        assert task.schedule.mode == ScheduleMode.PER_RUN
+
     def test_update_keeps_fields_the_caller_omitted(self, service):
         _create(service, spec=ScheduleSpec(rate="1 hour", id="a"), agent="reporter")
         task = service.update("a", owner_id=OWNER, prompt="new prompt")

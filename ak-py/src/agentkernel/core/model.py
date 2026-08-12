@@ -232,6 +232,8 @@ class ScheduleSpec(BaseModel):
     rate: Optional[str] = None
     at: Optional[datetime] = None
     mode: ScheduleMode = ScheduleMode.PER_RUN
+    # Applies to the wall-clock expressions, cron and rate. An ``at`` names an absolute
+    # instant, so it is registered in UTC and this field does not shift it.
     timezone: str = "UTC"
 
     @model_validator(mode="after")

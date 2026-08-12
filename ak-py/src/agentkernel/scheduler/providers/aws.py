@@ -251,7 +251,7 @@ class AWSScheduler(Scheduler):
             "Name": task.scheduled_task_id,
             "GroupName": self._group_name,
             "ScheduleExpression": self._schedule_expression(task),
-            "ScheduleExpressionTimezone": task.schedule.timezone,
+            "ScheduleExpressionTimezone": self._schedule_timezone(task),
             "FlexibleTimeWindow": {"Mode": "OFF"},
             "Target": self._target(task),
             "State": "ENABLED",
@@ -265,6 +265,9 @@ class AWSScheduler(Scheduler):
     def _schedule_expression(task: ScheduledTask) -> str:
         """Render the spec as an EventBridge Scheduler expression.
 
+        A one-time instant is rendered in UTC, which is what ``_schedule_timezone`` declares
+        alongside it.
+
         :param task: The scheduled task whose schedule to render.
         :return: A ``cron(...)``, ``rate(...)`` or ``at(...)`` expression.
         """
@@ -274,6 +277,22 @@ class AWSScheduler(Scheduler):
         if spec.rate is not None:
             return f"rate({spec.rate.strip()})"
         return f"at({ScheduleExpression.as_utc(spec.at).strftime('%Y-%m-%dT%H:%M:%S')})"
+
+    @staticmethod
+    def _schedule_timezone(task: ScheduledTask) -> str:
+        """Resolve the timezone the rendered expression is evaluated in.
+
+        An ``at`` is an absolute instant and is rendered already converted to UTC, so declaring
+        the spec's own timezone next to it would apply the offset a second time and fire hours
+        away from the requested moment. ``ScheduleSpec.timezone`` therefore governs the
+        wall-clock expressions — cron and rate — only.
+
+        :param task: The scheduled task being registered.
+        :return: The timezone name to declare with the expression.
+        """
+        if ScheduleExpression.is_one_time(task.schedule):
+            return "UTC"
+        return task.schedule.timezone
 
     def _target(self, task: ScheduledTask) -> dict[str, Any]:
         """Build the universal SQS target that delivers one fire.
