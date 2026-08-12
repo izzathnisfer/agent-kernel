@@ -68,6 +68,8 @@ The module injects the following values when present:
 - `AK_MULTIMODAL__DYNAMODB__TABLE_NAME`
 - `AK_EXECUTION__QUEUES__INPUT__MAX_RECEIVE_COUNT`
 - `AK_EXECUTION__QUEUES__OUTPUT__URL`
+- `AK_EXECUTION__QUEUES__INPUT__URL` (only when `scheduled_task` is set — the agent-callable
+  scheduling tools register fires against the input queue)
 
 ## Outputs
 

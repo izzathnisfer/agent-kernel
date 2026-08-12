@@ -78,6 +78,19 @@ locals {
   ] : []
   complete_gateway_endpoints = concat(local.chat_endpoint, local.schedule_endpoints, var.gateway_endpoints)
 
+  # The scheduled-task store follows the deployment's *session* store, so the backend is
+  # resolved from the same variables that pick the session backend — not from cluster
+  # existence. local.redis_url/local.valkey_url are non-null for a response-store-only
+  # cluster too, and DynamoDB sessions alongside a Redis response store is a supported
+  # combination; keying off them would inject two backend blocks, which
+  # SchedulerFactory._validate_backend_block rejects with AKConfigError at startup.
+  # The precedence mirrors the scheduled-task table's own gate (DynamoDB first).
+  scheduler_store_backend = (
+    var.create_dynamodb_memory_table ? "dynamodb" :
+    var.create_redis_cluster ? "redis" :
+    var.create_valkey_cluster ? "valkey" : null
+  )
+
   # Only the backend block matching the deployment's session store is injected: Lambda's
   # environment map rejects nulls, and an operator reading the function's environment
   # should see exactly the one backend that is in use.
@@ -87,11 +100,11 @@ locals {
       AK_SCHEDULER__GROUP_NAME      = module.scheduler[0].schedule_group_name
       AK_SCHEDULER__TARGET_ROLE_ARN = module.scheduler[0].target_role_arn
     },
-    module.scheduler[0].table_name != null ? {
+    local.scheduler_store_backend == "dynamodb" ? {
       AK_SCHEDULER__DYNAMODB__TABLE_NAME = module.scheduler[0].table_name
     } : {},
-    local.redis_url != null ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
-    local.valkey_url != null ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
+    local.scheduler_store_backend == "redis" ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
+    local.scheduler_store_backend == "valkey" ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
   ) : {}
 
   # Scheduling reaches the agent runner only through the agent-callable tools, which are
@@ -620,6 +633,7 @@ module "agent_runner" {
 
   queue_config = {
     input_queue_arn                    = local.input_queue_arn
+    input_queue_url                    = local.input_queue_url
     output_queue_arn                   = local.output_queue_arn
     output_queue_url                   = local.output_queue_url
     input_queue_max_receive_count      = var.queue_config.input_queue_max_receive_count

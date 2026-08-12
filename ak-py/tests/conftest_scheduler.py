@@ -72,12 +72,16 @@ def make_sqs_client(visibility_timeout: int = 60, max_receive_count: Optional[in
     return client
 
 
-def make_scheduler(store: Optional[InMemoryScheduledTaskStore] = None, **sqs_kwargs) -> AWSScheduler:
-    """Build an AWSScheduler over mocked AWS clients and an in-memory store."""
+def make_scheduler(store: Optional[InMemoryScheduledTaskStore] = None, input_queue_url: Optional[str] = FIFO_INPUT_URL, **sqs_kwargs) -> AWSScheduler:
+    """Build an AWSScheduler over mocked AWS clients and an in-memory store.
+
+    :param input_queue_url: The fire target; pass a blank value to model a component that was
+        never given ``execution.queues.input.url``.
+    """
     return AWSScheduler(
         group_name="grp",
         target_role_arn="arn:aws:iam::1:role/timer",
-        input_queue_url=FIFO_INPUT_URL,
+        input_queue_url=input_queue_url,
         store=store if store is not None else InMemoryScheduledTaskStore(),
         scheduler_client=MagicMock(),
         sqs_client=make_sqs_client(**sqs_kwargs),

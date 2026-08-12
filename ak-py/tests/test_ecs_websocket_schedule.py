@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest_scheduler import enable_scheduler_config, install_scheduler, reset_scheduler_config
+from fastapi.testclient import TestClient
 
 from agentkernel.core.config import AKConfig, _DynamoDBConfig
 from agentkernel.core.model import BaseRequest, ExecutionMode
-from agentkernel.deployment.aws.containerized.core.api.websocket_api import ECSWebSocketRequestHandler
+from agentkernel.deployment.aws.containerized.core.api.websocket_api import AWSWebsocketAPI, ECSWebSocketRequestHandler
 from agentkernel.deployment.aws.core.websocket_service import AWSWebSocketHandler
 from agentkernel.scheduler.testing import InMemoryScheduledTaskStore
 
@@ -126,3 +127,18 @@ async def test_an_unauthenticated_connection_is_rejected_before_the_branch(handl
 def test_construction_needs_no_authoriser():
     """A WebSocket deployment authenticates at $connect and has no Authoriser object."""
     ECSWebSocketRequestHandler()  # must not raise
+
+
+def test_a_scheduling_enabled_websocket_deployment_boots_without_the_schedule_routes():
+    """The REST management routes need an Authoriser, which this deployment has none of, so
+    auto-mounting them would raise AKConfigError before uvicorn ever binds."""
+    AWSWebsocketAPI.set_auth_handler(MagicMock())
+    try:
+        with patch("uvicorn.run") as mock_uvicorn:
+            AWSWebsocketAPI.run()
+    finally:
+        AWSWebsocketAPI._ws_auth_validator = None
+
+    client = TestClient(mock_uvicorn.call_args.kwargs["app"])
+    assert client.get("/health").status_code == 200
+    assert client.get("/api/v1/schedule").status_code == 404

@@ -158,6 +158,7 @@ variable "queue_config" {
   description = "Queue configuration object"
   type = object({
     input_queue_arn                    = string
+    input_queue_url                    = optional(string)
     output_queue_arn                   = string
     output_queue_url                   = string
     input_queue_max_receive_count      = optional(number, 5)

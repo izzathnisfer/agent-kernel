@@ -11,6 +11,7 @@ locals {
   agent_runner_env_vars             = var.agent_runner.environment_variables
 
   queue_input_arn                        = var.queue_config.input_queue_arn
+  queue_input_url                        = var.queue_config.input_queue_url
   queue_output_arn                       = var.queue_config.output_queue_arn
   queue_output_url                       = var.queue_config.output_queue_url
   queue_batch_size                       = var.queue_config.batch_size
@@ -256,7 +257,14 @@ module "agent_runner_lambda" {
     {
       AK_EXECUTION__QUEUES__INPUT__MAX_RECEIVE_COUNT = tostring(local.queue_input_consumer_max_receive_count)
       AK_EXECUTION__QUEUES__OUTPUT__URL              = local.queue_output_url
-    }
+    },
+    # The runner consumes the input queue through its event source mapping, so it needs the URL
+    # only when the scheduling tools are on: an agent-registered schedule delivers its fire to
+    # the input queue, and the same URL sizes the soft-delete grace window this module already
+    # grants sqs:GetQueueAttributes for.
+    var.scheduled_task && local.queue_input_url != null ? {
+      AK_EXECUTION__QUEUES__INPUT__URL = local.queue_input_url
+    } : {}
   )
 
   timeout     = local.agent_runner_timeout

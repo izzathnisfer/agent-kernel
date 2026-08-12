@@ -106,6 +106,7 @@ class AWSScheduler(Scheduler):
 
     def upsert(self, task: ScheduledTask) -> ScheduledTask:
         ScheduleExpression.validate(task.schedule, MINIMUM_GRANULARITY)
+        self._require_input_queue_url()
 
         previous = self._store.get(task.scheduled_task_id)
         self._store.put(task)
@@ -356,6 +357,28 @@ class AWSScheduler(Scheduler):
         return f"{base}:{SCHEDULED_TIME_VARIABLE}"
 
     # ------------------------------------------------------------------ helpers
+
+    def _require_input_queue_url(self) -> None:
+        """Refuse to register a schedule that could never deliver a fire.
+
+        EventBridge Scheduler treats a universal target's ``Input`` as an opaque string, so it
+        accepts a registration carrying a blank ``QueueUrl`` and only fails at *fire* time —
+        after the row was written and the caller was acknowledged. Checking before the store
+        write turns that silent never-runs into a loud failure of the create call.
+
+        A blank URL means this component was not given ``execution.queues.input.url``: a
+        component that registers schedules (the request handler, or an agent runner with the
+        scheduling tools enabled) must have it injected.
+
+        :raises SchedulerError: The input queue URL is missing or blank.
+        """
+        if (self._input_queue_url or "").strip():
+            return
+        raise SchedulerError(
+            "no input queue URL is configured, so a registered schedule could never deliver its "
+            "fire. Set execution.queues.input.url (AK_EXECUTION__QUEUES__INPUT__URL) on every "
+            "component that registers schedules."
+        )
 
     def _restore(self, scheduled_task_id: str, previous: Optional[ScheduledTask]) -> None:
         """Undo a row write whose registration failed.

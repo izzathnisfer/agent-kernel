@@ -129,7 +129,9 @@ All four require an identity resolver and are scoped to the caller's own tasks: 
 usable token, `403` for another owner's task, `404` for an unknown id, `409` while a deleted id is
 still in its grace period. On the FastAPI surfaces the router mounts automatically unless the
 application supplies its own `ScheduleRESTRequestHandler` — which is how the `Authoriser` is
-provided.
+provided, so an application that enables scheduling and supplies none fails before the server binds.
+WebSocket deployments never mount these routes: they have no `Authoriser` at all, and take the owner
+from the connection authenticated at `$connect`.
 
 ## Error Handling
 

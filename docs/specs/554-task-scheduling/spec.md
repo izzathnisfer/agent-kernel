@@ -1147,13 +1147,17 @@ the actual problem and matches the equivalent check on `RestHandler`. `service` 
 tests and resolved from config otherwise.
 
 `RESTAPI.run()` auto-mounts the handler when `scheduler.enabled`, unless the caller supplied one —
-the exact shape of the existing thread auto-mount (`api/http.py:105-112`):
+the exact shape of the existing thread auto-mount (`api/http.py:105-112`), resolved in
+`_get_schedule_router` so `run()` stays flat:
 
 ```python
-if SchedulerFactory.enabled():
-    from .schedule import ScheduleRESTRequestHandler
-    if not any(isinstance(h, ScheduleRESTRequestHandler) for h in handlers):
-        routers.append(ScheduleRESTRequestHandler().get_router())
+if not SchedulerFactory.enabled():
+    return None
+if not cls._auto_mount_schedule_routes:      # subclass opt-out; see below
+    return None
+if any(isinstance(h, ScheduleRESTRequestHandler) for h in handlers):
+    return None
+return ScheduleRESTRequestHandler().get_router()
 ```
 
 `ScheduleRESTRequestHandler()` with no `Authoriser` raises `AKConfigError` at construction — the
@@ -1161,6 +1165,16 @@ loud initialization failure the design requires, before uvicorn binds. So an app
 enables scheduling and never supplies a handler fails to start, rather than serving routes that
 cannot establish an owner: supplying the handler through the `handlers` list *is* how the
 `Authoriser` is provided.
+
+**The opt-out exists because that loud failure is only correct on a REST surface.**
+`AWSWebsocketAPI` inherits `RESTAPI.run()` and calls it as `super().run(handlers=cls.get_default_handlers())`,
+whose handler list can never contain a `ScheduleRESTRequestHandler` — `run()` takes no `handlers`
+argument there, so an application has no way to supply one. Left unguarded, the auto-mount would
+therefore construct an `Authoriser`-less handler and make **every** scheduling-enabled ECS WebSocket
+deployment fail to boot, which is exactly the outcome behavioural change #8 rules out one layer
+down. `RESTAPI` declares `_auto_mount_schedule_routes = True` and `AWSWebsocketAPI` overrides it to
+`False`: a WebSocket deployment creates schedules through its chat route and manages them from a
+separate REST service, so it never serves these routes at all.
 
 Route bodies are thin: each resolves the owner via `_resolve_user`, calls one service method, and
 runs inside `_mapped_errors()` — a small context manager holding the single
@@ -1432,30 +1446,70 @@ The module additionally exports `schedule_arn_pattern` for the component IAM gra
 root output — nothing outside the deployment consumes it — but it is the value every scheduler grant
 is scoped to (see above).
 
-**Backend-specific env vars are injected conditionally, never as a null.** Only the block matching
-the deployment's session backend is injected — the DynamoDB table name is *not* set on a
-Redis/Valkey deployment, and the keyspace prefix is not set on a DynamoDB one. This follows the
-conditional-merge shape the session store env vars already use
+**Backend-specific env vars are injected conditionally, never as a null, and never more than one
+at a time.** Only the block matching the deployment's session backend is injected — the DynamoDB
+table name is *not* set on a Redis/Valkey deployment, and the keyspace prefix is not set on a
+DynamoDB one. This follows the conditional-merge shape the session store env vars already use
 (`containerized/modules/rest-service/main.tf:1-25`, e.g.
-`var.dynamodb_memory_table_arn != null ? { AK_SESSION__DYNAMODB__TABLE_NAME = ... } : {}`):
+`var.dynamodb_memory_table_arn != null ? { AK_SESSION__DYNAMODB__TABLE_NAME = ... } : {}`), with one
+difference that matters: **the gate is the session backend, not the mere existence of a store.**
+Each module therefore resolves exactly one backend first, in the same precedence the scheduled-task
+table's own gate follows, and keys all three blocks off that:
 
 ```hcl
-var.scheduled_task ? merge(
+scheduler_store_backend = (
+  var.scheduled_task_table_name != null ? "dynamodb" :
+  var.redis_url != null ? "redis" :
+  var.valkey_url != null ? "valkey" : null
+)
+
+scheduler_environment = var.scheduled_task ? merge(
   {
     AK_SCHEDULER__ENABLED         = "true"
     AK_SCHEDULER__GROUP_NAME      = var.scheduled_task_schedule_group_name
     AK_SCHEDULER__TARGET_ROLE_ARN = var.scheduled_task_target_role_arn
   },
-  var.scheduled_task_table_name != null
-    ? { AK_SCHEDULER__DYNAMODB__TABLE_NAME = var.scheduled_task_table_name }
-    : {}
+  local.scheduler_store_backend == "dynamodb" ? { AK_SCHEDULER__DYNAMODB__TABLE_NAME = var.scheduled_task_table_name } : {},
+  local.scheduler_store_backend == "redis" ? { AK_SCHEDULER__REDIS__PREFIX = "ak:scheduled_tasks:" } : {},
+  local.scheduler_store_backend == "valkey" ? { AK_SCHEDULER__VALKEY__PREFIX = "ak:scheduled_tasks:" } : {},
 ) : {}
 ```
+
+Gating a prefix on a URL being non-null is *not* equivalent, and on serverless it is wrong: there,
+`local.redis_url` is non-null when `create_redis_cluster || create_redis_response_store`, so a
+supported combination — DynamoDB sessions plus a Redis *response store* — would inject
+`AK_SCHEDULER__DYNAMODB__TABLE_NAME` and `AK_SCHEDULER__REDIS__PREFIX` together. Two populated
+blocks is precisely what check #4 rejects: `SchedulerFactory._validate_backend_block` raises
+`AKConfigError` for a populated block that does not match `session.type`, so every
+scheduler-enabled component would crash-loop at startup. The serverless root therefore resolves the
+backend from the *session* variables directly
+(`var.create_dynamodb_memory_table` → `var.create_redis_cluster` → `var.create_valkey_cluster`),
+which is the same input the scheduled-task table is already gated on.
 
 Injecting a `null` is not merely untidy: the ECS `environment` map and Lambda `environment.variables`
 both reject null values, so the unconditional form would fail `terraform apply` on every
 Redis/Valkey deployment. The conditional form also keeps the running container's environment honest
 — an operator reading it sees exactly the one backend that is in use.
+
+**Every component that registers a schedule is given the input queue URL.** The timer's target is
+the input queue, so a registration built without `execution.queues.input.url` carries a blank
+`QueueUrl`; EventBridge Scheduler accepts it (a universal target's `Input` is an opaque string) and
+fails only at fire time. On serverless the request handler already receives
+`AK_EXECUTION__QUEUES__INPUT__URL`, but the agent-runner module injected only `MAX_RECEIVE_COUNT`
+and the *output* URL, so an agent calling `create_scheduled_task` would register a schedule that
+never delivers. The runner module now injects the input URL whenever its `scheduled_task` gate is on
+— the same gate that already grants it `sqs:GetQueueAttributes` on that queue for the soft-delete
+TTL derivation — and `AWSScheduler.upsert` refuses a blank URL up front (see *Fails loudly*). The
+containerized modules already injected it unconditionally in queue mode. The response handler and
+output consumer are still deliberately denied it: they only record outcomes, never register.
+
+The full env contract, beyond the four `AK_SCHEDULER__*` values in the outputs table above:
+
+| Env var | Value | Injected on |
+|---|---|---|
+| `AK_SCHEDULER__REDIS__PREFIX` | `ak:scheduled_tasks:` | Redis-session deployments only |
+| `AK_SCHEDULER__VALKEY__PREFIX` | `ak:scheduled_tasks:` | Valkey-session deployments only |
+| `AK_EXECUTION__QUEUES__INPUT__URL` | input queue URL | every component that registers schedules — request handler / REST service always, agent runner when `enable_agent_tools` |
 
 The two dedicated examples (`examples/aws-serverless/scheduled-openai`,
 `examples/aws-containerized/openai-scheduled-task`) set `scheduled_task = true` in their
@@ -1528,7 +1582,10 @@ Exhaustive; each is intentional with its justification.
    previously raised `ValueError`. *Intentional:* the router has no path-parameter support and
    `/schedule/{id}` needs one.
 10. **`RESTAPI.run()` auto-mounts the schedule router** when scheduling is enabled, mirroring the
-    thread auto-mount.
+    thread auto-mount — on REST surfaces only. `RESTAPI._auto_mount_schedule_routes` (`True`) is
+    overridden to `False` on `AWSWebsocketAPI`, which inherits `run()` but has no `Authoriser` to
+    give the handler and no way for an application to supply one; without the opt-out every
+    scheduling-enabled WebSocket deployment would fail to boot.
 11. **Sessions whose id starts with `schedule:` skip thread creation and message appending**
     (`integration/thread/recorder.py`). *Intentional:* scheduled activity is kept out of the owner's
     regular conversation history. Fixed behaviour, not configurable.
@@ -1657,6 +1714,7 @@ No new work lands on the ordinary chat, streaming, or session paths.
 | `scheduler.enabled` on the ECS **REST** chat route with no `Authoriser` | `RestHandler.__init__`, `ScheduleRESTRequestHandler.__init__` | `AKConfigError` at initialization. Not applied to `ECSWebSocketRequestHandler`, which authenticates at `$connect` and has no `Authoriser` |
 | No user resolvable for an ECS WebSocket connection carrying a `schedule` block | `build_route_context` (`websocket_api.py:320-322`) | `WSRouteError(401)` → error frame, before the schedule branch is reached |
 | `GetQueueAttributes` fails | `AWSScheduler.soft_delete_ttl_seconds`, on the first `delete` | `SchedulerError` — no fallback to a guessed TTL. Reached only on the delete path, since the derivation is deferred |
+| No input queue URL on a component that registers a schedule | `AWSScheduler.upsert` → `_require_input_queue_url` | `SchedulerError` **before the store write and before any AWS call**. A universal target's `Input` is an opaque string, so EventBridge Scheduler would accept a blank `QueueUrl`, acknowledge the create, and fail only at fire time — a row that exists and never runs. The recording-only components (response handler, output consumer) are unaffected: they call `mark_run_completed`, never `upsert` |
 | Registration rejected by EventBridge Scheduler as malformed | `AWSScheduler._register` | A `ValidationException` from the API is re-raised as `ScheduleValidationError` → 400. Local validation cannot cover every provider rule, and a rejected expression is bad input, not a server fault |
 | Another writer holds the row's update lock (Redis/Valkey) | `_RowLock` | `SchedulerConflictError` → 409 after 20 attempts over ~1 s; the caller retries |
 | Missing optional dependency for the resolved store | `ScheduledTaskStoreBuilder.build()` | `ImportError` naming the pip extra, via `require_extra` (`core/util/factory.py:49-64`). `dynamodb` → `aws`, `redis` → `redis`, `valkey` → `valkey`. No new extra is introduced: EventBridge Scheduler is reached through boto3, already in the `aws` extra |
@@ -1700,7 +1758,7 @@ Run with `cd ak-py && uv run pytest`.
 |---|---|
 | `tests/test_scheduler_config.py` | `validate_config()` raises `AKConfigError` for: `session.type` in {`in_memory`, `cosmosdb`, `firestore`, a dotted path}, and missing **or empty-string** `group_name`/`target_role_arn`. Returns cleanly for each valid combination, **including with either queue URL unset** — the explicit regression guard that the queue-mode check is not reintroduced. TTL derivation: `visibility_timeout × receives + 300`, floored at 900, where `receives` is the max of the queue's `RedrivePolicy.maxReceiveCount` and the AKConfig value — one case each way (queue value higher, AKConfig value higher), plus **an absent `RedrivePolicy` falling back to the AKConfig value rather than to zero**, which is the default-deployment case since `input_queue_create_dlq` defaults to `false`. `GetQueueAttributes` failure raises instead of defaulting, and **construction makes no such call at all** — the guard that the derivation stays deferred, with a second read served from the cache. `enabled()` is False when the block is absent. Check #4 both ways per backend: the matching block missing or empty raises, and a non-matching block populated raises (e.g. `session.type: redis` with `scheduler.dynamodb.table_name` set) — the second is the regression guard against silently ignoring a configured-but-unused table. Plus the probe test confirming `AK_SCHEDULER__*` env vars alone populate the absent `Optional` block, nested sub-blocks included |
 | `tests/test_scheduled_task_store.py` | Per backend, against the store contract: put/get round trip, `list_by_owner` scoping and cursor, `soft_delete` sets `deleted`/`deleted_at` and the expiry, and a soft-deleted row is still `get`-able. **`list_by_owner` excludes soft-deleted rows on every backend, and a page is not short because one was filtered.** **`update_fields` writes only the named attributes and leaves every other one untouched** (write `last_run_*`, assert the definition fields are unchanged, and the reverse), and **returns `False` without writing when `expected_version` mismatches**. DynamoDB against a mocked `DynamoDBDriver` (the `test_sessions_dynamodb.py` pattern) — asserts the driver is built with `ttl=0`, that `expiry_time` is written **only** by `soft_delete`, that `soft_delete` issues a `REMOVE owner_index_key` so the GSI stays sparse while `owner_id` itself survives on the row, and that `list_by_owner` queries the index with **no** `FilterExpression`. Redis against a fake client (the `test_sessions_valkey.py` / `test_multimodal_redis_store.py` pattern) — asserts `set()` writes no `ex`, that `soft_delete` calls `client.expire` with the derived seconds, that `list_by_owner` prunes owner-set members whose row key is gone while *retaining* members whose row is merely soft-deleted, and that `update_fields` takes and releases the `<prefix>lock:<id>` key |
-| `tests/test_scheduler_aws.py` | `AWSScheduler` against mocked boto3 `scheduler`/`sqs` clients and the `InMemoryScheduledTaskStore`, plus a subclass of `SchedulerContract` so the provider is held to the shared obligations. `upsert` builds a universal target with `MessageGroupId = scheduled_task_id`, `MessageDeduplicationId = <id>:<scheduled_time>`, both context variables in the payload, `request_id`/`user_id` message attributes present, and `MaximumEventAgeInSeconds = 300`. One-time schedules set `ActionAfterCompletion="DELETE"`. Sub-minute cron/rate raises before any AWS call, and a provider-side `ValidationException` surfaces as `ScheduleValidationError`. `per_run` vs `continuous` session-id shape. Registration failure rolls the row back — restored to its prior state on an update, removed outright on a fresh id. **The four guards**, one test each, asserting a `False` return and no store write; plus a store exception propagating rather than no-op'ing. A one-time task's accepted outcome sets `status = COMPLETED` and `completed_at` |
+| `tests/test_scheduler_aws.py` | `AWSScheduler` against mocked boto3 `scheduler`/`sqs` clients and the `InMemoryScheduledTaskStore`, plus a subclass of `SchedulerContract` so the provider is held to the shared obligations. `upsert` builds a universal target with `MessageGroupId = scheduled_task_id`, `MessageDeduplicationId = <id>:<scheduled_time>`, both context variables in the payload, `request_id`/`user_id` message attributes present, and `MaximumEventAgeInSeconds = 300`. One-time schedules set `ActionAfterCompletion="DELETE"`. Sub-minute cron/rate raises before any AWS call, and a provider-side `ValidationException` surfaces as `ScheduleValidationError`. `per_run` vs `continuous` session-id shape. Registration failure rolls the row back — restored to its prior state on an update, removed outright on a fresh id. **The four guards**, one test each, asserting a `False` return and no store write; plus a store exception propagating rather than no-op'ing. A one-time task's accepted outcome sets `status = COMPLETED` and `completed_at`. A blank, whitespace-only or `None` `input_queue_url` raises `SchedulerError` from `upsert` with **nothing written to the store and neither `create_schedule` nor `update_schedule` called** — the guard against registering a schedule that could never deliver |
 | `tests/test_scheduled_task_service.py` | Id generation (`schedule_<hex>`) vs caller-supplied; fresh version on a new id and **retained** version on a live upsert and on `update`; owner stamped from the parameter and never from the body; `schedule:` prefix on both session-id shapes; 403 on a foreign live row, 409 on a soft-deleted id, 404 on `update` with no live row; a run-out one-time task re-armed by a `PUT` carrying a new future `at` and **rejected** by one that omits it; a replacement schedule omitting `mode` keeping the task's current mode. `CreateAck`: `session_id` present for `continuous` and **absent** for `per_run`; `next_run_at` equals the `at` value for a one-time schedule, equals `updated_at + interval` for a `rate` (re-based when a create replaces a live definition), and is `None` for a `cron`; `request_id` is always present, echoing a caller-supplied id when given and generated otherwise |
 | `tests/test_schedule_router.py` | FastAPI `TestClient` over `ScheduleRESTRequestHandler` (the `test_thread_router.py` pattern, with a `StaticAuthoriser`). Construction without an `Authoriser` raises `AKConfigError`. 401 missing/invalid Bearer; list returns only the caller's rows and excludes soft-deleted; 404 on unknown and on soft-deleted `GET`; 403/409/404 on `PUT`; 403 on `DELETE`; routes absent from the app when `scheduler.enabled` is false |
 | `tests/test_scheduler_tools.py` | All four tools route through `ScheduledTaskService` (asserted with a mock service); the owner is bound from the invoking session and cannot be supplied as an argument; a service error is returned as `{"error": ...}` and never raised; `SystemToolFactory.get_all()` includes the tools only when enabled and honours `scheduler.agents` scoping |
@@ -1711,7 +1769,7 @@ Run with `cd ak-py && uv run pytest`.
 | `tests/test_scheduler_import_isolation.py` | The enablement check fires on start, not on import: importing either output-consumer module with the wiring absent must **not** raise, while `ECSOutputConsumer.run()` and `ResponseHandler.handle()` raise `AKConfigError` before polling or processing, and proceed normally when the wiring is present. The regression guard for the `agentkernel.aws` re-export problem — the authorizer Lambda imports those classes and is deliberately given no `AK_SCHEDULER__*` environment |
 | `tests/test_ws_lambda_schedule.py` | The serverless WebSocket create path: a frame carrying a `schedule` block is **not** enqueued, the ack is broadcast as `CHAT_RESPONSE` in `async` mode and as a single `STREAM_CHUNK` with `done: True` in `stream` mode, the owner is the `$connect`-resolved `user_id`, and a disabled deployment returns 400 |
 | `tests/test_chat_service_scheduled.py` | The `known_fields` regression guard — neither `scheduled_run` nor `schedule` reaches the agent as context, while a genuinely unknown field still does; the `build_response` echo on success and on the error path, and omission for ordinary traffic; and, against `ThreadRecorder`, that a `schedule:`-prefixed session creates no thread and appends no assistant message while an ordinary session still does |
-| `tests/test_ecs_websocket_schedule.py` | **New file** — covers behavioural change #12. A chat frame carrying a `schedule` block creates the task and **`SQSHandler.send_message_to_input_queue` is never called**; the ack is broadcast as `CHAT_RESPONSE` in `async` mode and as a single `STREAM_CHUNK` with `done: True` in `stream` mode; a frame with a `schedule` block and scheduling disabled returns 400; a connection with no resolvable user still yields 401 from `build_route_context` (`websocket_api.py:320-322`); an ordinary frame with no `schedule` block is enqueued exactly as before; and constructing `ECSWebSocketRequestHandler` with `scheduler.enabled` and no `Authoriser` **does not raise** — the guard against wrongly inheriting the #8 check |
+| `tests/test_ecs_websocket_schedule.py` | **New file** — covers behavioural change #12. A chat frame carrying a `schedule` block creates the task and **`SQSHandler.send_message_to_input_queue` is never called**; the ack is broadcast as `CHAT_RESPONSE` in `async` mode and as a single `STREAM_CHUNK` with `done: True` in `stream` mode; a frame with a `schedule` block and scheduling disabled returns 400; a connection with no resolvable user still yields 401 from `build_route_context` (`websocket_api.py:320-322`); an ordinary frame with no `schedule` block is enqueued exactly as before; and constructing `ECSWebSocketRequestHandler` with `scheduler.enabled` and no `Authoriser` **does not raise** — the guard against wrongly inheriting the #8 check. Plus the boot test one layer up: with scheduling enabled, `AWSWebsocketAPI.run()` reaches `uvicorn.run` without raising and the assembled app answers 404 on `/api/v1/schedule` — the guard that the REST auto-mount is not reintroduced here (behavioural change #10) |
 
 ### Changed existing tests
 
@@ -1722,7 +1780,7 @@ Run with `cd ak-py && uv run pytest`.
 | `tests/test_chat_service_streaming.py` | Extended with the `bind_request_user` assertion — the request's `user_id` lands in the session's volatile cache under `REQUEST_USER_ID_KEY` on the streaming paths too. The rest of the scheduling assertions live in the sibling `test_chat_service_scheduled.py` above |
 | `tests/test_ecs_akoutputconsumer.py` | **This file already exists** (8 tests over `process_message` in `stream`/`async` WebSocket modes plus three `on_permanent_failure` cases), so the `ECSOutputConsumer` work extends it rather than creating a new file. New cases: a response carrying `scheduled_run` calls `mark_run_completed` with the derived status and is **neither broadcast nor written to the response store**; a body with an `error` key maps to `FAILED` with `last_error`; an ordinary response is stored/broadcast exactly as before; `on_permanent_failure` is unchanged. The `async`/`stream` cases are the regression guard — `test_broadcast_via_websocket_raises_when_endpoint_url_missing` (`:51`) is the pre-change failure a timer-originated message would hit. `on_permanent_failure` gains cases for behavioural change #13: a scheduled body is recorded and returns early, an ordinary one takes the pre-change path. All existing assertions unchanged |
 | `tests/test_lambda_router.py` | The resource-template fallback resolves `/schedule/{scheduled_task_id}` from `event["resource"]` and passes `pathParameters`; an unmatched path still raises `ValueError` (unchanged) |
-| `tests/test_api_http.py` | `RESTAPI.run()` mounts the schedule router when `scheduler.enabled`, skips it when a `ScheduleRESTRequestHandler` was supplied, and does not mount it when disabled. Plus the failure case: **auto-mounting with no supplied handler raises `AKConfigError` before uvicorn binds**, since the auto-mounted instance has no `Authoriser` |
+| `tests/test_api_http.py` | `RESTAPI.run()` mounts the schedule router when `scheduler.enabled`, skips it when a `ScheduleRESTRequestHandler` was supplied, and does not mount it when disabled. Plus the failure case: **auto-mounting with no supplied handler raises `AKConfigError` before uvicorn binds**, since the auto-mounted instance has no `Authoriser`. The subclass opt-out (`_auto_mount_schedule_routes = False`) is covered end to end in `test_ecs_websocket_schedule.py`, where the WebSocket API actually inherits `run()` |
 | `tests/test_serverless_request_handle.py` | A payload carrying a `schedule` block is not enqueued and returns the 201 ack; identity is taken from `requestContext.authorizer.principalId`; a missing authorizer context yields 401; `_handle_request` still answers 200 for an operation returning a bare body |
 | `tests/test_rest_handler_poll.py` | Updated for `enqueue_and_wait`'s added `request` parameter (behavioural change #17); poll behaviour is otherwise unchanged |
 

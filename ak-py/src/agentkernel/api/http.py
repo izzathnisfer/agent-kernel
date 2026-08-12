@@ -1,4 +1,5 @@
 import logging
+from typing import ClassVar
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -19,6 +20,11 @@ class RESTAPI:
     _log = logging.getLogger("ak.api.http")
     _custom_routers = []
     _auth_token_validators = []
+
+    # The schedule management routes are REST-only and need an ``Authoriser`` to resolve the
+    # caller. Subclasses serving a transport that has no ``Authoriser`` at all — the WebSocket
+    # API — turn this off, because for them the auto-mount could only ever fail at startup.
+    _auto_mount_schedule_routes: ClassVar[bool] = True
 
     @classmethod
     def get_default_handlers(cls) -> list[RESTRequestHandler]:
@@ -87,6 +93,34 @@ class RESTAPI:
         cls._custom_routers.append(router)
 
     @classmethod
+    def _get_schedule_router(cls, handlers: list[RESTRequestHandler]) -> APIRouter | None:
+        """Resolve the auto-mounted schedule management router, if this deployment gets one.
+
+        Nothing is mounted when the application already supplied its own
+        ``ScheduleRESTRequestHandler`` (e.g. one built with a custom ``Authoriser``), nor when
+        the subclass opts out via ``_auto_mount_schedule_routes``.
+
+        :param handlers: The handlers this run is assembling routers from.
+        :return: The schedule router, or None when the routes are not auto-mounted.
+        :raises AKConfigError: Scheduling is enabled but no ``Authoriser`` is configured, so
+            startup fails rather than exposing routes anyone could manage schedules through.
+        """
+        from ..scheduler import SchedulerFactory
+
+        if not SchedulerFactory.enabled():
+            return None
+        if not cls._auto_mount_schedule_routes:
+            cls._log.debug("Scheduled tasks are enabled, but %s does not serve the schedule routes", cls.__name__)
+            return None
+
+        from .schedule import ScheduleRESTRequestHandler
+
+        if any(isinstance(handler, ScheduleRESTRequestHandler) for handler in handlers):
+            return None
+        cls._log.info("Scheduled tasks are enabled — mounting schedule routes")
+        return ScheduleRESTRequestHandler().get_router()
+
+    @classmethod
     def run(cls, handlers: list[RESTRequestHandler] = None):
         """Start the REST API server.
         :param handlers: List of REST request handlers to use (default: AgentRESTRequestHandler)
@@ -102,17 +136,9 @@ class RESTAPI:
             if handler is not None:
                 routers.append(handler.get_router())
 
-        from ..scheduler import SchedulerFactory
-
-        if SchedulerFactory.enabled():
-            from .schedule import ScheduleRESTRequestHandler
-
-            # Mount the schedule routes unless the user supplied their own handler (e.g. one
-            # constructed with a custom Authoriser). The handler raises without an Authoriser,
-            # so startup fails rather than exposing routes anyone could manage tasks through.
-            if not any(isinstance(handler, ScheduleRESTRequestHandler) for handler in handlers):
-                cls._log.info("Scheduled tasks are enabled — mounting schedule routes")
-                routers.append(ScheduleRESTRequestHandler().get_router())
+        schedule_router = cls._get_schedule_router(handlers)
+        if schedule_router is not None:
+            routers.append(schedule_router)
 
         if AKConfig.get().a2a.enabled:
             from .a2a.handler import A2ARESTRequestHandler

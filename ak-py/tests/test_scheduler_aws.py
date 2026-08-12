@@ -9,7 +9,7 @@ from botocore.exceptions import ClientError
 from conftest_scheduler import enable_scheduler_config, make_scheduler, reset_scheduler_config
 
 from agentkernel.core.model import ScheduleMode
-from agentkernel.scheduler.errors import ScheduleValidationError
+from agentkernel.scheduler.errors import SchedulerError, ScheduleValidationError
 from agentkernel.scheduler.model import RunStatus, ScheduleSpec, TaskStatus
 from agentkernel.scheduler.providers.aws import MAX_EVENT_AGE_SECONDS, UNIVERSAL_SQS_TARGET_ARN, AWSScheduler
 from agentkernel.scheduler.testing import InMemoryScheduledTaskStore, SchedulerContract, build_task
@@ -114,6 +114,20 @@ class TestRegistration:
     def test_recurring_schedules_do_not_self_delete(self, scheduler):
         scheduler.upsert(build_task("schedule_a"))
         assert "ActionAfterCompletion" not in _registration(scheduler)
+
+    @pytest.mark.parametrize("input_queue_url", ["", "   ", None])
+    def test_a_blank_input_queue_url_is_refused_before_anything_is_written(self, store, input_queue_url):
+        """EventBridge Scheduler accepts a blank QueueUrl (the target Input is an opaque string)
+        and fails only at fire time, so a component with no input queue URL must fail loudly at
+        create time rather than acknowledge a schedule that can never deliver."""
+        scheduler = make_scheduler(store, input_queue_url=input_queue_url)
+
+        with pytest.raises(SchedulerError, match="input queue URL"):
+            scheduler.upsert(build_task("schedule_a"))
+
+        assert store.get("schedule_a") is None
+        scheduler._scheduler.create_schedule.assert_not_called()
+        scheduler._scheduler.update_schedule.assert_not_called()
 
     @pytest.mark.parametrize(
         "spec",

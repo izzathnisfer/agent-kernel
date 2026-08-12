@@ -506,6 +506,11 @@ class AWSWebsocketAPI(RESTAPI):
     _ws_auth_validator: Optional[AuthValidator] = None
     _ws_custom_routes: ClassVar[dict[str, Callable]] = {}
 
+    # A WebSocket deployment has no Authoriser object at all — it authenticates the $connect
+    # handshake with an AuthValidator — so auto-mounting the schedule routes could only fail at
+    # startup. Schedules are created here through the chat route and managed from a REST service.
+    _auto_mount_schedule_routes: ClassVar[bool] = False
+
     @classmethod
     def register(cls, route: str) -> Callable[[Callable], Callable]:
         """Decorator that registers a custom WebSocket route (bare route name only).
