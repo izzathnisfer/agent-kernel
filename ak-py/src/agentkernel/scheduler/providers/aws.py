@@ -7,6 +7,7 @@ runner consumes it exactly as it would any other queued request.
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -24,6 +25,10 @@ from ..store.base import ScheduledTaskStore, ScheduledTaskStoreBuilder, TaskSeri
 
 # EventBridge Scheduler's finest interval, for both cron and rate expressions.
 MINIMUM_GRANULARITY = timedelta(minutes=1)
+
+# EventBridge Scheduler's own constraint on a schedule Name, which a caller-supplied
+# scheduled_task_id becomes verbatim.
+SCHEDULE_NAME_PATTERN = re.compile(r"^[0-9a-zA-Z\-_.]{1,64}$")
 
 # SQS's FIFO deduplication window is fixed at 5 minutes, so a timer-side retry delivered
 # later than that would not be deduplicated. Capping event age keeps every retry inside it.
@@ -92,6 +97,10 @@ class AWSScheduler(Scheduler):
     @property
     def minimum_granularity(self) -> timedelta:
         return MINIMUM_GRANULARITY
+
+    @property
+    def id_pattern(self) -> re.Pattern[str]:
+        return SCHEDULE_NAME_PATTERN
 
     @property
     def soft_delete_ttl_seconds(self) -> int:
@@ -525,4 +534,4 @@ class AWSSchedulerBuilder:
         )
 
 
-__all__ = ["AWSScheduler", "AWSSchedulerBuilder", "MINIMUM_GRANULARITY"]
+__all__ = ["AWSScheduler", "AWSSchedulerBuilder", "MINIMUM_GRANULARITY", "SCHEDULE_NAME_PATTERN"]

@@ -17,7 +17,7 @@ from ......auth.handler import AuthValidator
 from ......core.chat_service import ChatService
 from ......core.config import AKConfig
 from ......core.model import BaseRequest, BaseRunRequest, ExecutionMode, StreamChunk
-from ......scheduler import CreateAck, SchedulerError, SchedulerFactory
+from ......scheduler import CreateAck, SchedulerError, SchedulerFactory, http_status_for
 from ....core.sqs_handler import SQSHandler
 from ....core.websocket_service import AWSWebSocketHandler, WebSocketConnectionStore
 
@@ -420,7 +420,10 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
             return self.build_error_http_response(400, "Scheduling is not enabled for this deployment", user_id=ctx.user_id)
 
         try:
-            ack = self._schedule_service.create(
+            # Offloaded like every other blocking call on this handler: the create does a store
+            # read, a store write and a timer registration, none of them async.
+            ack = await self._offload(
+                self._schedule_service.create,
                 spec=ctx.message.body.schedule,
                 prompt=ctx.message.body.prompt,
                 agent=ctx.message.body.agent,
@@ -428,8 +431,11 @@ class ECSWebSocketRequestHandler(ECSWebSocketHandlerBase):
                 request_id=ctx.message.request_id,
             )
         except (SchedulerError, ValueError) as e:
-            self._log.warning(f"Scheduled task creation failed for user_id={ctx.user_id}: {e}")
-            return self.build_error_http_response(400, str(e), user_id=ctx.user_id)
+            # Mapped, not collapsed to 400: an ownership or state conflict reads the same here as
+            # on the REST route.
+            status_code = http_status_for(e)
+            self._log.warning(f"Scheduled task creation failed for user_id={ctx.user_id} with {status_code}: {e}")
+            return self.build_error_http_response(status_code, str(e), user_id=ctx.user_id)
 
         await self._broadcast_ack(ack, ctx)
         return self.build_success_http_response("Request scheduled successfully", user_id=ctx.user_id, status_code=201)

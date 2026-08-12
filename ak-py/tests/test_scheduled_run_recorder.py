@@ -5,12 +5,13 @@
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
-from agentkernel.deployment.common.scheduled_run_recorder import ScheduledRunRecorder
+from agentkernel.deployment.common.scheduled_run_recorder import STALE_RUN_WARNING_SECONDS, ScheduledRunRecorder
 
 SCHEDULED_RUN = {
     "scheduled_task_id": "schedule_a",
@@ -20,10 +21,63 @@ SCHEDULED_RUN = {
 }
 
 
+def _body_fired_at(moment: datetime) -> str:
+    """A response body for a run scheduled at ``moment``."""
+    return json.dumps({"result": "tick", "scheduled_run": {**SCHEDULED_RUN, "scheduled_time": moment.isoformat()}})
+
+
 @pytest.fixture
 def scheduler():
     with patch("agentkernel.deployment.common.scheduled_run_recorder.SchedulerFactory") as factory:
         yield factory.build.return_value
+
+
+class TestOutcomeLogging:
+    """The log lines an operator reads outcomes through must not overstate what happened."""
+
+    def test_a_guard_rejected_write_is_not_reported_as_recorded(self, scheduler, caplog):
+        """The provider already logged why it refused; claiming success would contradict it."""
+        scheduler.mark_run_completed.return_value = False
+
+        with caplog.at_level("INFO"):
+            assert ScheduledRunRecorder.record(_body_fired_at(datetime.now(timezone.utc))) is True
+
+        assert "Recorded scheduled run outcome" not in caplog.text
+
+    def test_an_accepted_write_is_reported(self, scheduler, caplog):
+        scheduler.mark_run_completed.return_value = True
+
+        with caplog.at_level("INFO"):
+            ScheduledRunRecorder.record(_body_fired_at(datetime.now(timezone.utc)))
+
+        assert "Recorded scheduled run outcome" in caplog.text
+
+
+class TestStaleness:
+    """A late fire is still a real run, so it is recorded — but it must be visible as late."""
+
+    def test_a_run_far_past_its_scheduled_time_is_logged(self, scheduler, caplog):
+        stale = datetime.now(timezone.utc) - timedelta(seconds=STALE_RUN_WARNING_SECONDS + 60)
+
+        with caplog.at_level("WARNING"):
+            ScheduledRunRecorder.record(_body_fired_at(stale))
+
+        assert "Scheduled run outcome is" in caplog.text
+        assert "schedule_a" in caplog.text
+        # Recorded anyway: the outcome belongs on the row either way.
+        scheduler.mark_run_completed.assert_called_once()
+
+    def test_an_on_time_run_is_not_logged_as_late(self, scheduler, caplog):
+        with caplog.at_level("WARNING"):
+            ScheduledRunRecorder.record(_body_fired_at(datetime.now(timezone.utc) - timedelta(seconds=5)))
+
+        assert "Scheduled run outcome is" not in caplog.text
+
+    def test_a_naive_fire_time_does_not_break_the_comparison(self, scheduler):
+        """The timer writes whatever it writes; a naive instant must read as UTC, not raise."""
+        naive = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        assert ScheduledRunRecorder.record(_body_fired_at(naive)) is True
 
 
 class TestRecordBeforeDiscard:

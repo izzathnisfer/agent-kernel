@@ -465,8 +465,8 @@ agent message, with one optional block added to the existing models.
   is not provided — with timing delegated to infrastructure, there is no Agent Kernel process
   guaranteed to be awake to perform catch-up, and reconstructing fires would reintroduce the polling
   and locking this design removes.
-- A fire that arrives outside an acceptable staleness window is logged as a warning and still
-  executed; operators can detect gaps from `last_run_at` and from timer-side metrics.
+- A run whose outcome arrives outside an acceptable staleness window is logged as a warning and
+  still recorded; operators can detect gaps from `last_run_at`, that warning, and timer-side metrics.
 
 ### Conversation / session handling
 

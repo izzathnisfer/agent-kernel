@@ -9,6 +9,7 @@ from botocore.exceptions import ClientError
 from conftest_scheduler import enable_scheduler_config, reset_scheduler_config
 
 from agentkernel.core.util.factory import AKConfigError
+from agentkernel.scheduler.errors import ScheduleValidationError
 from agentkernel.scheduler.model import RunStatus, ScheduleSpec, TaskStatus
 from agentkernel.scheduler.store.base import PageCursor, ScheduledTaskStoreBuilder, TaskSerializer
 from agentkernel.scheduler.store.dynamodb import OWNER_INDEX_KEY, OWNER_INDEX_NAME, TTL_ATTRIBUTE, DynamoDBScheduledTaskStore
@@ -65,6 +66,16 @@ class TestStoreContract:
 
         assert store.get("a").deleted is True
         assert store.list_by_owner("u1").items == []
+
+    def test_soft_deleting_an_absent_row_leaves_nothing_behind(self, store):
+        """All three backends agree: no row to tombstone means no write, and no readable row
+        afterwards. Reached through the check-then-act in AWSScheduler.delete."""
+        store.soft_delete("never-existed", datetime.now(timezone.utc), 900)
+        assert store.get("never-existed") is None
+
+    def test_updating_an_absent_row_reports_failure_and_writes_nothing(self, store):
+        assert store.update_fields("never-existed", {"last_error": "boom"}) is False
+        assert store.get("never-existed") is None
 
     def test_a_page_is_not_short_because_a_tombstone_was_filtered(self, store):
         for index in range(3):
@@ -132,13 +143,19 @@ class _FakeTable:
         self.items.pop(Key["scheduled_task_id"], None)
 
     def update_item(self, **kwargs):
-        item = self.items.get(kwargs["Key"]["scheduled_task_id"])
-        if item is None:
-            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        key = kwargs["Key"]["scheduled_task_id"]
+        item = self.items.get(key)
 
         condition = kwargs.get("ConditionExpression")
-        if condition is not None and item.get("scheduled_task_version") != condition._values[1]:
+        if condition is not None and not _condition_holds(item, condition):
             raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        if item is None:
+            # Faithful to DynamoDB, deliberately: an *unconditioned* update_item on an absent key
+            # creates an item holding only the key plus whatever the expression sets. Reproducing
+            # that is what lets a test catch a store path that forgot its ConditionExpression —
+            # the resulting phantom row cannot be parsed back as a ScheduledTask.
+            item = dict(kwargs["Key"])
+            self.items[key] = item
 
         names = kwargs.get("ExpressionAttributeNames", {})
         values = kwargs.get("ExpressionAttributeValues", {})
@@ -166,6 +183,22 @@ class _FakeTable:
         if start + len(window) < len(matching):
             response["LastEvaluatedKey"] = {"offset": json.dumps(start + len(window))}
         return response
+
+
+def _condition_holds(item, condition) -> bool:
+    """Evaluate the two condition shapes the store builds, against the stored item.
+
+    :param item: The stored item, or None when the key is absent.
+    :param condition: A boto3 ``Attr(...).exists()`` or ``Attr(...).eq(value)``.
+    :return: Whether the condition passes.
+    """
+    operator = condition.expression_operator
+    if operator == "attribute_exists":
+        return item is not None
+    if operator == "=":
+        attribute, expected = condition._values
+        return item is not None and item.get(attribute.name) == expected
+    raise AssertionError(f"the fake table does not implement condition '{operator}'")
 
 
 def _split_update_expression(expression: str) -> list[str]:
@@ -222,6 +255,23 @@ class TestDynamoDBLayout:
         # outcome-write guards during the grace window.
         assert item["owner_id"] == "u1"
 
+    def test_soft_deleting_an_absent_row_creates_no_phantom_item(self):
+        """Unconditioned, DynamoDB's update_item would create a key-plus-delete-fields item that
+        a later get cannot parse. Reachable through the check-then-act in delete()."""
+        store = _fake_dynamodb_store()
+
+        store.soft_delete("gone", datetime.now(timezone.utc), 900)
+
+        assert store._driver.table.items == {}
+        assert store.get("gone") is None
+
+    def test_updating_an_absent_row_creates_no_phantom_item(self):
+        """The same guard on the partial-update path, which the other two backends already have."""
+        store = _fake_dynamodb_store()
+
+        assert store.update_fields("gone", {"last_error": "boom"}) is False
+        assert store._driver.table.items == {}
+
     def test_list_queries_the_sparse_index_with_no_filter(self):
         store = _fake_dynamodb_store()
         store.put(build_task("a", owner_id="u1"))
@@ -258,6 +308,19 @@ class _FakeRedisClient:
 
     def expire(self, name, time):
         self.expirations[name] = time
+
+    def eval(self, script, numkeys, *args):
+        """Stand in for the lock's compare-and-delete script, the only script the store runs.
+
+        Interpreting Lua is out of scope, so this reproduces the one semantic that matters:
+        delete the key only when it still holds the caller's token.
+        """
+        keys, argv = args[:numkeys], args[numkeys:]
+        key, token = keys[0], argv[0]
+        if self.strings.get(key) != token:
+            return 0
+        del self.strings[key]
+        return 1
 
 
 def _fake_redis_store() -> tuple[RedisScheduledTaskStore, _FakeRedisClient]:
@@ -296,6 +359,44 @@ class TestRedisLayout:
         store.soft_delete("a", datetime.now(timezone.utc), 1234)
 
         assert client.expirations[f"{PREFIX}a"] == 1234
+
+    def test_soft_deleting_an_absent_row_writes_nothing(self):
+        """Reachable through the check-then-act in delete(), when the row expires in between."""
+        store, client = _fake_redis_store()
+
+        store.soft_delete("gone", datetime.now(timezone.utc), 900)
+
+        assert f"{PREFIX}gone" not in client.strings
+        assert f"{PREFIX}gone" not in client.expirations
+
+    def test_the_grace_window_is_set_before_the_lock_is_released(self):
+        """Outside the lock, a concurrent put between the two steps clears the window and leaves
+        a tombstone that never expires."""
+        store, client = _fake_redis_store()
+        store.put(build_task("a", owner_id="u1"))
+        held_while_expiring = {}
+        original_expire = client.expire
+
+        def recording_expire(name, time):
+            held_while_expiring["lock_present"] = f"{PREFIX}lock:a" in client.strings
+            return original_expire(name, time)
+
+        client.expire = recording_expire
+        store.soft_delete("a", datetime.now(timezone.utc), 900)
+
+        assert held_while_expiring["lock_present"] is True
+
+    def test_the_lock_is_released_only_by_the_holder_that_took_it(self):
+        """An unfenced release lets a writer whose merge outlived the TTL drop someone else's lock."""
+        store, client = _fake_redis_store()
+        store.put(build_task("a", owner_id="u1"))
+        lock_key = f"{PREFIX}lock:a"
+
+        with store._row_lock("a"):
+            # Simulate the lock expiring mid-write and a second writer taking it.
+            client.strings[lock_key] = "another-writers-token"
+
+        assert client.strings[lock_key] == "another-writers-token"
 
     def test_a_tombstone_stays_in_the_owner_index_while_it_is_readable(self):
         store, client = _fake_redis_store()
@@ -419,8 +520,16 @@ class TestPageCursor:
         assert PageCursor.decode(None) is None
 
     def test_a_malformed_cursor_is_rejected(self):
-        with pytest.raises(ValueError, match="invalid pagination cursor"):
+        with pytest.raises(ScheduleValidationError, match="invalid pagination cursor"):
             PageCursor.decode("not-a-cursor")
+
+    def test_a_well_formed_cursor_of_the_wrong_shape_is_rejected(self):
+        """Encoding alone is not enough: the shape a backend paginates on is part of the contract."""
+        with pytest.raises(ScheduleValidationError, match="invalid pagination cursor"):
+            PageCursor.decode(PageCursor.encode(5), expected_type=dict)
+
+    def test_the_expected_shape_still_round_trips(self):
+        assert PageCursor.decode(PageCursor.encode(5), expected_type=int) == 5
 
 
 class TestTaskSerializer:

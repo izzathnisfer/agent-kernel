@@ -113,6 +113,8 @@ The invoke URL comes from the `agent_invoke_url` output:
 
 ```bash
 URL=$(terraform output -raw agent_invoke_url)
+# The management routes sit alongside the chat route, so derive their base from it.
+BASE=${URL%/*}
 ```
 
 ## Creating a scheduled task
@@ -136,14 +138,14 @@ curl -X POST "$URL" \
   "status": "SCHEDULED",
   "scheduled_task_id": "schedule_5f1c...",
   "scheduled_task_version": "...",
-  "next_run_at": null,
   "request_id": "..."
 }
 ```
 
-The acknowledgement confirms **registration, not execution**. Note `next_run_at` is `null` for cron
-expressions — that means "not derivable without evaluating the expression", never "not scheduled".
-`session_id` is returned for `continuous` mode only.
+The acknowledgement confirms **registration, not execution**. Note `next_run_at` is **absent** for
+cron expressions — the ack is serialized with `exclude_none=True`, so the key is omitted rather than
+returned as `null`. That means "not derivable without evaluating the expression", never "not
+scheduled". `session_id` is likewise present for `continuous` mode only.
 
 ### The schedule block
 
@@ -190,7 +192,7 @@ curl -X PUT "$BASE/api/v1/schedule/$ID" \
 # A one-time task that has already run needs a new future `at` before it can be changed
 curl -X PUT "$BASE/api/v1/schedule/$ONCE_ID" \
   -H "Authorization: Bearer alice-token" \
-  -d '{"schedule": {"at": "2026-08-10T09:00:00Z"}, "prompt": "Run it again tomorrow"}'
+  -d '{"schedule": {"at": "2026-09-01T09:00:00Z"}, "prompt": "Run it again next month"}'
 
 # Stop it
 curl -X DELETE "$BASE/api/v1/schedule/$ID" -H "Authorization: Bearer alice-token"

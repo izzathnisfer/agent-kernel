@@ -128,6 +128,35 @@ def test_an_ordinary_body_still_requires_a_session_id(client):
     assert response.status_code == 400
 
 
+class TestDirectCallers:
+    """``request`` is defaulted, so existing subclass overrides and direct callers still work."""
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_body_can_be_enqueued_without_a_request_object(self, handler, monkeypatch):
+        from agentkernel.core.model import BaseRunRequest, ExecutionMode
+
+        monkeypatch.setattr(handler._config.execution, "mode", ExecutionMode.REST_ASYNC)
+
+        result = await handler.enqueue_and_wait(BaseRunRequest(prompt="hi", session_id="s1"))
+
+        handler.queue_handler.send_message_to_input_queue.assert_called_once()
+        assert result["status"] == "ACCEPTED"
+
+    @pytest.mark.asyncio
+    async def test_a_scheduled_body_with_no_request_object_is_401(self, handler):
+        """No HTTP request means no token, and a scheduled task must never be ownerless."""
+        from fastapi import HTTPException
+
+        from agentkernel.core.model import BaseRunRequest
+
+        body = BaseRunRequest(prompt="hi", schedule=ScheduleSpec(rate="1 hour"))
+
+        with pytest.raises(HTTPException) as excinfo:
+            await handler.enqueue_and_wait(body)
+
+        assert excinfo.value.status_code == 401
+
+
 class TestAuthoriserRequirement:
     def test_construction_without_an_authoriser_fails_loudly(self):
         with pytest.raises(AKConfigError, match="Authoriser"):

@@ -89,6 +89,14 @@ class TestRegistration:
         attributes = _target_input(scheduler)["MessageAttributes"]
         assert attributes["request_id"]["StringValue"] == "<aws.scheduler.execution-id>"
 
+    def test_the_user_id_attribute_carries_the_owner(self, scheduler):
+        """The runners read the identity off the attribute, so the fire must carry the owner —
+        never a forgeable value from a request body."""
+        task = build_task("schedule_a", owner_id="alice")
+        scheduler.upsert(task)
+        attributes = _target_input(scheduler)["MessageAttributes"]
+        assert attributes["user_id"]["StringValue"] == "alice"
+
     def test_event_age_is_capped_inside_the_fifo_dedup_window(self, scheduler):
         scheduler.upsert(build_task("schedule_a"))
         assert _registration(scheduler)["Target"]["RetryPolicy"]["MaximumEventAgeInSeconds"] == MAX_EVENT_AGE_SECONDS
@@ -200,6 +208,15 @@ class TestValidation:
         validation error instead of an opaque rejection from the timer."""
         with pytest.raises(ScheduleValidationError, match=expected):
             scheduler.upsert(build_task("schedule_plural", spec=ScheduleSpec(rate=rate)))
+        scheduler._scheduler.create_schedule.assert_not_called()
+        scheduler._scheduler.update_schedule.assert_not_called()
+
+    @pytest.mark.parametrize("rate", ["60 seconds", "1 second", "3600 seconds"])
+    def test_a_rate_in_seconds_is_rejected_locally_however_coarse_the_interval(self, scheduler, rate):
+        """EventBridge's rate units are minutes/hours/days, so even "60 seconds" — which clears
+        the minimum granularity — is unregistrable and must fail before the round trip."""
+        with pytest.raises(ScheduleValidationError, match="finest supported unit"):
+            scheduler.upsert(build_task("schedule_seconds", spec=ScheduleSpec(rate=rate)))
         scheduler._scheduler.create_schedule.assert_not_called()
         scheduler._scheduler.update_schedule.assert_not_called()
 

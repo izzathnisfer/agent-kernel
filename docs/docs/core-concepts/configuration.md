@@ -854,15 +854,18 @@ execution:
 scheduler:
   enabled: false                # Master switch
   agents: null                  # Agents the scheduling tools attach to; null = all, [] = none
-  group_name: ""                # EventBridge Scheduler schedule group (Terraform output)
-  target_role_arn: ""           # IAM role the timer assumes to send to the input queue (Terraform output)
+  group_name: null              # EventBridge Scheduler schedule group (Terraform output; "" in generated config)
+  target_role_arn: null         # IAM role the timer assumes to send to the input queue (Terraform output; "" in generated config)
   region: null                  # AWS region; null = the boto3 environment default
+  # Declare EXACTLY ONE location block, the one matching session.type. A populated block that
+  # session.type would never read is rejected at startup, so uncommenting more than one here
+  # stops the deployment from booting.
   dynamodb:                     # Used when session.type is 'dynamodb'
     table_name: "ak-scheduled-tasks"  # Dedicated table; never a partition of another table
-  redis:                        # Used when session.type is 'redis'
-    prefix: "ak:scheduled_tasks:"     # Separate keyspace on the session cluster
-  valkey:                       # Used when session.type is 'valkey'
-    prefix: "ak:scheduled_tasks:"     # Separate keyspace on the session cluster
+  # redis:                      # Used when session.type is 'redis'
+  #   prefix: "ak:scheduled_tasks:"   # Separate keyspace on the session cluster
+  # valkey:                     # Used when session.type is 'valkey'
+  #   prefix: "ak:scheduled_tasks:"   # Separate keyspace on the session cluster
 
 # Logging configuration (optional)
 # If omitted, default loggers will not be overridden

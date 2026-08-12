@@ -183,6 +183,10 @@ Validation rules, all returning `400`:
   field would be seconds.
 - **A rate unit must agree in number with its amount** — `"1 minute"` and `"5 minutes"`, never
   `"1 minutes"`.
+- **A rate must be in minutes, hours or days.** Seconds are rejected on the unit, not on the
+  interval, so even `"60 seconds"` is refused rather than accepted as one minute.
+- **A caller-supplied `id` must be usable as an EventBridge schedule name** —
+  `[0-9a-zA-Z-_.]`, up to 64 characters. Checked locally, before anything is stored.
 - **A one-time `at` must be in the future.**
 
 ### The acknowledgement
@@ -270,7 +274,10 @@ user-visible state:
 `GET /api/v1/schedule` returns neither state: soft-deleted rows are simply absent from the listing.
 
 When scheduling is disabled, the management routes return `404` — the capability does not exist — but
-a `schedule` block on `POST /api/v1/chat` returns `400`.
+a `schedule` block on `POST /api/v1/chat` returns `400`. A non-queue-mode deployment returns `400`
+for the same block even with scheduling enabled: the timer's target is the input queue, so there is
+nowhere for a fire to go, and running the prompt immediately is the one outcome a caller asking for
+"later" must never get.
 
 Update semantics worth knowing:
 
@@ -278,7 +285,9 @@ Update semantics worth knowing:
   definition that existed when it was enqueued.
 - **`scheduled_task_version` is retained**, so in-flight runs still record their outcomes.
 - **A replacement `schedule` block that omits `mode` keeps the current mode**, so retiming a
-  `continuous` task never silently moves it to a per-run session id.
+  `continuous` task never silently moves it to a per-run session id. The agent tool's `mode`
+  argument can also be given on its own, with no timing expression, to change the mode of a task
+  whose schedule stays as it is.
 - **A `PUT` on a one-time task that has already run re-arms it**, but only when the body supplies a
   new future `at` — the elapsed instant cannot be re-registered. `status` returns to `ACTIVE` and
   `completed_at` is cleared.
@@ -536,7 +545,10 @@ leaves no orphaned timers.
 | `AKConfigError` about the session store at startup | `session.type` is `in_memory`; scheduling needs a durable store shared by all replicas |
 | `AKConfigError` about a location block | The populated block does not match `session.type` |
 | `terraform apply` rejects `scheduled_task` | `queue_mode = false` — scheduling requires the queue |
-| `400` on a schedule that looks correct | The expression is wrapped (`cron(...)`), finer than a minute, has the wrong cron field count, or a rate unit disagrees with its amount |
+| `400` on a schedule that looks correct | The expression is wrapped (`cron(...)`), finer than a minute, in seconds, has the wrong cron field count, or a rate unit disagrees with its amount |
+| `400 ... not registrable by this provider` | A caller-supplied `schedule.id` uses characters outside `[0-9a-zA-Z-_.]`, or is longer than 64 characters |
+| `400 Scheduling requires queue mode` | Scheduling is enabled but this deployment runs requests directly, so a fire would have no queue to land on |
+| `WARNING Scheduled run outcome is Ns late` | The fire, its execution or its outcome was delayed well past `scheduled_time`; the outcome is still recorded. Check the input queue's backlog and the timer's DLQ |
 | Task created but never runs | Check the EventBridge Scheduler group and the timer role's `sqs:SendMessage` grant on the input queue |
 | Every task owned by the same user | The authorizer is not returning a per-user id — on serverless, check `ValidationResult.subject` |
 | `401` on every schedule request (serverless) | No authorizer is attached to the routes, so the event carries no authorizer context |

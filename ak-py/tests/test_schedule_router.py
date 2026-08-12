@@ -13,6 +13,7 @@ from agentkernel.auth import Authoriser
 from agentkernel.core.util.factory import AKConfigError
 from agentkernel.scheduler.model import ScheduleSpec
 from agentkernel.scheduler.service import ScheduledTaskService
+from agentkernel.scheduler.store.base import PageCursor
 from agentkernel.scheduler.testing import InMemoryScheduledTaskStore
 
 OWNER = "u1"
@@ -86,6 +87,28 @@ class TestList:
         service.delete("gone", owner_id=OWNER)
 
         assert client.get("/api/v1/schedule", headers=_auth()).json()["scheduled_tasks"] == []
+
+
+class TestPagination:
+    """A cursor is client input, so a bad one is a 400 like any other bad input."""
+
+    def test_a_page_can_be_walked_with_the_cursor_it_returns(self, client, service):
+        _create(service, "first")
+        _create(service, "second")
+
+        page = client.get("/api/v1/schedule?limit=1", headers=_auth()).json()
+        assert page["next_cursor"] is not None
+
+        following = client.get(f"/api/v1/schedule?limit=1&cursor={page['next_cursor']}", headers=_auth())
+        assert following.status_code == 200
+
+    def test_a_malformed_cursor_is_400_not_500(self, client):
+        assert client.get("/api/v1/schedule?cursor=not-a-cursor", headers=_auth()).status_code == 400
+
+    def test_a_well_formed_cursor_of_the_wrong_shape_is_400_not_500(self, client):
+        """Base64 alone is not enough: the shape the backend paginates on is part of the contract."""
+        forged = PageCursor.encode({"scheduled_task_id": "a"})
+        assert client.get(f"/api/v1/schedule?cursor={forged}", headers=_auth()).status_code == 400
 
 
 class TestRead:

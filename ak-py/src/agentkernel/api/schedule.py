@@ -13,14 +13,7 @@ from pydantic import BaseModel
 from ..auth import Authoriser
 from ..core.model import ScheduleSpec
 from ..core.util.factory import AKConfigError
-from ..scheduler import (
-    ScheduledTaskService,
-    SchedulerConflictError,
-    SchedulerFactory,
-    SchedulerNotFoundError,
-    SchedulerPermissionError,
-    ScheduleValidationError,
-)
+from ..scheduler import ScheduledTaskService, SchedulerError, SchedulerFactory, http_status_for
 from .handler import BearerIdentityMixin, RESTRequestHandler
 
 
@@ -76,7 +69,10 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
         def list_scheduled_tasks(request: Request, limit: Optional[int] = None, cursor: Optional[str] = None):
             self._require_service()
             owner_id = self._resolve_user(request)
-            page = self._service.list(owner_id=owner_id, limit=limit, cursor=cursor)
+            # Mapped like every other route: a bad cursor is client input, so it answers 400
+            # rather than escaping as an unhandled 500.
+            with self._mapped_errors():
+                page = self._service.list(owner_id=owner_id, limit=limit, cursor=cursor)
             return {
                 "scheduled_tasks": [task.model_dump(mode="json") for task in page.items],
                 "next_cursor": page.next_cursor,
@@ -134,22 +130,16 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
 
 
 class _ServiceErrorMapping:
-    """Maps ``ScheduledTaskService`` failures onto HTTP statuses, in one place."""
+    """Re-raises ``ScheduledTaskService`` failures as ``HTTPException``s.
 
-    _STATUS_BY_ERROR = (
-        (SchedulerNotFoundError, 404),
-        (SchedulerPermissionError, 403),
-        (SchedulerConflictError, 409),
-        (ScheduleValidationError, 400),
-    )
+    The status itself comes from ``scheduler.http_status_for``, which every other surface reads
+    too, so this class only translates the number into FastAPI's envelope.
+    """
 
     def __enter__(self) -> "_ServiceErrorMapping":
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool:
-        if exc_type is None:
+        if exc_type is None or not issubclass(exc_type, SchedulerError):
             return False
-        for error_type, status_code in self._STATUS_BY_ERROR:
-            if issubclass(exc_type, error_type):
-                raise HTTPException(status_code=status_code, detail=str(exc_value)) from exc_value
-        return False
+        raise HTTPException(status_code=http_status_for(exc_value), detail=str(exc_value)) from exc_value

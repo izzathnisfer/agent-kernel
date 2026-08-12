@@ -37,7 +37,7 @@ to boto3 directly rather than importing `deployment/aws/core/sqs_handler.py`.
 
 ```
 ak-py/src/agentkernel/scheduler/
-├── __init__.py          # public exports: Scheduler, ScheduledTask, ScheduleSpec, ScheduledTaskService, SchedulerFactory
+├── __init__.py          # public exports (17): the ABC, the service, the factory, the five models, the five errors, ScheduleExpression, and the three enums. `testing` is deliberately not among them — it imports pytest
 ├── base.py              # Scheduler ABC
 ├── model.py             # ScheduledTask, ScheduledTaskPage, CreateAck, RunStatus, TaskStatus; re-exports ScheduleSpec/ScheduleMode
 ├── service.py           # ScheduledTaskService
@@ -552,7 +552,7 @@ dependency for a convenience field, the service derives it from the expression i
 | Expression | `next_run_at` |
 |---|---|
 | `at` | the `at` value, normalized to UTC |
-| `rate` | `created_at` + the interval (the `"<n> <unit>"` grammar is parsed by the same validator that enforces the 1-minute granularity) |
+| `rate` | `updated_at` + the interval — the registration time, not the id's first creation, because a create over a live id re-registers the schedule and EventBridge re-bases the rate from there (the `"<n> <unit>"` grammar is parsed by the same validator that enforces the 1-minute granularity) |
 | `cron` | `None` |
 
 The field's description states this explicitly: *"the next fire time when derivable from the
@@ -1449,6 +1449,11 @@ Three details the table encodes:
 - **The response handler gets no `sqs:GetQueueAttributes`**, and is given no input-queue URL either.
   Only the delete path derives the TTL, and it is derived lazily, so a component that merely records
   outcomes never makes the call. This is the grant the deferred derivation buys.
+- **`sqs:GetQueueAttributes` is not always carried by the scheduler policy itself.** On serverless
+  the request handler already holds it through the pre-existing `lambda_sqs_policy`, so the scheduler
+  policy does not restate it; the agent runner, which holds no such policy, gets it in its scheduler
+  policy behind `enable_agent_tools`. The table records the *effective* grant per component, not
+  which policy document carries it.
 
 **On containerized the REST task carries the response-handler role too**, because it hosts both the
 schedule routes and the output-consumer thread in one task. It therefore gets the full grant rather
@@ -1688,6 +1693,64 @@ Exhaustive; each is intentional with its justification.
     then swallowed the identical error in `on_permanent_failure` — publishing nothing, so the outcome
     was never recorded and `last_run_*` stayed stale while the row still read `ACTIVE`. Interactive
     streaming is unaffected: the branch keys off the block alone, never off a missing `endpoint_url`.
+20. **`DefaultEndpointsHandler._handle_request` answers a scheduling failure with its own status**
+    (`serverless/core/router/rest_lambda.py`), through a `ScheduleRequestError` that only the
+    scheduling path raises: 400 for a disabled or invalid schedule, 401 with no authorizer context,
+    403/409 for ownership and state conflicts — the same statuses the REST chat route returns.
+    *Intentional:* the status must be selected by the scheduling path alone. An ordinary chat
+    request's `ValueError` (a malformed body, a missing `session_id`) therefore keeps the generic
+    500 it has always had, and its exception text is never echoed to the client. The one
+    exception is a body that *asks* to be scheduled and fails pydantic validation before the
+    branch is reached: `_parse_body_or_reject` answers that 400, since a caller asking for a
+    schedule is owed the reason.
+21. **`AgentRESTRequestHandler.run` rejects a body carrying a `schedule` block with 400.**
+    *Intentional:* this route runs the prompt now, and `schedule` is in `known_fields`, so the
+    block was previously neither honoured nor surfaced to the agent — the prompt simply ran
+    immediately. That is the one outcome a caller asking for "later" must never get, and it is
+    reachable from Python alone on a non-queue deployment, which the Terraform gate does not cover.
+22. **`ScheduledTaskService.update` takes a `mode` parameter** applied to the schedule the update
+    keeps. *Intentional:* `update_scheduled_task(id, mode=...)` with no timing expression built no
+    `ScheduleSpec` at all, so the mode was dropped while the tool reported success — a silent
+    no-op the capability-wide rule forbids.
+23. **`ScheduledTaskService.create` rejects an id the provider's timer cannot register**, against
+    the new `Scheduler.id_pattern` (non-abstract, `None` = unconstrained; `AWSScheduler` returns
+    EventBridge's `[0-9a-zA-Z-_.]{1,64}`). *Intentional:* a caller-supplied id is used verbatim as
+    the schedule `Name`, so an id outside that charset previously failed on the AWS round trip,
+    after the store write, rather than as a local 400.
+24. **`PageCursor.decode` raises `ScheduleValidationError` (not a bare `ValueError`) and checks the
+    decoded shape** against an `expected_type` each backend supplies. *Intentional:* a garbage
+    cursor, and a well-formed cursor of the wrong type, both reached the client as an unhandled
+    500 — as a `TypeError` on Redis and a boto `ValidationException` on DynamoDB. The list route is
+    now wrapped in `_mapped_errors()` like every other route, so both answer 400.
+25. **Both serverless WS direct-mode chat paths reject a `schedule` block with 400** instead of
+    registering it (`ws_lambda.py`). *Intentional:* direct mode consumes no input queue, so a
+    registration there was acknowledged and then never run — and its failures surfaced as 500
+    through `_handle_msg_and_brdcst`'s generic handler rather than as the 400 their queue-mode
+    twin returns. `_register_schedule` is now reached from the queue-mode paths only. This is the
+    WS counterpart of #21, so the capability is queue-mode-only on every surface.
+26. **Every surface reads its create-path status from `scheduler.http_status_for`.** *Intentional:*
+    the 400/403/404/409 table was written out in four places and the two WebSocket routes had
+    collapsed it to a flat 400, so an ownership or state conflict read differently depending on
+    the transport. The table now lives next to the exceptions whose docstrings already define it,
+    and each transport only translates the number into its own envelope. `_ServiceErrorMapping`
+    keeps its FastAPI shape but no longer carries its own copy of the table.
+27. **`DynamoDBScheduledTaskStore.soft_delete` and `update_fields` are always conditioned on the
+    row existing.** *Intentional:* an unconditioned `update_item` on an absent key *creates* an
+    item holding only the key and the written fields, which a later `get` cannot parse as a
+    `ScheduledTask`. Reachable through the check-then-act in `AWSScheduler.delete` when the row
+    TTL-expires between the `get` and the write. All three backends now return `False`/write
+    nothing for an absent row, and the fake table in the tests reproduces DynamoDB's real
+    create-on-update behaviour so a future regression fails as an assertion.
+28. **The Redis/Valkey row lock is fenced with a per-acquisition token**, released by a
+    compare-and-delete script, and `soft_delete` sets the grace window *inside* the lock while
+    honouring the merge's return value. *Intentional:* the previous constant lock value with an
+    unconditional `DELETE` let a writer whose read-merge-write outlived the 5 s TTL drop a second
+    writer's lock, after which two merges could interleave; and an expiry set after the lock was
+    released could be cleared by a concurrent `put`, leaving a tombstone that never expires.
+29. **`ScheduledRunRecorder` logs a run whose outcome arrives more than `STALE_RUN_WARNING_SECONDS`
+    after its `scheduled_time`, and no longer logs "Recorded scheduled run outcome" when a guard
+    rejected the write.** *Intentional:* the staleness warning was specified but unimplemented, and
+    the success line contradicted the provider's WARNING on every guard-rejected no-op.
 
 **Non-changes** — fixed by this spec and verified against the base branch:
 
@@ -1725,10 +1788,12 @@ Exhaustive; each is intentional with its justification.
   would be rejected by guard 4 or write identical values.
 - **Missed fires are the timer's problem.** Before enqueue, delivery failures are retried by
   EventBridge Scheduler per its own policy and, on exhaustion, land in the timer's DLQ. Agent Kernel
-  does not reconstruct or replay missed fires from the table. A fire that arrives outside an
-  acceptable staleness window (`scheduled_time` older than the derived soft-delete TTL) is logged at
-  WARNING by the output consumer and still executed; operators detect gaps from `last_run_at` and
-  timer-side metrics.
+  does not reconstruct or replay missed fires from the table. A run whose outcome arrives outside an
+  acceptable staleness window (`scheduled_time` older than `STALE_RUN_WARNING_SECONDS`, the fixed
+  floor of the derived grace window) is logged at WARNING by `ScheduledRunRecorder` and still
+  recorded; the window is a fixed number rather than the derived TTL precisely because the output
+  consumers hold no `sqs:GetQueueAttributes` permission to derive one. Operators detect gaps from
+  `last_run_at`, this warning, and timer-side metrics.
 
 ### Concurrency contract
 
@@ -1772,7 +1837,8 @@ The feature must not tax ordinary traffic. What it adds, per path:
 |---|---|---|
 | Every chat request (both targets) | One `is None` check on `body.schedule`; two extra keys in `known_fields`' set membership test | Negligible |
 | Every agent response | One `is None` check in `ResponseBuilder.build_response` | Negligible |
-| Every output-queue message | `ScheduledRunMetadata.from_body(body)` — one `dict.get("scheduled_run")` on an already-parsed body, returning on the miss before any validation | Negligible |
+| Every output-queue message, serverless | `ScheduledRunMetadata.from_body(body)` — one `dict.get("scheduled_run")` on an already-parsed body, returning on the miss before any validation | Negligible |
+| Every output-queue message, ECS | The same check, but the consumer hands over the raw SQS `Body`, so `record` runs one `json.loads` before it — and the body is parsed again downstream. A second parse of a message the consumer is already parsing, not a new I/O call | Negligible; measurable only at very high output volume |
 | Retry-exhausted messages only | `ScheduledRunMetadata.from_raw_body(...)` — one best-effort JSON parse of the record body | Off the hot path |
 | Scheduled outcomes only | One store read + one conditional store write | Proportional; only scheduled traffic pays |
 | First `delete` in a process, on components that can delete | One `GetQueueAttributes` call, then cached | Once per process; components that only record outcomes never make it |
@@ -1815,15 +1881,27 @@ No new work lands on the ordinary chat, streaming, or session paths.
 | A tool call fails for any reason | `scheduler/tools.py` | Caught and returned as `{"error": ...}` JSON — tools never raise into the framework |
 
 Exception scope is explicit throughout: `from_raw_body` catches `(json.JSONDecodeError, TypeError,
-ValidationError)` and returns `None`; `from_body` catches nothing beyond the absent-key miss, so a
-malformed `scheduled_run` block on the ordinary consumer path surfaces as a `ValidationError` rather
-than being silently dropped; the guard checks catch nothing (they are plain comparisons on a
-loaded row); store calls are not wrapped, so backend errors propagate to the consumer's retry
-machinery. Broad `except Exception` appears in exactly three places, each a give-up path with no
-error channel left: the runners' and consumers' `on_permanent_failure` handlers (where the
-`QueueConsumer` contract already requires it), `ScheduledRunRecorder.record_before_discard`, and
-`AWSScheduler._rollback`, where a failed rollback must not mask the registration error that caused
-it. Each logs before swallowing.
+ValueError, ValidationError)` and returns `None` — `ValueError` subsumes the other two of the three
+narrower ones, and is listed because pydantic's `ValidationError` is itself a `ValueError`;
+`from_body` catches nothing beyond the absent-key miss, so a malformed `scheduled_run` block on the
+ordinary consumer path surfaces as a `ValidationError` rather than being silently dropped; the guard
+checks catch nothing (they are plain comparisons on a loaded row); store calls are not wrapped, so
+backend errors propagate to the consumer's retry machinery.
+
+Broad `except Exception` appears only in three roles, never as a general-purpose catch:
+
+- **Give-up paths with no error channel left**, which log and swallow: the runners' and consumers'
+  `on_permanent_failure` handlers (where the `QueueConsumer` contract already requires it),
+  `ScheduledRunRecorder.record_before_discard`, `AWSScheduler._rollback` (a failed rollback must not
+  mask the registration error that caused it), and `_RowLock.__exit__` (the lock's own TTL releases
+  it, so a failed cleanup must not mask the caller's outcome).
+- **Rethrow or translate**, never swallow: `AWSScheduler._create` and `_write_definition` re-raise
+  after rolling the row back; `_derive_soft_delete_ttl` and `PageCursor.decode` translate into
+  `SchedulerError` and `ScheduleValidationError` respectively.
+- **The tool contract**, in all four `scheduler/tools.py` functions, each carrying the
+  `# noqa: BLE001` comment the sandbox tools use. Narrower catches would let an infrastructure
+  failure — an `AccessDenied` or a throttle re-raised by `upsert`, an `AKConfigError` from resolving
+  the service — escape into the agent framework mid-run, which the "tools never raise" rule forbids.
 
 ---
 
@@ -1839,7 +1917,7 @@ Run with `cd ak-py && uv run pytest`.
 | `tests/test_scheduled_task_store.py` | Per backend, against the store contract: put/get round trip, `list_by_owner` scoping and cursor, `soft_delete` sets `deleted`/`deleted_at` and the expiry, and a soft-deleted row is still `get`-able. **`list_by_owner` excludes soft-deleted rows on every backend, and a page is not short because one was filtered.** **`update_fields` writes only the named attributes and leaves every other one untouched** (write `last_run_*`, assert the definition fields are unchanged, and the reverse), and **returns `False` without writing when `expected_version` mismatches**. DynamoDB against a mocked `DynamoDBDriver` (the `test_sessions_dynamodb.py` pattern) — asserts the driver is built with `ttl=0`, that `expiry_time` is written **only** by `soft_delete`, that `soft_delete` issues a `REMOVE owner_index_key` so the GSI stays sparse while `owner_id` itself survives on the row, and that `list_by_owner` queries the index with **no** `FilterExpression`. Redis against a fake client (the `test_sessions_valkey.py` / `test_multimodal_redis_store.py` pattern) — asserts `set()` writes no `ex`, that `soft_delete` calls `client.expire` with the derived seconds, that `list_by_owner` prunes owner-set members whose row key is gone while *retaining* members whose row is merely soft-deleted, and that `update_fields` takes and releases the `<prefix>lock:<id>` key |
 | `tests/test_scheduler_aws.py` | `AWSScheduler` against mocked boto3 `scheduler`/`sqs` clients and the `InMemoryScheduledTaskStore`, plus a subclass of `SchedulerContract` so the provider is held to the shared obligations. `upsert` builds a universal target with `MessageGroupId = scheduled_task_id`, `MessageDeduplicationId = <id>:<scheduled_time>`, both context variables in the payload, `request_id`/`user_id` message attributes present, and `MaximumEventAgeInSeconds = 300`. One-time schedules set `ActionAfterCompletion="DELETE"`. Sub-minute cron/rate raises before any AWS call, and a provider-side `ValidationException` surfaces as `ScheduleValidationError`. `per_run` vs `continuous` session-id shape. Registration failure rolls the row back — restored to its prior state on an update, removed outright on a fresh id. **The four guards**, one test each, asserting a `False` return and no store write; plus a store exception propagating rather than no-op'ing. A one-time task's accepted outcome sets `status = COMPLETED` and `completed_at`. A blank, whitespace-only or `None` `input_queue_url` raises `SchedulerError` from `upsert` with **nothing written to the store and neither `create_schedule` nor `update_schedule` called** — the guard against registering a schedule that could never deliver. `TestDefinitionWrite` covers behavioural change #18 at the provider level: a store spy asserts `put` is **never** called on the update path, that the write carries exactly `DEFINITION_FIELDS`, that it passes `expected_version` (the condition that makes DynamoDB agree with the other two backends instead of creating a partial row), and that the field values are JSON-safe — `schedule` is a nested model, and `encode_fields` flattens only datetimes and enums, so an unserialized value would reach `json.dumps` on Redis. `TestRollback` additionally asserts a rolled-back definition write leaves `last_run_*` intact, and that a *failing rollback* still surfaces the registration error rather than its own |
 | `tests/test_scheduled_task_service.py` | Id generation (`schedule_<hex>`) vs caller-supplied; fresh version on a new id and **retained** version on a live upsert and on `update`; owner stamped from the parameter and never from the body; `schedule:` prefix on both session-id shapes; 403 on a foreign live row, 409 on a soft-deleted id, 404 on `update` with no live row; a run-out one-time task re-armed by a `PUT` carrying a new future `at` and **rejected** by one that omits it; a replacement schedule omitting `mode` keeping the task's current mode. `CreateAck`: `session_id` present for `continuous` and **absent** for `per_run`; `next_run_at` equals the `at` value for a one-time schedule, equals `updated_at + interval` for a `rate` (re-based when a create replaces a live definition), and is `None` for a `cron`; `request_id` is always present, echoing a caller-supplied id when given and generated otherwise |
-| `tests/test_schedule_router.py` | FastAPI `TestClient` over `ScheduleRESTRequestHandler` (the `test_thread_router.py` pattern, with a `StaticAuthoriser`). Construction without an `Authoriser` raises `AKConfigError`. 401 missing/invalid Bearer; list returns only the caller's rows and excludes soft-deleted; 404 on unknown and on soft-deleted `GET`; 403/409/404 on `PUT`; 403 on `DELETE`; routes absent from the app when `scheduler.enabled` is false |
+| `tests/test_schedule_router.py` | FastAPI `TestClient` over `ScheduleRESTRequestHandler` (the `test_thread_router.py` pattern, with a `StaticAuthoriser`). Construction without an `Authoriser` raises `AKConfigError`. 401 missing/invalid Bearer; list returns only the caller's rows and excludes soft-deleted; 404 on unknown and on soft-deleted `GET`; 403/409/404 on `PUT`; 403 on `DELETE`. Pagination: a page is walked with the cursor it returns, and both a malformed cursor and a well-formed cursor of the wrong shape answer **400, not 500** (behavioural change #24). The routes-absent-when-disabled case lives in `test_api_http.py` with the rest of the mounting behaviour, not here |
 | `tests/test_scheduler_tools.py` | All four tools route through `ScheduledTaskService` (asserted with a mock service); the owner is bound from the invoking session and cannot be supplied as an argument; a service error is returned as `{"error": ...}` and never raised; `SystemToolFactory.get_all()` includes the tools only when enabled and honours `scheduler.agents` scoping |
 | `tests/test_agent_runner_permanent_failure.py` | **New file — neither non-stream runner has an existing test** (`test_akagentrunner_stream.py` and `test_ecs_akagentrunner_stream.py` cover the stream runners only), so behavioural changes #5 and #6 are otherwise untested. Both runners: a record whose body carries `scheduled_run` produces an error body echoing it verbatim; an unparseable body produces the pre-change error body and **does not raise**; the ECS runner's inline error dict and the serverless runner's `_construct_error_message_body` result (`serverless/akagentrunner.py:147-149`) are each asserted in place. Serverless only: `session_id` comes from the parsed body when `scheduled_run` is present, is **omitted** when the body cannot be parsed, and still equals `record_attributes["message_group_id"]` for a non-scheduled record (`:150`) — the regression guard for #6 |
 | `tests/test_ecs_akagentrunner_stream.py`, `tests/test_akagentrunner_stream.py` | **These files already exist** and cover the stream runners, so the scheduled-fire routing extends them rather than adding a file. Each gains a `_make_fire_record()` builder carrying a `scheduled_run` block and, deliberately, **no `endpoint_url`** — the shape the timer actually delivers. New cases, identical on both platforms: a fire calls `process_chat_request` and **not** `process_stream_chat_sync`, sending exactly one whole-response message whose body echoes `scheduled_run`; a fire's `on_permanent_failure` publishes an error body carrying `scheduled_run` and **no `done` key**, asserting it is the non-stream error body and not a `StreamChunk`; and an ordinary stream request still fans out chunks and never reaches `process_chat_request` — the regression guard that the branch keys off the block alone, not off a missing `endpoint_url`. All existing assertions unchanged, including the two that pin the `endpoint_url` requirement for interactive streaming |
@@ -1861,8 +1939,8 @@ Run with `cd ak-py && uv run pytest`.
 | `tests/test_ecs_akoutputconsumer.py` | **This file already exists** (8 tests over `process_message` in `stream`/`async` WebSocket modes plus three `on_permanent_failure` cases), so the `ECSOutputConsumer` work extends it rather than creating a new file. New cases: a response carrying `scheduled_run` calls `mark_run_completed` with the derived status and is **neither broadcast nor written to the response store**; a body with an `error` key maps to `FAILED` with `last_error`; an ordinary response is stored/broadcast exactly as before; `on_permanent_failure` is unchanged. The `async`/`stream` cases are the regression guard — `test_broadcast_via_websocket_raises_when_endpoint_url_missing` (`:51`) is the pre-change failure a timer-originated message would hit. `on_permanent_failure` gains cases for behavioural change #13: a scheduled body is recorded and returns early, an ordinary one takes the pre-change path. All existing assertions unchanged |
 | `tests/test_lambda_router.py` | The resource-template fallback resolves `/schedule/{scheduled_task_id}` from `event["resource"]` and passes `pathParameters`; an unmatched path still raises `ValueError` (unchanged) |
 | `tests/test_api_http.py` | `RESTAPI.run()` mounts the schedule router when `scheduler.enabled`, skips it when a `ScheduleRESTRequestHandler` was supplied, and does not mount it when disabled. Plus the failure case: **auto-mounting with no supplied handler raises `AKConfigError` before uvicorn binds**, since the auto-mounted instance has no `Authoriser`. The subclass opt-out (`_auto_mount_schedule_routes = False`) is covered end to end in `test_ecs_websocket_schedule.py`, where the WebSocket API actually inherits `run()` |
-| `tests/test_serverless_request_handle.py` | A payload carrying a `schedule` block is not enqueued and returns the 201 ack; identity is taken from `requestContext.authorizer.principalId`; a missing authorizer context yields 401; `_handle_request` still answers 200 for an operation returning a bare body |
-| `tests/test_rest_handler_poll.py` | Updated for `enqueue_and_wait`'s added `request` parameter (behavioural change #17); poll behaviour is otherwise unchanged |
+| `tests/test_serverless_request_handle.py` | A payload carrying a `schedule` block is not enqueued and returns the 201 ack, on both the sync and async-submit paths; identity is taken from `requestContext.authorizer.principalId`; a missing authorizer context yields 401; a foreign live row yields 403 and a soft-deleted id 409; a `schedule` block that fails pydantic validation still yields 400 with the reason. `TestOrdinaryRequestsAreUnaffected` is the regression guard for behavioural change #20: a body with no `session_id`, and an unparseable body, each still answer **500 with the generic message** rather than the scheduling path's 400 and its exception text |
+| `tests/test_rest_handler_poll.py` | One line: `config.scheduler = None` on the mock config, so `RestHandler.__init__`'s enablement check does not see a `Mock` as an enabled scheduler. Nothing touches `enqueue_and_wait`, and poll behaviour is unchanged |
 
 Not changed, and verified so: `test_sqs_handler.py` (the `SQSHandler` surface is untouched),
 `test_ecs_sqs_consumer_parallel.py` (`process_message`/`delete` semantics are untouched),

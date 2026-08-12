@@ -4,12 +4,14 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+from botocore.exceptions import ClientError
 from conftest_scheduler import enable_scheduler_config, reset_scheduler_config
 
 from agentkernel.core.base import Session
 from agentkernel.core.config import AKConfig
 from agentkernel.core.model import REQUEST_USER_ID_KEY
 from agentkernel.core.tool import SystemToolFactory, ToolContext
+from agentkernel.core.util.factory import AKConfigError
 from agentkernel.scheduler import tools as scheduler_tools
 from agentkernel.scheduler.errors import SchedulerPermissionError
 from agentkernel.scheduler.model import CreateAck, ScheduleMode, ScheduleSpec
@@ -106,6 +108,19 @@ class TestRouting:
     def test_an_explicit_mode_is_passed_through(self, service, tool_context):
         scheduler_tools.update_scheduled_task("a", rate="2 hours", mode="continuous")
         assert service.update.call_args.kwargs["spec"].mode == ScheduleMode.CONTINUOUS
+        # The spec carries the mode, so there is nothing left for the separate argument to apply.
+        assert service.update.call_args.kwargs["mode"] is None
+
+    def test_a_mode_only_change_reaches_the_service(self, service, tool_context):
+        """Never a silent no-op: with no timing expression there is no spec to hang the mode on."""
+        scheduler_tools.update_scheduled_task("a", mode="continuous")
+        kwargs = service.update.call_args.kwargs
+        assert kwargs["spec"] is None
+        assert kwargs["mode"] == ScheduleMode.CONTINUOUS
+
+    def test_an_unrecognised_mode_is_reported_rather_than_dropped(self, service, tool_context):
+        assert "error" in json.loads(scheduler_tools.update_scheduled_task("a", mode="whenever"))
+        service.update.assert_not_called()
 
     def test_delete_routes_through_the_service(self, service, tool_context):
         result = json.loads(scheduler_tools.delete_scheduled_task("a"))
@@ -129,6 +144,35 @@ class TestErrorContract:
     def test_a_disabled_capability_is_reported(self, monkeypatch, tool_context):
         monkeypatch.setattr(scheduler_tools.SchedulerFactory, "service", staticmethod(lambda: None))
         assert "disabled" in json.loads(scheduler_tools.create_scheduled_task(prompt="hi", rate="1 hour"))["error"]
+
+    def test_an_infrastructure_failure_is_returned_rather_than_raised(self, service, tool_context):
+        """An AccessDenied or a throttle is neither a SchedulerError nor a ValueError."""
+        service.create.side_effect = ClientError({"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "CreateSchedule")
+        assert "error" in json.loads(scheduler_tools.create_scheduled_task(prompt="hi", rate="1 hour"))
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: scheduler_tools.update_scheduled_task("a", prompt="p"),
+            lambda: scheduler_tools.delete_scheduled_task("a"),
+            lambda: scheduler_tools.list_scheduled_tasks(),
+        ],
+    )
+    def test_every_tool_survives_an_infrastructure_failure(self, service, tool_context, call):
+        error = ClientError({"Error": {"Code": "ThrottlingException", "Message": "slow down"}}, "UpdateSchedule")
+        service.update.side_effect = error
+        service.delete.side_effect = error
+        service.list.side_effect = error
+        assert "error" in json.loads(call())
+
+    def test_a_failure_resolving_the_service_is_returned_rather_than_raised(self, monkeypatch, tool_context):
+        """SchedulerFactory.build can raise AKConfigError or a boto3 construction error."""
+
+        def _explode():
+            raise AKConfigError("scheduler misconfigured")
+
+        monkeypatch.setattr(scheduler_tools.SchedulerFactory, "service", staticmethod(_explode))
+        assert "error" in json.loads(scheduler_tools.create_scheduled_task(prompt="hi", rate="1 hour"))
 
 
 class TestRegistration:

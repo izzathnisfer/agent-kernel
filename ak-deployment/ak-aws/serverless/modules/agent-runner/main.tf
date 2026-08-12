@@ -288,7 +288,7 @@ resource "aws_lambda_event_source_mapping" "agent_runner_input_queue" {
 
 resource "aws_iam_policy" "scheduler_policy" {
   count = var.scheduled_task ? 1 : 0
-  name  = "${var.product_alias}-${var.env_alias}-${var.agent_runner.function_name}-scheduler"
+  name  = "${var.product_alias}-${var.env_alias}-${local.agent_runner_module_name}-${local.agent_runner_function_name}-scheduler"
 
   policy = jsonencode({
     Version = "2012-10-17"

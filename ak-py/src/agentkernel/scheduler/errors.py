@@ -28,3 +28,34 @@ class SchedulerPermissionError(SchedulerError):
 
 class SchedulerConflictError(SchedulerError):
     """The id is soft-deleted, or a concurrent writer holds the row. Mapped to HTTP 409."""
+
+
+# The statuses above, in one table. Ordered most-derived first so a subclass added later cannot
+# be shadowed by its base. `SchedulerError` last, so an unrecognised machinery failure still
+# reads as a bad request rather than escaping as a 500.
+_STATUS_BY_ERROR: tuple[tuple[type[SchedulerError], int], ...] = (
+    (SchedulerNotFoundError, 404),
+    (SchedulerPermissionError, 403),
+    (SchedulerConflictError, 409),
+    (ScheduleValidationError, 400),
+    (SchedulerError, 400),
+)
+
+
+def http_status_for(exc: BaseException, default: int = 400) -> int:
+    """Map a scheduling failure to the HTTP status every surface answers it with.
+
+    Each error's status is already part of its contract (see the class docstrings); this is the
+    single place that table is written down, so the REST routes, the two WebSocket routes and the
+    Lambda routers cannot drift apart on what a given failure means. Transports translate the
+    number into their own envelope — an ``HTTPException``, a status tuple, or an error frame.
+
+    :param exc: The failure to classify.
+    :param default: Status for anything not in the table, including a plain ``ValueError`` from
+        request parsing, which is bad input like the rest.
+    :return: The HTTP status.
+    """
+    for error_type, status_code in _STATUS_BY_ERROR:
+        if isinstance(exc, error_type):
+            return status_code
+    return default

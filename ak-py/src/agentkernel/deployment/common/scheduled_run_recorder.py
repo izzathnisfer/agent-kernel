@@ -9,10 +9,18 @@ fields and completing a one-time task all happen inside the ``Scheduler`` implem
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ...core.model import ScheduledRunMetadata
-from ...scheduler import RunStatus, SchedulerFactory
+from ...scheduler import RunStatus, ScheduleExpression, SchedulerFactory
+
+# A fire whose outcome arrives more than this long after its scheduled time is logged, so a
+# late-firing or badly backed-up deployment is visible rather than silently on time. Matches the
+# floor of the providers' derived grace window, and is a fixed number precisely so recording an
+# outcome needs no queue-attribute read (the output consumers deliberately have no permission
+# for one).
+STALE_RUN_WARNING_SECONDS = 900
 
 
 class ScheduledRunRecorder:
@@ -87,19 +95,47 @@ class ScheduledRunRecorder:
         :param parsed: The parsed message body.
         :param scheduled_run: The identity block the fire carried.
         """
+        cls._warn_if_stale(scheduled_run)
         error = parsed.get("error")
-        SchedulerFactory.build().mark_run_completed(
+        recorded = SchedulerFactory.build().mark_run_completed(
             scheduled_task_id=scheduled_run.scheduled_task_id,
             scheduled_task_version=scheduled_run.scheduled_task_version,
             scheduled_time=scheduled_run.scheduled_time,
             status=RunStatus.FAILED if error else RunStatus.COMPLETED,
             last_error=error,
         )
+        if not recorded:
+            # A guard rejected the write and logged why. Claiming a recorded outcome here would
+            # contradict that log line.
+            return
         cls._log.info(
             "Recorded scheduled run outcome — scheduled_task_id=%s, run_id=%s, status=%s",
             scheduled_run.scheduled_task_id,
             scheduled_run.run_id,
             "FAILED" if error else "COMPLETED",
+        )
+
+    @classmethod
+    def _warn_if_stale(cls, scheduled_run: ScheduledRunMetadata) -> None:
+        """Log a run whose outcome arrives long after the time it was scheduled for.
+
+        The run is still recorded: a late fire is a real run whose outcome belongs on the row.
+        The log is what lets an operator tell a late deployment from an on-time one, since
+        ``last_run_at`` alone shows only that the run happened.
+
+        :param scheduled_run: The identity block the fire carried.
+        """
+        # as_utc: the fire time arrives as whatever the timer wrote, and comparing a naive one
+        # against an aware now() would raise.
+        lateness = (datetime.now(timezone.utc) - ScheduleExpression.as_utc(scheduled_run.scheduled_time)).total_seconds()
+        if lateness <= STALE_RUN_WARNING_SECONDS:
+            return
+        cls._log.warning(
+            "Scheduled run outcome is %ss late — scheduled_task_id=%s, run_id=%s, scheduled_time=%s",
+            int(lateness),
+            scheduled_run.scheduled_task_id,
+            scheduled_run.run_id,
+            scheduled_run.scheduled_time.isoformat(),
         )
 
     @staticmethod

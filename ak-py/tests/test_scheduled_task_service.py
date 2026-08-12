@@ -52,6 +52,20 @@ class TestIdentity:
         ack = _create(service, spec=ScheduleSpec(rate="1 hour", id="nightly-report"))
         assert ack.scheduled_task_id == "nightly-report"
 
+    def test_an_id_the_provider_could_not_register_is_rejected_locally(self, service, store):
+        """The id becomes the timer's own registration name, so a bad charset must fail here."""
+        with pytest.raises(ScheduleValidationError, match="not registrable"):
+            _create(service, spec=ScheduleSpec(rate="1 hour", id="nightly report!"))
+
+    def test_the_id_is_rejected_before_anything_is_written(self, service, store):
+        with pytest.raises(ScheduleValidationError):
+            _create(service, spec=ScheduleSpec(rate="1 hour", id="a" * 65))
+        assert store.get("a" * 65) is None
+
+    def test_a_generated_id_always_satisfies_the_providers_pattern(self, service):
+        ack = _create(service)
+        assert make_scheduler(InMemoryScheduledTaskStore()).id_pattern.match(ack.scheduled_task_id)
+
     def test_a_fresh_id_gets_a_new_incarnation(self, service):
         first = _create(service, spec=ScheduleSpec(rate="1 hour", id="a"))
         second = _create(service, spec=ScheduleSpec(rate="1 hour", id="b"))
@@ -179,6 +193,20 @@ class TestLifecycle:
         task = service.update("a", owner_id=OWNER, spec=ScheduleSpec(rate="1 hour", mode=ScheduleMode.PER_RUN))
 
         assert task.schedule.mode == ScheduleMode.PER_RUN
+
+    def test_the_mode_can_be_changed_without_retiming_the_task(self, service, store):
+        """A mode-only change must be a real change, not a silently dropped argument."""
+        _create(service, spec=ScheduleSpec(rate="1 hour", id="a", mode=ScheduleMode.PER_RUN))
+
+        task = service.update("a", owner_id=OWNER, mode=ScheduleMode.CONTINUOUS)
+
+        assert task.schedule.mode == ScheduleMode.CONTINUOUS
+        assert task.schedule.rate == "1 hour"
+        assert store.get("a").schedule.mode == ScheduleMode.CONTINUOUS
+
+    def test_an_omitted_mode_leaves_the_current_one_alone(self, service):
+        _create(service, spec=ScheduleSpec(rate="1 hour", id="a", mode=ScheduleMode.CONTINUOUS))
+        assert service.update("a", owner_id=OWNER, prompt="new prompt").schedule.mode == ScheduleMode.CONTINUOUS
 
     def test_update_keeps_fields_the_caller_omitted(self, service):
         _create(service, spec=ScheduleSpec(rate="1 hour", id="a"), agent="reporter")

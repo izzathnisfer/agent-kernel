@@ -1,5 +1,6 @@
 """The provider-agnostic ``Scheduler`` contract."""
 
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Optional
@@ -32,6 +33,19 @@ class Scheduler(ABC):
         Exposed so callers above the ABC can reject a too-fine schedule without knowing
         which provider is in use.
         """
+
+    @property
+    def id_pattern(self) -> Optional[re.Pattern[str]]:
+        """The identifier shape this provider's timer accepts, when it constrains one.
+
+        Exposed for the same reason as ``minimum_granularity``: a caller-chosen
+        ``scheduled_task_id`` becomes the timer's own registration name, so a caller above the
+        ABC can reject an unusable id before a row is written, rather than after the write
+        fails on the provider round trip.
+
+        :return: The pattern an id must match, or None when the provider accepts any id.
+        """
+        return None
 
     @abstractmethod
     def upsert(self, task: ScheduledTask) -> ScheduledTask:

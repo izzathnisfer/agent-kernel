@@ -12,7 +12,7 @@ from ...auth import Authoriser
 from ...core.config import AKConfig
 from ...core.model import BaseRunRequest, ExecutionMode
 from ...core.util.factory import AKConfigError
-from ...scheduler import SchedulerConflictError, SchedulerFactory, SchedulerPermissionError, ScheduleValidationError
+from ...scheduler import SchedulerError, SchedulerFactory, http_status_for
 from .queue_handler import QueueHandler
 from .response_store import ResponseStore
 
@@ -60,14 +60,17 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         """True when an input queue is configured (enqueue mode); False for direct mode."""
         return self._config.execution.queues.input.url is not None
 
-    async def enqueue_and_wait(self, body: BaseRunRequest, request: Request):
+    async def enqueue_and_wait(self, body: BaseRunRequest, request: Request = None):
         """Enqueue request; REST_SYNC waits for the response, REST_ASYNC returns request_id immediately.
 
         A body carrying a ``schedule`` block is registered instead: nothing is enqueued, and
         the first message on the input queue appears when the timer fires.
 
-        ``request`` must stay annotated as a bare ``Request``; under ``Optional[Request]``
-        FastAPI stops injecting it and treats it as a body field.
+        ``request`` must stay annotated as a bare ``Request`` — FastAPI decides injection from
+        the annotation, so under ``Optional[Request]`` it stops injecting and treats it as a
+        body field. The default keeps existing direct callers and subclass overrides working;
+        only the scheduling branch needs the request, and it rejects a call that arrived
+        without one.
 
         :param body: The chat body, optionally carrying a ``schedule`` block.
         :param request: The incoming request, used to resolve the scheduled task's owner.
@@ -131,7 +134,7 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
             self._log.error(f"Error processing request: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail={"error": str(e), "session_id": body.session_id if body else None})
 
-    async def _create_scheduled_task(self, body: BaseRunRequest, request: Request) -> JSONResponse:
+    async def _create_scheduled_task(self, body: BaseRunRequest, request: Optional[Request]) -> JSONResponse:
         """Register a chat body to run later and acknowledge the registration.
 
         The acknowledgement is returned directly in both REST modes. There is no run to wait
@@ -146,21 +149,24 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         """
         if self._schedule_service is None:
             raise HTTPException(status_code=400, detail="Scheduling is not enabled for this deployment")
+        if request is None:
+            # A direct call rather than an HTTP request, so there is no token to resolve an
+            # owner from — and a scheduled task with no owner must never be created.
+            raise HTTPException(status_code=401, detail="A scheduled task requires an authenticated caller")
 
         owner_id = self._resolve_user(request)
         try:
-            ack = self._schedule_service.create(
+            # Offload the blocking create: it does a store read, a store write and a timer
+            # registration, none of them async.
+            ack = await asyncio.to_thread(
+                self._schedule_service.create,
                 spec=body.schedule,
                 prompt=body.prompt,
                 agent=body.agent,
                 owner_id=owner_id,
             )
-        except ScheduleValidationError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except SchedulerPermissionError as e:
-            raise HTTPException(status_code=403, detail=str(e))
-        except SchedulerConflictError as e:
-            raise HTTPException(status_code=409, detail=str(e))
+        except SchedulerError as e:
+            raise HTTPException(status_code=http_status_for(e), detail=str(e))
 
         self._log.info(f"[SCHEDULED] scheduled_task_id={ack.scheduled_task_id}, owner_id={owner_id}")
         return JSONResponse(status_code=201, content=ack.model_dump(mode="json", exclude_none=True))

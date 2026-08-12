@@ -11,15 +11,20 @@ from typing import Optional
 from .errors import ScheduleValidationError
 from .model import ScheduleSpec
 
-# "<n> <unit>" — the rate grammar every supported timer shares.
+# "<n> <unit>" — the rate grammar every supported timer shares. Seconds are matched only so
+# they can be rejected with the reason; no supported timer has a sub-minute rate unit.
 _RATE_PATTERN = re.compile(r"^\s*(\d+)\s+(minute|minutes|hour|hours|day|days|second|seconds)\s*$", re.IGNORECASE)
+
+# Matched by the grammar but never registrable: "60 seconds" passes the granularity check as an
+# interval yet is rejected by the timer, so it is caught here instead.
+_UNSUPPORTED_RATE_UNITS = ("second",)
 
 # Rejects an already-wrapped native form up front; the provider adds its own wrapper, so
 # letting one through would double-wrap it into an opaque failure at the timer.
 _WRAPPED_PATTERN = re.compile(r"^\s*(cron|rate|at)\s*\((.*)\)\s*$", re.IGNORECASE | re.DOTALL)
 
+# Only the registrable units; a rate in seconds is rejected before this lookup.
 _RATE_UNITS = {
-    "second": timedelta(seconds=1),
     "minute": timedelta(minutes=1),
     "hour": timedelta(hours=1),
     "day": timedelta(days=1),
@@ -62,8 +67,8 @@ class ScheduleExpression:
 
         :param rate: The rate expression.
         :return: The interval between fires.
-        :raises ScheduleValidationError: The expression is wrapped, or does not match the
-            rate grammar.
+        :raises ScheduleValidationError: The expression is wrapped, does not match the rate
+            grammar, or names a unit no supported timer accepts.
         """
         ScheduleExpression._reject_wrapper("rate", rate)
         match = _RATE_PATTERN.match(rate or "")
@@ -74,8 +79,25 @@ class ScheduleExpression:
             raise ScheduleValidationError(f"rate '{rate}' must specify a positive interval")
         supplied_unit = match.group(2).lower()
         unit = supplied_unit.rstrip("s")
+        ScheduleExpression._reject_unsupported_unit(rate, unit)
         ScheduleExpression._reject_plural_mismatch(rate, amount, supplied_unit, unit)
         return _RATE_UNITS[unit] * amount
+
+    @staticmethod
+    def _reject_unsupported_unit(rate: str, unit: str) -> None:
+        """Reject a rate unit that parses as an interval but no supported timer accepts.
+
+        Rejected on the unit rather than on the resulting interval, because a unit can be too
+        fine while the interval it expresses is not: ``60 seconds`` clears the minimum
+        granularity yet is still not an expression any timer can register.
+
+        :param rate: The rate expression, for the message.
+        :param unit: The unit with any plural 's' removed.
+        :raises ScheduleValidationError: The unit is not one of minute, hour or day.
+        """
+        if unit not in _UNSUPPORTED_RATE_UNITS:
+            return
+        raise ScheduleValidationError(f"rate '{rate}' is in {unit}s; the finest supported unit is one minute — use minutes, hours or days")
 
     @staticmethod
     def _reject_plural_mismatch(rate: str, amount: int, supplied_unit: str, unit: str) -> None:

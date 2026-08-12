@@ -15,6 +15,7 @@ from .errors import (
     SchedulerNotFoundError,
     SchedulerPermissionError,
     ScheduleValidationError,
+    http_status_for,
 )
 from .expression import ScheduleExpression
 from .factory import SchedulerFactory
@@ -48,4 +49,5 @@ __all__ = [
     "SchedulerNotFoundError",
     "SchedulerPermissionError",
     "TaskStatus",
+    "http_status_for",
 ]

@@ -15,8 +15,10 @@ keep importing the capability free of a pytest dependency.
 
 import copy
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from unittest.mock import patch
 
 import pytest
 
@@ -58,7 +60,7 @@ class InMemoryScheduledTaskStore(ScheduledTaskStore):
             for record in sorted(self._records.values(), key=lambda item: item["scheduled_task_id"])
             if record.get("owner_id") == owner_id and not record.get("deleted")
         ]
-        offset = PageCursor.decode(cursor) or 0
+        offset = PageCursor.decode(cursor, expected_type=int) or 0
         window = live[offset : offset + limit] if limit is not None else live[offset:]
         next_offset = offset + len(window)
         return ScheduledTaskPage(items=window, next_cursor=PageCursor.encode(next_offset) if next_offset < len(live) else None)
@@ -112,6 +114,23 @@ class SchedulerContract:
         """Return the implementation under test."""
         raise NotImplementedError("override the scheduler fixture")
 
+    @staticmethod
+    @contextmanager
+    def no_store_write(scheduler: Scheduler):
+        """Assert the block performs no row write on the scheduler's store.
+
+        A guard rejection returning ``False`` is only half the contract: it must also leave the
+        row untouched. Asserted on the store rather than by re-reading the row, so a write of
+        identical values would still fail.
+
+        :param scheduler: The implementation under test, whose private store is patched.
+        """
+        store = scheduler._store
+        with patch.object(store, "update_fields", wraps=store.update_fields) as update_fields, patch.object(store, "put", wraps=store.put) as put:
+            yield
+            update_fields.assert_not_called()
+            put.assert_not_called()
+
     def test_upsert_then_get_round_trips(self, scheduler: Scheduler):
         task = build_task("schedule_round_trip")
         scheduler.upsert(task)
@@ -158,23 +177,26 @@ class SchedulerContract:
         assert loaded.last_run_at is not None
 
     def test_outcome_is_discarded_for_an_absent_row(self, scheduler: Scheduler):
-        assert scheduler.mark_run_completed("schedule_absent", "v1", datetime.now(timezone.utc), RunStatus.COMPLETED) is False
+        with self.no_store_write(scheduler):
+            assert scheduler.mark_run_completed("schedule_absent", "v1", datetime.now(timezone.utc), RunStatus.COMPLETED) is False
 
     def test_outcome_is_discarded_for_a_deleted_row(self, scheduler: Scheduler):
         task = build_task("schedule_deleted_outcome")
         scheduler.upsert(task)
         scheduler.delete(task.scheduled_task_id)
 
-        assert (
-            scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, datetime.now(timezone.utc), RunStatus.COMPLETED)
-            is False
-        )
+        with self.no_store_write(scheduler):
+            assert (
+                scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, datetime.now(timezone.utc), RunStatus.COMPLETED)
+                is False
+            )
 
     def test_outcome_is_discarded_for_a_different_incarnation(self, scheduler: Scheduler):
         task = build_task("schedule_incarnation", version="v-current")
         scheduler.upsert(task)
 
-        assert scheduler.mark_run_completed(task.scheduled_task_id, "v-previous", datetime.now(timezone.utc), RunStatus.COMPLETED) is False
+        with self.no_store_write(scheduler):
+            assert scheduler.mark_run_completed(task.scheduled_task_id, "v-previous", datetime.now(timezone.utc), RunStatus.COMPLETED) is False
 
     def test_outcome_is_discarded_when_older_than_the_recorded_run(self, scheduler: Scheduler):
         task = build_task("schedule_stale")
@@ -183,7 +205,8 @@ class SchedulerContract:
         older = newer - timedelta(hours=1)
 
         scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, newer, RunStatus.COMPLETED)
-        assert scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, older, RunStatus.FAILED) is False
+        with self.no_store_write(scheduler):
+            assert scheduler.mark_run_completed(task.scheduled_task_id, task.scheduled_task_version, older, RunStatus.FAILED) is False
         assert scheduler.get(task.scheduled_task_id).last_run_status == RunStatus.COMPLETED
 
     def test_one_time_task_completes_on_its_outcome(self, scheduler: Scheduler):

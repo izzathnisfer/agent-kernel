@@ -16,9 +16,13 @@ class _FakeService:
 
 
 class _FakeHandler:
+    # Sentinel rather than None, so an assertion can tell "never bound" from "bound to None".
+    NEVER_BOUND = object()
+
     def __init__(self, service):
         self.service = service
         self.initialized_with = None
+        self.bound_user_id = _FakeHandler.NEVER_BOUND
 
     def initialize(self, session_id, agent):
         self.initialized_with = (session_id, agent)
@@ -63,12 +67,15 @@ async def test_process_stream_chat_async_defaults_to_json(monkeypatch):
     monkeypatch.setattr("agentkernel.core.chat_service.AgentHandler", lambda: fake_handler)
 
     service = ChatService()
-    req = BaseChatRequest(prompt="Hi", session_id="session-1", agent="test-agent")
+    req = BaseChatRequest(prompt="Hi", session_id="session-1", agent="test-agent", user_id="user-9")
 
     gen = await service.process_stream_chat_async(req=req)
     payloads = [payload async for payload in gen]
 
     assert fake_handler.initialized_with == ("session-1", "test-agent")
+    # The seam the scheduling tools' ownership model rests on: without it every tool call
+    # refuses with "no authenticated owner".
+    assert fake_handler.bound_user_id == "user-9"
     assert fake_service.received_requests == ["request-1"]
     assert payloads == [
         '{"delta": "Hello", "done": false, "session_id": "session-1"}',
@@ -134,11 +141,12 @@ def test_process_stream_chat_sync_yields_chunks(monkeypatch):
     monkeypatch.setattr("agentkernel.core.chat_service.AgentHandler", lambda: fake_handler)
 
     service = ChatService()
-    req = BaseRunRequest(prompt="Hi", session_id="session-1", agent="test-agent")
+    req = BaseRunRequest(prompt="Hi", session_id="session-1", agent="test-agent", user_id="user-9")
 
     collected = list(service.process_stream_chat_sync(req=req))
 
     assert fake_handler.initialized_with == ("session-1", "test-agent")
+    assert fake_handler.bound_user_id == "user-9"
     assert collected == [
         '{"delta": "Hello", "done": false, "session_id": "session-1"}',
         '{"done": true, "session_id": "session-1"}',

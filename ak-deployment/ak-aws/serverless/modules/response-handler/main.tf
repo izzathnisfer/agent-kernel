@@ -285,7 +285,7 @@ resource "aws_lambda_event_source_mapping" "response_handler_output_queue" {
 
 resource "aws_iam_policy" "scheduler_policy" {
   count = var.scheduled_task ? 1 : 0
-  name  = "${var.product_alias}-${var.env_alias}-${var.response_handler.function_name}-scheduler"
+  name  = "${var.product_alias}-${var.env_alias}-${local.response_handler_module_name}-${local.response_handler_function_name}-scheduler"
 
   policy = jsonencode({
     Version = "2012-10-17"

@@ -14,7 +14,6 @@ from typing import Any, Optional
 from ..core.base import Session
 from ..core.model import REQUEST_USER_ID_KEY, SystemTool
 from ..core.tool import ToolContext
-from .errors import SchedulerError
 from .factory import SchedulerFactory
 from .model import ScheduledTask, ScheduleMode, ScheduleSpec
 
@@ -75,6 +74,16 @@ class _ToolSupport:
         return ScheduleSpec.model_validate(payload)
 
     @staticmethod
+    def parse_mode(mode: Optional[str]) -> Optional[ScheduleMode]:
+        """Parse a bare ``mode`` argument, for an update that supplies no timing expression.
+
+        :param mode: ``per_run``, ``continuous``, or None to leave the mode alone.
+        :return: The parsed mode, or None when the caller named none.
+        :raises ValueError: The value is not a mode.
+        """
+        return ScheduleMode(mode) if mode is not None else None
+
+    @staticmethod
     def summarize(task: ScheduledTask) -> dict[str, Any]:
         """Render a scheduled task for the model, omitting internal bookkeeping.
 
@@ -126,17 +135,17 @@ def create_scheduled_task(
     Returns:
         JSON with scheduled_task_id, next_run_at and session_id; or {"error": ...} on failure.
     """
-    service = _ToolSupport.service()
-    if service is None:
-        return _DISABLED
-    owner_id = _ToolSupport.owner_id()
-    if owner_id is None:
-        return _NO_OWNER
     try:
+        service = _ToolSupport.service()
+        if service is None:
+            return _DISABLED
+        owner_id = _ToolSupport.owner_id()
+        if owner_id is None:
+            return _NO_OWNER
         spec = _ToolSupport.build_spec(cron, rate, at, mode, scheduled_task_id)
         ack = service.create(spec=spec, prompt=prompt, agent=agent, owner_id=owner_id)
         return ack.model_dump_json(exclude_none=True)
-    except (SchedulerError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 — tools never raise into the framework
         _log.warning("create_scheduled_task failed: %s", exc)
         return _ToolSupport.error(exc)
 
@@ -166,17 +175,27 @@ def update_scheduled_task(
     Returns:
         JSON with the updated task; or {"error": ...} on failure.
     """
-    service = _ToolSupport.service()
-    if service is None:
-        return _DISABLED
-    owner_id = _ToolSupport.owner_id()
-    if owner_id is None:
-        return _NO_OWNER
     try:
+        service = _ToolSupport.service()
+        if service is None:
+            return _DISABLED
+        owner_id = _ToolSupport.owner_id()
+        if owner_id is None:
+            return _NO_OWNER
         spec = _ToolSupport.build_spec(cron, rate, at, mode, scheduled_task_id) if (cron or rate or at) else None
-        task = service.update(scheduled_task_id, owner_id=owner_id, spec=spec, prompt=prompt, agent=agent)
+        # A mode-only change carries no timing expression to hang the mode on, so it is passed
+        # separately and applied to the schedule the task already has. Dropping it here would
+        # report success for a change that never happened.
+        task = service.update(
+            scheduled_task_id,
+            owner_id=owner_id,
+            spec=spec,
+            prompt=prompt,
+            agent=agent,
+            mode=_ToolSupport.parse_mode(mode) if spec is None else None,
+        )
         return json.dumps(_ToolSupport.summarize(task))
-    except (SchedulerError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 — tools never raise into the framework
         _log.warning("update_scheduled_task failed: %s", exc)
         return _ToolSupport.error(exc)
 
@@ -191,16 +210,16 @@ def delete_scheduled_task(scheduled_task_id: str) -> str:
     Returns:
         JSON with scheduled_task_id and deleted=true; or {"error": ...} on failure.
     """
-    service = _ToolSupport.service()
-    if service is None:
-        return _DISABLED
-    owner_id = _ToolSupport.owner_id()
-    if owner_id is None:
-        return _NO_OWNER
     try:
+        service = _ToolSupport.service()
+        if service is None:
+            return _DISABLED
+        owner_id = _ToolSupport.owner_id()
+        if owner_id is None:
+            return _NO_OWNER
         service.delete(scheduled_task_id, owner_id=owner_id)
         return json.dumps({"scheduled_task_id": scheduled_task_id, "deleted": True})
-    except (SchedulerError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 — tools never raise into the framework
         _log.warning("delete_scheduled_task failed: %s", exc)
         return _ToolSupport.error(exc)
 
@@ -216,16 +235,16 @@ def list_scheduled_tasks(limit: Optional[int] = None, cursor: Optional[str] = No
     Returns:
         JSON {"tasks": [...], "next_cursor": ...}; or {"error": ...} on failure.
     """
-    service = _ToolSupport.service()
-    if service is None:
-        return _DISABLED
-    owner_id = _ToolSupport.owner_id()
-    if owner_id is None:
-        return _NO_OWNER
     try:
+        service = _ToolSupport.service()
+        if service is None:
+            return _DISABLED
+        owner_id = _ToolSupport.owner_id()
+        if owner_id is None:
+            return _NO_OWNER
         page = service.list(owner_id=owner_id, limit=limit, cursor=cursor)
         return json.dumps({"tasks": [_ToolSupport.summarize(task) for task in page.items], "next_cursor": page.next_cursor})
-    except (SchedulerError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 — tools never raise into the framework
         _log.warning("list_scheduled_tasks failed: %s", exc)
         return _ToolSupport.error(exc)
 

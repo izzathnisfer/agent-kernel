@@ -174,8 +174,13 @@ class TestScheduledRunOutcomes:
 
     def test_an_errored_run_is_recorded_as_failed_with_its_error(self, scheduler):
         record = _make_record({"error": "agent blew up", "scheduled_run": self.SCHEDULED_RUN})
-        ECSOutputConsumer.process_message(record)
 
+        # Patched like its siblings: if the scheduled branch's early return ever regresses, this
+        # must fail as an assertion rather than proceed into a real DynamoDB call.
+        with patch.object(ECSOutputConsumer, "_get_response_store") as store:
+            ECSOutputConsumer.process_message(record)
+
+        store.assert_not_called()
         kwargs = scheduler.mark_run_completed.call_args.kwargs
         assert kwargs["status"].value == "FAILED"
         assert kwargs["last_error"] == "agent blew up"
@@ -189,8 +194,10 @@ class TestScheduledRunOutcomes:
             endpoint_url=None,
         )
 
-        ECSOutputConsumer.process_message(record)  # must not raise
+        with patch.object(ECSOutputConsumer, "_get_response_store") as store:
+            ECSOutputConsumer.process_message(record)  # must not raise
 
+        store.assert_not_called()
         scheduler.mark_run_completed.assert_called_once()
 
     def test_an_ordinary_response_is_still_stored(self, scheduler):

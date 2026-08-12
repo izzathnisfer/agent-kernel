@@ -13,6 +13,7 @@ its cursor is the last id read, so paging is stable against tasks added or remov
 import json
 import logging
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Optional
 
@@ -60,15 +61,29 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
             return True
 
         with self._row_lock(scheduled_task_id):
-            record = self._read_record(scheduled_task_id)
-            if record is None:
-                return False
-            if expected_version is not None and record.get("scheduled_task_version") != expected_version:
-                self._log.warning("Rejected update of %s: scheduled_task_version is not %s", scheduled_task_id, expected_version)
-                return False
-            record.update(TaskSerializer.encode_fields(fields))
-            self._driver.set(self._row_key(scheduled_task_id), json.dumps(record))
-            return True
+            return self._merge_locked(scheduled_task_id, fields, expected_version)
+
+    def _merge_locked(self, scheduled_task_id: str, fields: dict[str, Any], expected_version: Optional[str]) -> bool:
+        """Read, merge and write one row. **The caller must already hold the row lock.**
+
+        Split out of ``update_fields`` so ``soft_delete`` can merge and then set the row's
+        expiry without releasing the lock in between; the lock is not reentrant, so it cannot
+        simply call ``update_fields``.
+
+        :param scheduled_task_id: Identity of the row to merge into.
+        :param fields: Attribute names mapped to their new values.
+        :param expected_version: When given, the write applies only if the stored version matches.
+        :return: False when the row is absent or the version does not match; True when written.
+        """
+        record = self._read_record(scheduled_task_id)
+        if record is None:
+            return False
+        if expected_version is not None and record.get("scheduled_task_version") != expected_version:
+            self._log.warning("Rejected update of %s: scheduled_task_version is not %s", scheduled_task_id, expected_version)
+            return False
+        record.update(TaskSerializer.encode_fields(fields))
+        self._driver.set(self._row_key(scheduled_task_id), json.dumps(record))
+        return True
 
     def get(self, scheduled_task_id: str) -> Optional[ScheduledTask]:
         record = self._read_record(scheduled_task_id)
@@ -79,7 +94,9 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
         # task is created, deleted or pruned between pages, and an offset then skips or repeats rows.
         owner_key = self._owner_key(owner_id)
         task_ids = sorted(self._driver.smembers(owner_key))
-        after = PageCursor.decode(cursor)
+        # str: this backend resumes after an id, and comparing a non-string against one would
+        # raise a TypeError below rather than reject the cursor.
+        after = PageCursor.decode(cursor, expected_type=str)
         pending = [task_id for task_id in task_ids if after is None or task_id > after]
 
         items: list[ScheduledTask] = []
@@ -114,10 +131,17 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
 
     def soft_delete(self, scheduled_task_id: str, deleted_at: datetime, ttl_seconds: int) -> None:
         self._log.debug("Soft-deleting scheduled task %s with a %ss grace window", scheduled_task_id, ttl_seconds)
-        self.update_fields(scheduled_task_id, {"deleted": True, "deleted_at": deleted_at})
-        # The native handle, because the driver's expire() can only apply its own configured
-        # TTL while the soft-delete window is derived per call.
-        self._driver.client.expire(name=self._row_key(scheduled_task_id), time=int(ttl_seconds))
+        # One lock across both steps: with the expiry set after releasing it, a concurrent put
+        # landing in between would rewrite the row and clear the grace window, leaving a
+        # tombstone that never expires.
+        with self._row_lock(scheduled_task_id):
+            if not self._merge_locked(scheduled_task_id, {"deleted": True, "deleted_at": deleted_at}, None):
+                # Idempotent, like the rest of the delete path: no row left to tombstone.
+                self._log.info("Nothing to soft-delete at %s; the row is already gone", scheduled_task_id)
+                return
+            # The native handle, because the driver's expire() can only apply its own configured
+            # TTL while the soft-delete window is derived per call.
+            self._driver.client.expire(name=self._row_key(scheduled_task_id), time=int(ttl_seconds))
 
     def _read_record(self, scheduled_task_id: str) -> Optional[dict[str, Any]]:
         """Read one row's raw record.
@@ -139,8 +163,22 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
         return _RowLock(self._driver, self._lock_key(scheduled_task_id))
 
 
+# Releases the lock only if this holder still owns it. An unconditional DELETE lets a writer
+# whose read-merge-write outlived the lock TTL (a driver reconnect can stall one) delete the
+# lock a second writer has since taken, after which two merges interleave.
+_RELEASE_IF_MINE = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+
 class _RowLock:
-    """Short-lived ``SET NX`` guard around a row's read-merge-write."""
+    """Short-lived ``SET NX`` guard around a row's read-merge-write.
+
+    Fenced with a per-acquisition token so a release can only ever drop this holder's own lock.
+    """
 
     _log = logging.getLogger("ak.scheduler.store.lock")
 
@@ -151,18 +189,27 @@ class _RowLock:
         """
         self._driver = driver
         self._key = key
+        # Unique per lock object, so two writers can never hold the same token.
+        self._token = uuid.uuid4().hex
 
     def __enter__(self) -> "_RowLock":
         for _ in range(UPDATE_LOCK_ATTEMPTS):
-            if self._driver.client.set(self._key, "1", nx=True, ex=UPDATE_LOCK_TTL_SECONDS):
+            if self._driver.client.set(self._key, self._token, nx=True, ex=UPDATE_LOCK_TTL_SECONDS):
                 return self
             time.sleep(UPDATE_LOCK_RETRY_DELAY_SECONDS)
         raise SchedulerConflictError(f"another writer holds {self._key}; retry the request")
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         try:
-            self._driver.client.delete(self._key)
+            # Compare-and-delete in one round trip, so there is no window between the check and
+            # the delete for the lock to change hands in.
+            released = self._driver.client.eval(_RELEASE_IF_MINE, 1, self._key, self._token)
         except Exception:
             # The lock's own TTL releases it; failing to clean up must not mask the
             # caller's outcome.
             self._log.warning("Failed to release scheduled-task lock %s; it expires in %ss", self._key, UPDATE_LOCK_TTL_SECONDS)
+            return
+        if not released:
+            # The lock expired mid-write and someone else may have taken it, so this write raced
+            # another. Worth knowing about: it means a merge took longer than the lock TTL.
+            self._log.warning("Scheduled-task lock %s was no longer held at release; it expired mid-write", self._key)

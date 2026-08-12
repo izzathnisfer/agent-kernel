@@ -9,7 +9,7 @@ from ......auth.handler import AuthValidator
 from ......core.chat_service import ChatService
 from ......core.config import AKConfig, ExecutionMode
 from ......core.model import BaseRequest, StreamChunk
-from ......scheduler import CreateAck, SchedulerError, SchedulerFactory
+from ......scheduler import CreateAck, SchedulerError, SchedulerFactory, http_status_for
 from ....core.sqs_handler import SQSHandler
 from ....core.websocket_service import AWSWebSocketHandler, WebSocketConnectionStore
 from .common import BaseLambdaRouter
@@ -316,13 +316,16 @@ class SystemRoutesHandler(LambdaWSHandler):
         :return: Tuple of (status_code, response_body)
         """
 
+        # Checked before delegating: _handle_msg_and_brdcst answers 200 or 500 only, so a
+        # rejection cannot be expressed from inside the operation.
+        rejection = self._reject_direct_mode_schedule(event)
+        if rejection is not None:
+            return rejection
+
         def _process_chat(ws_message_info: "LambdaWSHandler.WSMessageInfo") -> Dict[str, Any]:
             request = ws_message_info.request
             if request.body is None:
                 raise ValueError("body is required")
-            # A frame carrying a schedule is registered, never run now, in queue and direct mode alike.
-            if request.body.schedule is not None:
-                return self._register_schedule(ws_message_info).model_dump(mode="json", exclude_none=True)
             _, res_body = self._chat_service.process_chat_request(request.body)
             return res_body
 
@@ -350,9 +353,9 @@ class SystemRoutesHandler(LambdaWSHandler):
             request = ws_message_info.request
             if request.body is None:
                 raise ValueError("body is required")
-            # A frame carrying a schedule is registered, never streamed now, in queue and direct mode alike.
+            # Direct mode consumes no input queue, so a schedule is refused rather than registered.
             if request.body.schedule is not None:
-                return self._create_scheduled_task(event, ws_message_info)
+                return self._direct_mode_rejection(user_id)
             session_id = request.body.session_id
 
             endpoint_url = LambdaWSHandler.construct_endpoint_url(event)
@@ -375,6 +378,38 @@ class SystemRoutesHandler(LambdaWSHandler):
                 pass
             return 500, self._build_lambda_response(user_id=user_id, msg="Stream request processing failed", success=False)
 
+    def _reject_direct_mode_schedule(self, event: Dict[str, Any]) -> Optional[Tuple[int, Dict[str, Any]]]:
+        """Refuse a frame asking to be scheduled on a deployment that consumes no input queue.
+
+        Scheduling is a queue-mode capability: the timer's target is the input queue, and in
+        direct mode nothing consumes it, so a registration here would be acknowledged and then
+        never run. Refusing keeps the whole capability queue-mode-only, as the design scopes it.
+
+        The frame is parsed a second time (the normal path parses it again), which is one
+        in-memory parse of one frame and buys a rejection the generic handler cannot express.
+
+        :param event: WebSocket event dictionary.
+        :return: The 400 rejection, or None when the frame carries no ``schedule`` block.
+        """
+        try:
+            ws_message_info = self._parse_event_to_wsmessage(event)
+        except Exception:  # noqa: BLE001 — not a scheduling question; let the normal path report it
+            return None
+        body = ws_message_info.request.body
+        if body is None or body.schedule is None:
+            return None
+        return self._direct_mode_rejection(ws_message_info.user_id)
+
+    def _direct_mode_rejection(self, user_id: Optional[str]) -> Tuple[int, Dict[str, Any]]:
+        """Build the direct-mode refusal, so both direct chat paths answer it identically.
+
+        :param user_id: The connection's authenticated user, for the response envelope.
+        :return: Tuple of (400, response_body).
+        """
+        message = "Scheduling requires queue mode; this deployment runs requests directly"
+        self._log.warning(f"Rejected a schedule frame on a direct-mode deployment for user_id={user_id}")
+        return (400, self._build_lambda_response(user_id=user_id, msg=message, success=False))
+
     def _create_scheduled_task(
         self,
         event: Dict[str, Any],
@@ -393,8 +428,11 @@ class SystemRoutesHandler(LambdaWSHandler):
         try:
             ack = self._register_schedule(ws_message_info)
         except (SchedulerError, ValueError) as e:
-            self._log.warning(f"Scheduled task creation failed for user_id={user_id}: {e}")
-            return (400, self._build_lambda_response(user_id=user_id, msg=str(e), success=False))
+            # Mapped, not collapsed to 400: an ownership or state conflict reads the same here as
+            # on the REST route.
+            status_code = http_status_for(e)
+            self._log.warning(f"Scheduled task creation failed for user_id={user_id} with {status_code}: {e}")
+            return (status_code, self._build_lambda_response(user_id=user_id, msg=str(e), success=False))
 
         self._broadcast_ack(ack, event, user_id)
         response_body = self._build_lambda_response(user_id=user_id, msg="Request scheduled successfully", success=True)
@@ -404,8 +442,7 @@ class SystemRoutesHandler(LambdaWSHandler):
     def _register_schedule(self, ws_message_info: "LambdaWSHandler.WSMessageInfo") -> CreateAck:
         """Register the frame's ``schedule`` block against the connection's authenticated user.
 
-        Shared by the queue-mode and direct-mode chat paths. Errors are raised so each caller
-        can report them in its own response shape.
+        Reached from the queue-mode chat paths only; the direct-mode paths refuse before here.
 
         :param ws_message_info: The parsed frame and its authenticated user.
         :return: The creation acknowledgement.

@@ -13,6 +13,7 @@ from conftest_scheduler import enable_scheduler_config, install_scheduler, reset
 from agentkernel.core.config import AKConfig, _DynamoDBConfig
 from agentkernel.core.model import ExecutionMode
 from agentkernel.deployment.aws.serverless.core.router.ws_lambda import LambdaWSHandler, SystemRoutesHandler
+from agentkernel.scheduler.errors import SchedulerNotFoundError
 from agentkernel.scheduler.testing import InMemoryScheduledTaskStore
 
 OWNER = "u1"
@@ -105,26 +106,61 @@ def test_a_too_fine_schedule_is_rejected(handler):
     assert status == 400
 
 
-class TestDirectMode:
-    """A deployment without queues must still schedule rather than run the frame now."""
+def test_another_owners_live_row_is_403_not_400(handler):
+    """The WS surface must not collapse ownership and state conflicts into a generic bad request."""
+    handler._handle_queue_mode(_event(_schedule_body()))
+    handler.get_user_id = MagicMock(return_value="someone-else")
 
-    def test_direct_chat_registers_instead_of_running_the_agent(self, handler):
+    status, _ = handler._handle_queue_mode(_event(_schedule_body()))
+
+    assert status == 403
+
+
+def test_a_soft_deleted_id_is_409_not_400(handler):
+    handler._handle_queue_mode(_event(_schedule_body()))
+    handler._schedule_service.delete("a", owner_id=OWNER)
+
+    status, _ = handler._handle_queue_mode(_event(_schedule_body()))
+
+    assert status == 409
+
+
+class TestDirectMode:
+    """A deployment without queues refuses to schedule, because a fire would have nowhere to land.
+
+    Scheduling is queue-mode-only: the timer's target is the input queue, and direct mode consumes
+    no queue, so a registration here would be acknowledged and then never run. Refusing is a 400 —
+    it must not run the prompt now either, which is what a caller asking for "later" least wants.
+    """
+
+    def test_direct_chat_refuses_to_register(self, handler):
         handler._chat_service = MagicMock()
 
-        status, _ = handler._handle_direct_chat(_event(_schedule_body()))
+        status, body = handler._handle_direct_chat(_event(_schedule_body()))
 
-        assert status == 200
+        assert status == 400
+        assert "queue mode" in body["message"]
         handler._chat_service.process_chat_request.assert_not_called()
-        assert handler.broadcast.call_args.kwargs["message"]["status"] == "SCHEDULED"
+        # Nothing registered, so nothing to acknowledge.
+        handler.broadcast.assert_not_called()
 
-    def test_direct_stream_registers_instead_of_streaming(self, handler):
+    def test_direct_chat_registers_nothing(self, handler):
+        """A 400 that still wrote the row would leave a task nothing ever runs."""
+        handler._chat_service = MagicMock()
+
+        handler._handle_direct_chat(_event(_schedule_body()))
+
+        with pytest.raises(SchedulerNotFoundError):
+            handler._schedule_service.get("a", owner_id=OWNER)
+
+    def test_direct_stream_refuses_to_register(self, handler):
         AKConfig.get().execution.mode = ExecutionMode.STREAM
         handler._chat_service = MagicMock()
 
         status, body = handler._handle_stream_direct(_event(_schedule_body()))
 
-        assert status == 201
-        assert body["scheduled_task_id"] == "a"
+        assert status == 400
+        assert "queue mode" in body["message"]
         handler._chat_service.process_stream_chat_sync.assert_not_called()
 
     def test_an_ordinary_direct_frame_still_reaches_the_agent(self, handler):

@@ -240,3 +240,58 @@ class TestServerlessScheduleCreate:
 
         assert status == 400
         assert "not enabled" in body["error"]
+
+    def test_another_owners_live_row_is_403(self, handler):
+        handler._handle_rest_sync(self._event(self._schedule_body()), context=None)
+
+        status, _ = handler._handle_rest_sync(self._event(self._schedule_body(), principal_id="u2"), context=None)
+
+        assert status == 403
+
+    def test_a_soft_deleted_id_is_409(self, handler):
+        handler._handle_rest_sync(self._event(self._schedule_body()), context=None)
+        handler._schedule_service.delete("a", owner_id="u1")
+
+        status, _ = handler._handle_rest_sync(self._event(self._schedule_body()), context=None)
+
+        assert status == 409
+
+    def test_an_unparseable_schedule_block_is_400(self, handler):
+        """Pydantic rejects it before the schedule branch runs, but the caller is still owed why."""
+        status, body = handler._handle_rest_sync(self._event({"prompt": "hi", "schedule": {"rate": "1 hour", "cron": "0 9 * * ? *"}}), context=None)
+
+        assert status == 400
+        assert "exactly one" in body["error"]
+
+
+class TestOrdinaryRequestsAreUnaffected:
+    """The scheduling branch's statuses must not leak onto requests that carry no schedule."""
+
+    @pytest.fixture(autouse=True)
+    def _scheduler_config(self):
+        enable_scheduler_config()
+        install_scheduler(InMemoryScheduledTaskStore())
+        yield
+        reset_scheduler_config()
+
+    @pytest.fixture
+    def handler(self):
+        with patch("agentkernel.deployment.aws.serverless.core.router.rest_lambda.ResponseDBHandler"):
+            return DefaultEndpointsHandler()
+
+    def test_a_body_missing_its_session_id_still_answers_500(self, handler):
+        """The pre-change behaviour: _send_to_queue's ValueError is not a schedule rejection."""
+        event = {"httpMethod": "POST", "body": json.dumps({"prompt": "hi"}), "requestContext": {}}
+
+        status, body = handler._handle_async_submit(event, context=None)
+
+        assert status == 500
+        assert body["error"] == "An unexpected error occurred"
+
+    def test_an_unparseable_ordinary_body_still_answers_500_without_echoing_the_reason(self, handler):
+        event = {"httpMethod": "POST", "body": "{not json", "requestContext": {}}
+
+        status, body = handler._handle_async_submit(event, context=None)
+
+        assert status == 500
+        assert body["error"] == "An unexpected error occurred"

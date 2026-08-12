@@ -7,6 +7,11 @@
 # agent message on the same input queue and the agent runner executes it with no
 # scheduling-specific code path.
 module "serverless_agents" {
+  # NOTE: `scheduled_task` and `scheduled_task_config` below were added after 0.8.1, so this
+  # pin has to be bumped to the first published version that carries them before
+  # `terraform init && terraform apply` succeeds. Until that release lands, point `source` at
+  # the in-repo module instead and drop `version`:
+  #   source = "../../../../ak-deployment/ak-aws/serverless"
   source  = "yaalalabs/ak-serverless/aws"
   version = "0.8.1"
 

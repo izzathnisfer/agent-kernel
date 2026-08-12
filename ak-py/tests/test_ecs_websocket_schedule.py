@@ -115,6 +115,31 @@ async def test_a_too_fine_schedule_is_rejected(handler, broadcast):
 
 
 @pytest.mark.asyncio
+async def test_another_owners_live_row_is_403_not_400(handler, broadcast):
+    """The WS surface must not collapse ownership and state conflicts into a generic bad request."""
+    body = {"prompt": "hi", "schedule": {"rate": "1 hour", "id": "a"}}
+    await _handle(handler, body)
+
+    context = handler.WSRouteContext(message=_frame(body), user_id="someone-else", connection_id="c1", endpoint_url=ENDPOINT_URL)
+    with patch.object(ECSWebSocketRequestHandler, "build_route_context", AsyncMock(return_value=context)):
+        with patch("agentkernel.deployment.aws.containerized.core.api.websocket_api.SQSHandler"):
+            response = await handler._handle_chat(MagicMock())
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_a_soft_deleted_id_is_409_not_400(handler, broadcast):
+    body = {"prompt": "hi", "schedule": {"rate": "1 hour", "id": "a"}}
+    await _handle(handler, body)
+    handler._schedule_service.delete("a", owner_id=OWNER)
+
+    response, _ = await _handle(handler, body)
+
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_an_unauthenticated_connection_is_rejected_before_the_branch(handler):
     """build_route_context already raises 401 when the connection has no user."""
     error = ECSWebSocketRequestHandler.WSRouteError(401, "No user found for connection_id: c1")

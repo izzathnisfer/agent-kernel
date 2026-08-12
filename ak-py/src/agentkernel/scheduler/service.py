@@ -52,13 +52,15 @@ class ScheduledTaskService:
         :param owner_id: The caller's authenticated identity, resolved by the caller.
         :param request_id: Correlation id for this create call; generated when absent.
         :return: The acknowledgement, confirming registration and never execution.
-        :raises ScheduleValidationError: The schedule is invalid or too fine.
+        :raises ScheduleValidationError: The schedule is invalid or too fine, or the supplied
+            id is not one the provider's timer can register.
         :raises SchedulerPermissionError: A live row at that id belongs to someone else.
         :raises SchedulerConflictError: The id is soft-deleted; deletion is terminal.
         """
         ScheduleExpression.validate(spec, self._scheduler.minimum_granularity)
 
         scheduled_task_id = spec.id or f"{GENERATED_ID_PREFIX}{uuid.uuid4().hex}"
+        self._validate_id(scheduled_task_id)
         existing = self._resolve_existing(scheduled_task_id, owner_id)
         now = datetime.now(timezone.utc)
 
@@ -86,6 +88,7 @@ class ScheduledTaskService:
         spec: Optional[ScheduleSpec] = None,
         prompt: Optional[str] = None,
         agent: Optional[str] = None,
+        mode: Optional[ScheduleMode] = None,
     ) -> ScheduledTask:
         """Change an existing scheduled task's schedule or message.
 
@@ -97,6 +100,10 @@ class ScheduledTaskService:
         :param spec: Replacement schedule; the existing one is kept when omitted.
         :param prompt: Replacement prompt; the existing one is kept when omitted.
         :param agent: Replacement agent; the existing one is kept when omitted.
+        :param mode: Replacement conversation mode, for a caller changing the mode without
+            retiming the task. It is applied to whichever schedule this update keeps, so a
+            mode-only change is a real change rather than a silently dropped argument. A
+            replacement ``spec`` carries its own mode, so the two are not combined.
         :return: The updated scheduled task.
         :raises SchedulerNotFoundError: There is no live row at that id.
         :raises SchedulerPermissionError: The caller does not own it.
@@ -110,6 +117,10 @@ class ScheduledTaskService:
         schedule = existing.schedule if spec is None else self._with_existing_mode(spec, existing.schedule)
         if spec is not None:
             ScheduleExpression.validate(schedule, self._scheduler.minimum_granularity)
+        elif mode is not None:
+            # No timing change, so nothing to re-validate: only the conversation the runs share
+            # moves. The re-registration below is what makes the new session id take effect.
+            schedule = schedule.model_copy(update={"mode": mode})
 
         task = existing.model_copy(
             update={
@@ -170,6 +181,21 @@ class ScheduledTaskService:
         return self._scheduler.list(owner_id, limit=limit, cursor=cursor)
 
     # ------------------------------------------------------------------ helpers
+
+    def _validate_id(self, scheduled_task_id: str) -> None:
+        """Reject an id the provider's timer could not register, before anything is written.
+
+        A caller-chosen id becomes the timer's own registration name, so an id outside the
+        provider's charset would otherwise fail on the provider round trip — after the row
+        write, leaving the caller a provider-side error instead of a validation one.
+
+        :param scheduled_task_id: The resolved id, caller-supplied or generated.
+        :raises ScheduleValidationError: The id does not match the provider's pattern.
+        """
+        pattern = self._scheduler.id_pattern
+        if pattern is None or pattern.match(scheduled_task_id):
+            return
+        raise ScheduleValidationError(f"scheduled task id '{scheduled_task_id}' is not registrable by this provider; it must match {pattern.pattern}")
 
     def _resolve_existing(self, scheduled_task_id: str, owner_id: str) -> Optional[ScheduledTask]:
         """Resolve what a create at this id is replacing, if anything.

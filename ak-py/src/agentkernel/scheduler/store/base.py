@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from ...core.config import AKConfig
 from ...core.util.factory import AKConfigError, require_extra
+from ..errors import ScheduleValidationError
 from ..model import ScheduledTask, ScheduledTaskPage
 
 # Session store types durable enough to share scheduled tasks across replicas. Anything
@@ -86,19 +87,29 @@ class PageCursor:
         return base64.urlsafe_b64encode(json.dumps(state).encode("utf-8")).decode("ascii")
 
     @staticmethod
-    def decode(cursor: Optional[str]) -> Any:
+    def decode(cursor: Optional[str], expected_type: Optional[type] = None) -> Any:
         """Decode an opaque cursor back into backend continuation state.
 
+        The decoded shape is checked as well as the encoding: a well-formed cursor carrying the
+        wrong type is still a client error, and left unchecked it surfaces further down as a
+        ``TypeError`` or a provider-side rejection rather than as a rejected cursor.
+
         :param cursor: The cursor from a previous page, or None for the first page.
+        :param expected_type: The continuation state the calling backend paginates on; None
+            accepts any shape.
         :return: The decoded state, or None when no cursor was supplied.
-        :raises ValueError: When the cursor is not a cursor this class produced.
+        :raises ScheduleValidationError: The cursor is not one this class produced for this
+            backend.
         """
         if not cursor:
             return None
         try:
-            return json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8"))
+            state = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8"))
         except Exception as exc:
-            raise ValueError(f"invalid pagination cursor: {cursor}") from exc
+            raise ScheduleValidationError(f"invalid pagination cursor: {cursor}") from exc
+        if expected_type is not None and not isinstance(state, expected_type):
+            raise ScheduleValidationError(f"invalid pagination cursor: {cursor}")
+        return state
 
 
 class ScheduledTaskStore(ABC):

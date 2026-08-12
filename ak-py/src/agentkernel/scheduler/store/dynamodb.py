@@ -71,8 +71,13 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
         }
         if expression_values:
             kwargs["ExpressionAttributeValues"] = expression_values
-        if expected_version is not None:
-            kwargs["ConditionExpression"] = DDBAttr("scheduled_task_version").eq(expected_version)
+        # Always conditioned: an unconditioned update_item on an absent key *creates* an item
+        # holding only the key and the updated fields, which a later get cannot parse as a
+        # ScheduledTask. The version condition subsumes existence; without one, existence alone
+        # is still required so this backend returns False for an absent row like the other two.
+        kwargs["ConditionExpression"] = (
+            DDBAttr("scheduled_task_version").eq(expected_version) if expected_version is not None else DDBAttr("scheduled_task_id").exists()
+        )
 
         try:
             self._driver.table.update_item(**kwargs)
@@ -80,7 +85,9 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
                 raise
-            self._log.warning("Rejected update of %s: scheduled_task_version is not %s", scheduled_task_id, expected_version)
+            self._log.warning(
+                "Rejected update of %s: the row is absent, or its scheduled_task_version is not %s", scheduled_task_id, expected_version
+            )
             return False
 
     def get(self, scheduled_task_id: str) -> Optional[ScheduledTask]:
@@ -96,7 +103,9 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
         }
         if limit is not None:
             kwargs["Limit"] = limit
-        start_key = PageCursor.decode(cursor)
+        # dict: an ExclusiveStartKey of any other shape is rejected by DynamoDB itself, which
+        # would surface a provider ValidationException instead of a rejected cursor.
+        start_key = PageCursor.decode(cursor, expected_type=dict)
         if start_key is not None:
             kwargs["ExclusiveStartKey"] = start_key
 
@@ -113,23 +122,35 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
 
     def soft_delete(self, scheduled_task_id: str, deleted_at: datetime, ttl_seconds: int) -> None:
         self._log.debug("Soft-deleting scheduled task %s with a %ss grace window", scheduled_task_id, ttl_seconds)
-        self._driver.table.update_item(
-            Key={"scheduled_task_id": scheduled_task_id},
-            # Removing the index key drops the tombstone out of the GSI while the row itself
-            # stays readable by primary key.
-            UpdateExpression="SET #deleted = :deleted, #deleted_at = :deleted_at, #ttl = :ttl REMOVE #owner_index",
-            ExpressionAttributeNames={
-                "#deleted": "deleted",
-                "#deleted_at": "deleted_at",
-                "#ttl": TTL_ATTRIBUTE,
-                "#owner_index": OWNER_INDEX_KEY,
-            },
-            ExpressionAttributeValues={
-                ":deleted": True,
-                ":deleted_at": deleted_at.isoformat(),
-                ":ttl": int(time.time()) + int(ttl_seconds),
-            },
-        )
+        try:
+            self._driver.table.update_item(
+                Key={"scheduled_task_id": scheduled_task_id},
+                # Removing the index key drops the tombstone out of the GSI while the row itself
+                # stays readable by primary key.
+                UpdateExpression="SET #deleted = :deleted, #deleted_at = :deleted_at, #ttl = :ttl REMOVE #owner_index",
+                # Without this, an update_item on an absent id *creates* an item holding only the
+                # key and the delete fields, which a later get cannot parse as a ScheduledTask.
+                # Reachable through the check-then-act in AWSScheduler.delete when the row
+                # TTL-expires between the get and this call. The Redis backend writes nothing in
+                # the same situation, and this makes the two agree.
+                ConditionExpression=DDBAttr("scheduled_task_id").exists(),
+                ExpressionAttributeNames={
+                    "#deleted": "deleted",
+                    "#deleted_at": "deleted_at",
+                    "#ttl": TTL_ATTRIBUTE,
+                    "#owner_index": OWNER_INDEX_KEY,
+                },
+                ExpressionAttributeValues={
+                    ":deleted": True,
+                    ":deleted_at": deleted_at.isoformat(),
+                    ":ttl": int(time.time()) + int(ttl_seconds),
+                },
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+            # Idempotent, like the rest of the delete path: there is no row left to tombstone.
+            self._log.info("Nothing to soft-delete at %s; the row is already gone", scheduled_task_id)
 
     @staticmethod
     def _split_by_removal(fields: dict[str, Any]) -> tuple[set[str], set[str]]:

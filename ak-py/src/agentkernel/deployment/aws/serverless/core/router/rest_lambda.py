@@ -6,18 +6,40 @@ from typing import Any, Callable, Dict, Optional
 from ......core.chat_service import ChatService
 from ......core.config import AKConfig
 from ......core.model import BaseRequest, ExecutionMode
-from ......scheduler import SchedulerError, SchedulerFactory
+from ......scheduler import SchedulerError, SchedulerFactory, http_status_for
 from ....core.response_store import ResponseDBHandler
 from ....core.sqs_handler import SQSHandler
 from .common import BaseLambdaRouter
 
 
-class UnauthenticatedScheduleError(Exception):
+class ScheduleRequestError(Exception):
+    """A schedule request that must be answered with its own status rather than a generic 500.
+
+    Carries the status so only the scheduling path can select one. Ordinary chat requests keep
+    the generic 500 they have always had, and no unrelated exception text is echoed to a client.
+    """
+
+    def __init__(self, status_code: int, message: str):
+        """
+        :param status_code: The status this rejection is answered with.
+        :param message: The client-facing reason.
+        """
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class UnauthenticatedScheduleError(ScheduleRequestError):
     """A schedule request arrived with no API Gateway authorizer context.
 
     Python cannot see whether Terraform attached the authorizer to the route, so the identity
     requirement is enforced per request rather than at initialization.
     """
+
+    def __init__(self, message: str):
+        """
+        :param message: The client-facing reason.
+        """
+        super().__init__(401, message)
 
 
 class DefaultEndpointsHandler:
@@ -126,50 +148,96 @@ class DefaultEndpointsHandler:
         """
         request_id = None
         try:
-            request = self._parse_body(event)
+            request = self._parse_body_or_reject(event)
             request_id = request.request_id
             result = operation(request, event)
             # (statusCode, body) will be handled in aklambda.py
             return result if isinstance(result, tuple) else (200, result)
 
-        except UnauthenticatedScheduleError as e:
-            self._log.warning(f"Rejected schedule request with no authorizer context: {e}")
-            return (401, self._build_failure_body(request_id, message=str(e)))
-        except (SchedulerError, ValueError) as e:
-            self._log.warning(f"Schedule request rejected: {e}")
-            return (400, self._build_failure_body(request_id, message=str(e)))
+        # Only the scheduling path raises this, so an ordinary request's failures are untouched
+        # by the statuses below and never have their exception text echoed to the client.
+        except ScheduleRequestError as e:
+            self._log.warning(f"Schedule request rejected with {e.status_code}: {e}")
+            return (e.status_code, self._build_failure_body(request_id, message=str(e)))
 
         # Log and hide unexpected failures behind a generic 500 response.
         except Exception as e:
             self._log.error(f"Request failed: {e}\n{traceback.format_exc()}")
             return (500, self._build_failure_body(request_id))  # (statusCode, body) will be handled in aklambda.py
 
+    def _parse_body_or_reject(self, event: Dict[str, Any]) -> BaseRequest:
+        """Parse the body, answering 400 when an *unparseable* body is a schedule request.
+
+        A malformed ``schedule`` block fails here, in pydantic, before the schedule branch can
+        reject it, and a caller asking for a schedule is owed the reason. Every other parse
+        failure is re-raised so an ordinary chat request keeps the generic 500 it has always had.
+
+        :param event: API Gateway event.
+        :return: The parsed request envelope.
+        :raises ScheduleRequestError: The body carries a ``schedule`` block and does not parse.
+        """
+        try:
+            return self._parse_body(event)
+        except ValueError as e:
+            if not self._carries_schedule(event):
+                raise
+            raise ScheduleRequestError(400, str(e)) from e
+
+    @staticmethod
+    def _carries_schedule(event: Dict[str, Any]) -> bool:
+        """Whether the raw body asks to be scheduled, read without validating it.
+
+        Read from the raw event rather than the parsed model, because the only caller is the
+        path where parsing already failed.
+
+        :param event: API Gateway event.
+        :return: True when a ``schedule`` block is present at either envelope level.
+        """
+        raw = event.get("body")
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        nested = payload.get("body")
+        if isinstance(nested, dict) and nested.get("schedule") is not None:
+            return True
+        return payload.get("schedule") is not None
+
     def _maybe_schedule(self, payload: BaseRequest, event: Dict[str, Any]) -> Optional[tuple[int, Dict[str, Any]]]:
         """Register the request to run later when it carries a ``schedule`` block.
+
+        Every failure leaves here as a ``ScheduleRequestError`` carrying its status, so the
+        statuses match the REST chat route's rather than collapsing into one.
 
         :param payload: The parsed request envelope.
         :param event: The API Gateway event, carrying the authorizer context.
         :return: The 201 acknowledgement, or None when this is an ordinary chat request.
-        :raises ValueError: Scheduling is not enabled for this deployment.
-        :raises UnauthenticatedScheduleError: The event carries no authorizer context.
+        :raises ScheduleRequestError: 400 when scheduling is disabled or the schedule is
+            invalid, 401 with no authorizer context, 403/409 on an ownership or state conflict.
         """
         body = payload.body
         if body is None or body.schedule is None:
             return None
         if self._schedule_service is None:
-            raise ValueError("Scheduling is not enabled for this deployment")
+            raise ScheduleRequestError(400, "Scheduling is not enabled for this deployment")
 
         owner_id = event.get("requestContext", {}).get("authorizer", {}).get("principalId")
         if not owner_id:
             raise UnauthenticatedScheduleError("a scheduled task requires an authenticated caller")
 
-        ack = self._schedule_service.create(
-            spec=body.schedule,
-            prompt=body.prompt,
-            agent=body.agent,
-            owner_id=owner_id,
-            request_id=payload.request_id,
-        )
+        try:
+            ack = self._schedule_service.create(
+                spec=body.schedule,
+                prompt=body.prompt,
+                agent=body.agent,
+                owner_id=owner_id,
+                request_id=payload.request_id,
+            )
+        except (SchedulerError, ValueError) as e:
+            raise ScheduleRequestError(http_status_for(e), str(e)) from e
+
         self._log.info(f"Scheduled task registered: {ack.scheduled_task_id} for owner {owner_id}")
         return (201, ack.model_dump(mode="json", exclude_none=True))
 
