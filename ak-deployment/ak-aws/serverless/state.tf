@@ -67,9 +67,8 @@ locals {
     [{ path = var.agent_endpoint, method = "POST" }],
     var.execution_mode == "rest_async" ? [{ path = var.agent_endpoint, method = "GET" }] : []
   )
-  # Management routes for already-created scheduled tasks. They inherit the request
-  # authorizer along with every other endpoint, which is the deploy-time half of the
-  # identity requirement the app enforces per request.
+  # Management routes for existing scheduled tasks; share the same request authorizer as
+  # every other endpoint.
   schedule_endpoints = var.scheduled_task ? [
     { path = "schedule", method = "GET" },
     { path = "schedule/{scheduled_task_id}", method = "GET" },
@@ -78,21 +77,12 @@ locals {
   ] : []
   complete_gateway_endpoints = concat(local.chat_endpoint, local.schedule_endpoints, var.gateway_endpoints)
 
-  # The scheduled-task store follows the deployment's *session* store, so the backend is
-  # resolved from the same variables that pick the session backend — not from cluster
-  # existence. local.redis_url/local.valkey_url are non-null for a response-store-only
-  # cluster too, and DynamoDB sessions alongside a Redis response store is a supported
-  # combination; keying off them would inject two backend blocks, which
-  # SchedulerFactory._validate_backend_block rejects with AKConfigError at startup.
-  # The precedence mirrors the scheduled-task table's own gate (DynamoDB first).
-  # Only the DynamoDB table name is injected, and only when that is the session store. The
-  # scheduled-task store follows session.type, so nothing here selects a backend; it supplies
-  # the one value that cannot be defaulted, because the table is created per deployment.
-  # Redis and Valkey need nothing: those stores reuse the session cluster's own URL (already
-  # injected as AK_SESSION__REDIS__URL / AK_SESSION__VALKEY__URL) under a constant keyspace
-  # prefix that the application defaults. Injecting a prefix keyed off cluster existence is
-  # what previously sent two backend blocks to a DynamoDB-sessions deployment that also had a
-  # Redis response store, which validate_config() rejects at startup.
+  # Backend selection follows session.type, not cluster existence: redis_url/valkey_url can
+  # be non-null for a response-store-only cluster too, so keying off them could inject two
+  # backend blocks (e.g. DynamoDB session + Redis response store), which
+  # SchedulerFactory._validate_backend_block rejects at startup. Only the DynamoDB table
+  # name needs injecting here — Redis/Valkey reuse the session cluster's own URL under a
+  # keyspace prefix the app already defaults.
   scheduler_environment = var.scheduled_task ? merge(
     {
       AK_SCHEDULER__ENABLED         = "true"
@@ -104,8 +94,7 @@ locals {
     } : {},
   ) : {}
 
-  # Scheduling reaches the agent runner only through the agent-callable tools, which are
-  # opt-in, so the runner gets nothing unless they are switched on.
+  # Scheduling access for the agent runner is opt-in via the agent-callable tools.
   scheduler_agent_tools_enabled = var.scheduled_task && var.scheduled_task_config.enable_agent_tools
   agent_invoke_url              = try(module.api_gateway[0].agent_invoke_url, null)
 
@@ -564,8 +553,8 @@ module "request_handler" {
     local.scheduler_environment
   )
 
-  # Hosts the chat create path and the /schedule routes, so it registers and removes timer
-  # registrations as well as reading and writing the table.
+  # Hosts the chat-create path and /schedule routes, so it needs to register/remove timers
+  # as well as read and write the table.
   scheduled_task                      = var.scheduled_task
   scheduled_task_table_arn            = var.scheduled_task ? module.scheduler[0].table_arn : null
   scheduled_task_schedule_arn_pattern = var.scheduled_task ? module.scheduler[0].schedule_arn_pattern : null
@@ -591,8 +580,8 @@ module "agent_runner" {
     )
   })
 
-  # Scheduling reaches the runner only through the agent-callable tools, so a deployment
-  # that leaves them off gives it no scheduler permissions at all.
+  # Granted only when agent-callable scheduling tools are enabled (see
+  # scheduler_agent_tools_enabled above).
   scheduled_task                      = local.scheduler_agent_tools_enabled
   scheduled_task_table_arn            = local.scheduler_agent_tools_enabled ? module.scheduler[0].table_arn : null
   scheduled_task_schedule_arn_pattern = local.scheduler_agent_tools_enabled ? module.scheduler[0].schedule_arn_pattern : null
@@ -685,10 +674,9 @@ module "response_handler" {
     )
   })
 
-  # Records run outcomes: table read and update only. It never registers or removes a
-  # schedule, so it gets neither EventBridge Scheduler nor input-queue permissions. The
-  # flag folds in the table gate as well, so the module keys its count off a value known
-  # at plan time rather than the not-yet-created table's ARN.
+  # Records run outcomes (table read/update only), so it needs neither EventBridge
+  # Scheduler nor input-queue permissions. The flag also folds in the table gate, keying
+  # count off a plan-time-known value rather than the not-yet-created table's ARN.
   scheduled_task           = var.scheduled_task && var.create_dynamodb_memory_table
   scheduled_task_table_arn = var.scheduled_task ? module.scheduler[0].table_arn : null
 

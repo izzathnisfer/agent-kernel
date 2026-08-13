@@ -59,10 +59,8 @@ locals {
       overwrite_path = "/mcp/"
     }
   } : {}
-  # Management routes for already-created scheduled tasks. The REST service serves them at a
-  # fixed /api/v1/schedule, so each route rewrites the (configurable) gateway path back to it,
-  # the same way the chat route does. Creation stays on the chat endpoint — there is no
-  # POST /schedule.
+  # Rewrites the configurable gateway path to the fixed /api/v1/schedule REST endpoint,
+  # like the chat route. Creation happens via chat — there is no POST /schedule.
   schedule_endpoint_path      = join("/", compact([local.api_base_segment_with_version, "schedule"]))
   schedule_item_endpoint_path = "${local.schedule_endpoint_path}/{scheduled_task_id}"
   schedule_gateway_map = var.scheduled_task ? merge(

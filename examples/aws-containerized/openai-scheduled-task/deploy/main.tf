@@ -1,16 +1,11 @@
 # ---------------------------------------------------------------------------
 # Containerized Agents Deployment — Scheduled Tasks
 # ---------------------------------------------------------------------------
-# Scheduling is available on AWS in queue mode only, so this example is a scalable
-# queue-mode deployment: a REST service enqueues, an agent runner consumes. When a
-# schedule fires, EventBridge Scheduler puts an ordinary agent message on the same input
-# queue and the agent runner executes it with no scheduling-specific code path.
+# Queue-mode deployment: REST service enqueues, agent runner consumes. Scheduled fires are
+# just queue messages EventBridge Scheduler injects.
 module "containerized_agents" {
-  # When using from registry:
-  # NOTE: `scheduled_task` and `scheduled_task_config` below were added after 0.8.1, so this
-  # pin has to be bumped to the first published version that carries them before
-  # `terraform init && terraform apply` succeeds. Until that release lands, point `source` at
-  # the in-repo module instead and drop `version`:
+  # NOTE: scheduled_task(_config) need a module version newer than 0.8.1. Until that's
+  # published, point source at the in-repo module instead and drop version:
   #   source = "../../../../ak-deployment/ak-aws/containerized"
   source  = "yaalalabs/ak-containerized/aws"
   version = "0.8.1"
@@ -36,17 +31,15 @@ module "containerized_agents" {
     desired_count         = 1
     container_port        = 8000
     health_check_endpoint = "/health"
-    # Override the Docker CMD to specify the correct entrypoint
-    command = ["python", "app_rest_service.py"]
+    command               = ["python", "app_rest_service.py"]
     environment_variables = {
       OPENAI_API_KEY = var.openai_api_key
     }
   }
 
   # ---- Agent Memory (Session Store) ----
-  # Scheduling requires a durable session store. This also decides where scheduled tasks
-  # are stored: a DynamoDB session store gives them their own dedicated table, while a
-  # Redis/Valkey one reuses that cluster with a separate keyspace and creates no table.
+  # Scheduling needs a durable session store. DynamoDB gives scheduled tasks their own
+  # table; Redis/Valkey would reuse the cluster's keyspace instead.
   create_dynamodb_memory_table = true
 
   # ---- Queue Mode ----
@@ -55,10 +48,8 @@ module "containerized_agents" {
   execution_mode = "rest_sync" # must match execution.mode in config.yaml
 
   # ---- Queue Configuration ----
-  # SQS queues for request/response handling. Both are FIFO (hardcoded by the module),
-  # which scheduling depends on: fires are grouped by scheduled_task_id so a task's runs
-  # are serialized, and deduplicated by scheduled_task_id + scheduled_time so a duplicate
-  # timer delivery cannot run twice.
+  # Queues are FIFO (hardcoded by the module): scheduling needs fires grouped by
+  # scheduled_task_id to serialize a task's runs, deduped by scheduled_task_id + time.
   queue_config = {
     # Optional: customize queue names
     input_queue_name  = "input-queue"  # Default
@@ -89,10 +80,8 @@ module "containerized_agents" {
     cpu           = 1024
     memory        = 2048
     desired_count = 1
-    # Provide package_path to build a separate Docker image for agent runner
-    package_path = "../dist-agent-runner"
-    # Override the Docker CMD to specify the correct entrypoint
-    command = ["python", "app_agent_runner.py"]
+    package_path  = "../dist-agent-runner"
+    command       = ["python", "app_agent_runner.py"]
     environment_variables = {
       OPENAI_API_KEY = var.openai_api_key
     }
@@ -116,15 +105,13 @@ module "containerized_agents" {
   }
 
   # ---- Scheduled Tasks ----
-  # One gate for the whole capability: the scheduled-task table, the EventBridge Scheduler
-  # schedule group, the timer's execution role, and the component IAM grants. Requires
-  # queue_mode = true, which Terraform validates before the app can fail at startup.
+  # Gates the scheduled-task table, EventBridge Scheduler group, timer role, and IAM grants.
+  # Requires queue_mode = true.
   scheduled_task = true
 
   scheduled_task_config = {
-    # Let the agent create and manage its own scheduled tasks. Off by default: this is what
-    # gives the agent runner scheduler permissions at all. Leave it false and the runner
-    # gets no table or scheduler access, while the REST routes keep working.
+    # Lets the agent create/manage its own scheduled tasks via tools; off by default. False
+    # means no scheduler access for the runner, though REST routes still work.
     enable_agent_tools = true
   }
 

@@ -125,9 +125,8 @@ variable "create_dynamodb_memory_table" {
   default     = false
   nullable    = false
   validation {
-    # The application's session.type names exactly one backend, and the scheduled-task store
-    # follows it. Creating two session stores leaves Terraform guessing which one that is —
-    # caught here rather than as a startup crash-loop in every scheduler-enabled component.
+    # session.type names exactly one backend, and the scheduled-task store follows it.
+    # Caught here rather than as a startup crash-loop in every scheduler-enabled component.
     condition = length([
       for created in [var.create_dynamodb_memory_table, var.create_redis_cluster, var.create_valkey_cluster] : created if created
     ]) <= 1
@@ -511,11 +510,11 @@ variable "queue_config" {
 
 variable "scheduled_task" {
   type        = bool
-  description = "Enable scheduled tasks: creates the scheduled-task table, EventBridge Scheduler schedule group, timer execution role, component IAM grants, and the /schedule API Gateway routes. Requires queue_mode = true."
+  description = "Enable scheduled tasks (table, scheduler resources, IAM grants, and /schedule routes); requires queue_mode = true."
   default     = false
 
-  # The Terraform-side twin of SchedulerFactory.validate_config()'s queue-mode check, so
-  # the deploy fails before the app ever gets a chance to fail at startup.
+  # Mirrors SchedulerFactory.validate_config()'s queue-mode check, failing at deploy time
+  # instead of app startup.
   validation {
     condition = (
       !var.scheduled_task ||
@@ -526,7 +525,7 @@ variable "scheduled_task" {
 }
 
 variable "scheduled_task_config" {
-  description = "Scheduled task configuration. Ignored when scheduled_task = false."
+  description = "Scheduled task configuration, ignored when scheduled_task = false."
   type = object({
     table_name          = optional(string, null) # null -> "<prefix>-scheduled-tasks"
     schedule_group_name = optional(string, null) # null -> "<prefix>-schedules"

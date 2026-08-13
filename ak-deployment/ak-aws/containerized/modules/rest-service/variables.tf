@@ -239,6 +239,6 @@ variable "scheduled_task_target_role_arn" {
 
 variable "input_queue_arn" {
   type        = string
-  description = "ARN of the SQS input queue; the scheduler reads its visibility timeout to derive the soft-delete grace window"
+  description = "ARN of the SQS input queue used to derive the soft-delete grace window"
   default     = null
 }

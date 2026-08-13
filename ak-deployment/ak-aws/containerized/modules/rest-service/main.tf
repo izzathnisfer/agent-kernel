@@ -32,16 +32,8 @@ locals {
     local.scheduler_environment
   )
 
-  # Exactly one backend block may be injected: SchedulerFactory._validate_backend_block
-  # rejects a populated block that does not match session.type with AKConfigError at startup,
-  # so a deployment that has more than one store available must still resolve to one. The
-  # precedence mirrors the scheduled-task table's own gate (DynamoDB first).
-  # Only the DynamoDB table name is injected, and the root passes it as non-null only when the
-  # session store is DynamoDB (the table is gated on create_dynamodb_memory_table). The
-  # scheduled-task store follows session.type, so nothing here selects a backend; it supplies
-  # the one value that cannot be defaulted, because the table is created per deployment.
-  # Redis and Valkey need nothing: those stores reuse the session cluster's own URL under a
-  # constant keyspace prefix that the application defaults.
+  # SchedulerFactory rejects a populated block that doesn't match session.type, so only the
+  # DynamoDB table name is passed here — Redis/Valkey reuse the session cluster's URL instead.
   scheduler_environment = var.scheduled_task ? merge(
     {
       AK_SCHEDULER__ENABLED         = "true"
@@ -123,10 +115,8 @@ resource "aws_iam_policy" "dynamodb_thread_policy" {
 }
 
 
-# The REST task hosts both the schedule routes (which register and remove timer
-# registrations) and the output-consumer thread (which records run outcomes), so it needs
-# the full grant. iam:PassRole is required because registering a schedule hands
-# EventBridge Scheduler the role it assumes to deliver the fire.
+# Hosts both the schedule routes and the output-consumer thread, so it needs the full grant.
+# iam:PassRole lets it hand EventBridge Scheduler the role it assumes when registering.
 
 resource "aws_iam_policy" "scheduler_policy" {
   count       = var.scheduled_task ? 1 : 0

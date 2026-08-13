@@ -1,22 +1,16 @@
 # ---------------------------------------------------------------------------
 # Serverless Agents Deployment — Scheduled Tasks
 # ---------------------------------------------------------------------------
-# Scheduling is available on AWS in queue mode only, so this example is a scalable
-# queue-mode deployment: a request handler enqueues, an agent runner consumes, a response
-# handler records outcomes. When a schedule fires, EventBridge Scheduler puts an ordinary
-# agent message on the same input queue and the agent runner executes it with no
-# scheduling-specific code path.
+# Queue-mode deployment: request handler enqueues, agent runner consumes, response handler
+# records outcomes. Scheduled fires are just queue messages EventBridge Scheduler injects.
 module "serverless_agents" {
-  # NOTE: `scheduled_task` and `scheduled_task_config` below were added after 0.8.1, so this
-  # pin has to be bumped to the first published version that carries them before
-  # `terraform init && terraform apply` succeeds. Until that release lands, point `source` at
-  # the in-repo module instead and drop `version`:
+  # NOTE: scheduled_task(_config) need a module version newer than 0.8.1. Until that's
+  # published, point source at the in-repo module instead and drop version:
   #   source = "../../../../ak-deployment/ak-aws/serverless"
   source  = "yaalalabs/ak-serverless/aws"
   version = "0.8.1"
 
-  providers = { aws = aws, docker = docker }
-  # Basic configuration
+  providers            = { aws = aws, docker = docker }
   product_alias        = var.product_alias
   env_alias            = var.env_alias
   module_name          = var.module_name
@@ -24,34 +18,25 @@ module "serverless_agents" {
   region               = var.region
   is_production        = var.is_production
 
-  # Execution mode - required for scheduling, since the timer's target is the input queue
+  # Required for scheduling: the timer's target is the input queue.
   queue_mode     = true
   execution_mode = "rest_sync" # rest_sync or rest_async
 
   # ---- Agent Memory (Session Store) ----
-  # Scheduling requires a durable session store. This also decides where scheduled tasks
-  # are stored: a DynamoDB session store gives them their own dedicated table, while a
-  # Redis/Valkey one reuses that cluster with a separate keyspace and creates no table.
-  # DynamoDB keeps this example self-contained — no VPC or cache cluster needed.
+  # Scheduling needs a durable session store. DynamoDB gives scheduled tasks their own
+  # table; Redis/Valkey would reuse the cluster's keyspace instead.
   create_dynamodb_memory_table = true
 
-  # Response Store Config
   create_dynamodb_response_store = true
 
-  # API Gateway configuration
   api_version    = "v1"
   api_base_path  = "api"
   agent_endpoint = "chat"
 
   # ---- Identity ----
-  # The authorizer is what makes scheduling usable here. Every scheduled task must have an
-  # authenticated owner, and on serverless that identity comes from API Gateway: the
-  # authorizer's principalId (ValidationResult.subject in lambda_auth.py) becomes the
-  # owner. API Gateway attaches this authorizer to every route, including the /schedule
-  # routes the module adds — there is no per-route opt-out.
-  #
-  # Omit this block and the deployment still applies, but every schedule request is
-  # rejected with 401 because the event carries no authorizer context.
+  # Scheduling requires an authenticated owner per task; on serverless that identity comes
+  # from this authorizer's principalId. Omitting it still deploys, but every /schedule
+  # request then fails with 401 since there's no authorizer context.
   authorizer = {
     description           = "Resolves the bearer token to the user id that owns a scheduled task"
     function_name         = "gtwy-auth"
@@ -62,7 +47,6 @@ module "serverless_agents" {
     result_ttl_in_seconds = 0
   }
 
-  # Request handler configuration
   # Hosts the chat create path and the /api/v1/schedule management routes.
   request_handler = {
     module_name          = "rqst-hdlr"
@@ -78,9 +62,8 @@ module "serverless_agents" {
     }
   }
 
-  # Agent runner configuration
-  # Executes both ordinary requests and scheduled fires. It cannot tell them apart, and
-  # does not need to.
+  # Executes both ordinary requests and scheduled fires; it cannot tell them apart and
+  # doesn't need to.
   agent_runner = {
     module_name          = "agent-runner"
     function_name        = "ar-func"
@@ -95,8 +78,7 @@ module "serverless_agents" {
     }
   }
 
-  # Response handler configuration
-  # Also the component that records a scheduled run's outcome back onto its row.
+  # Also records a scheduled run's outcome back onto its row.
   response_handler = {
     function_name        = "rsh-func"
     module_name          = "rspns-hdlr"
@@ -108,22 +90,20 @@ module "serverless_agents" {
     package_path         = "../dist_response_handler.zip"
   }
 
-  # Queue configuration for scalable processing
   queue_config = {
-    # FIFO is a precondition for scheduling, not a preference: fires are grouped by
-    # scheduled_task_id so a task's runs are serialized, and deduplicated by
-    # scheduled_task_id + scheduled_time so a duplicate timer delivery cannot run twice.
-    # It already defaults to true; set explicitly so the requirement is visible.
+    # FIFO is required for scheduling: it groups fires by scheduled_task_id to serialize a
+    # task's runs, and dedupes by scheduled_task_id + scheduled_time. Already the default;
+    # set explicitly to keep the requirement visible.
     fifo_queue = true
 
     # Input queue settings
-    input_queue_visibility_timeout        = 60 # make sure to set it higher than the lambda timeout to avoid multiple processing of the same message
+    input_queue_visibility_timeout        = 60 # must exceed the lambda timeout to avoid double-processing
     input_queue_max_receive_count         = 3
     input_queue_create_dlq                = false
     input_queue_message_retention_seconds = 300
 
     # Output queue settings
-    output_queue_visibility_timeout        = 60 # make sure to set it higher than the lambda timeout to avoid multiple processing of the same message
+    output_queue_visibility_timeout        = 60 # must exceed the lambda timeout to avoid double-processing
     output_queue_max_receive_count         = 3
     output_queue_create_dlq                = false
     output_queue_message_retention_seconds = 300
@@ -134,16 +114,13 @@ module "serverless_agents" {
   }
 
   # ---- Scheduled Tasks ----
-  # One gate for the whole capability: the scheduled-task table, the EventBridge Scheduler
-  # schedule group, the timer's execution role, the component IAM grants, and the
-  # /api/v1/schedule API Gateway routes. Requires queue_mode = true, which Terraform
-  # validates before the app can fail at startup.
+  # Gates the scheduled-task table, EventBridge Scheduler group, timer role, IAM grants, and
+  # /api/v1/schedule routes. Requires queue_mode = true.
   scheduled_task = true
 
   scheduled_task_config = {
-    # Let the agent create and manage its own scheduled tasks. Off by default: this is what
-    # gives the agent runner scheduler permissions at all. Leave it false and the runner
-    # gets no table or scheduler access, while the REST routes keep working.
+    # Lets the agent create/manage its own scheduled tasks via tools; off by default. False
+    # means no scheduler access for the runner, though REST routes still work.
     enable_agent_tools = true
   }
 }

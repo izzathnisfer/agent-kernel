@@ -28,12 +28,8 @@ locals {
   # opt-in — so the whole block is injected only when they are enabled.
   scheduler_tools_enabled = var.scheduled_task && var.scheduled_task_config.enable_agent_tools
 
-  # Only the DynamoDB table name is injected, and the root passes it as non-null only when the
-  # session store is DynamoDB (the table is gated on create_dynamodb_memory_table). The
-  # scheduled-task store follows session.type, so nothing here selects a backend; it supplies
-  # the one value that cannot be defaulted, because the table is created per deployment.
-  # Redis and Valkey need nothing: those stores reuse the session cluster's own URL under a
-  # constant keyspace prefix that the application defaults.
+  # SchedulerFactory rejects a populated block that doesn't match session.type, so only the
+  # DynamoDB table name is passed here — Redis/Valkey reuse the session cluster's URL instead.
   scheduler_environment = local.scheduler_tools_enabled ? merge(
     {
       AK_SCHEDULER__ENABLED         = "true"
@@ -213,9 +209,8 @@ resource "aws_iam_role_policy_attachment" "agent_runner_dynamodb_thread_attachme
   policy_arn = aws_iam_policy.agent_runner_dynamodb_thread_policy[0].arn
 }
 
-# Scheduling reaches the runner only through the agent-callable tools, which are opt-in.
-# A deployment that enables scheduling but not the tools leaves the runner with no
-# scheduler permissions at all, so the Terraform gate lines up with the app-level one.
+# Scheduling reaches the runner only via the agent-callable tools (opt-in), so this Terraform
+# gate mirrors the app-level one: enabling scheduling without the tools grants no permissions.
 
 resource "aws_iam_policy" "agent_runner_scheduler_policy" {
   count = local.scheduler_tools_enabled ? 1 : 0

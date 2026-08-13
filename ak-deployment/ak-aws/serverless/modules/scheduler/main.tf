@@ -1,7 +1,5 @@
-# Scheduled Tasks
-# Creates the scheduled-task table (DynamoDB session stores only), the EventBridge
-# Scheduler schedule group, and the role the timer assumes to deliver a fire to the
-# input queue. Component IAM grants live with the components themselves.
+# Scheduled Tasks: the scheduled-task table (DynamoDB stores only), the schedule group, and
+# the timer's execution role. Component IAM grants for these resources live with the components.
 
 locals {
   table_name          = coalesce(var.scheduled_task_config.table_name, "${var.prefix}-scheduled-tasks")
@@ -61,10 +59,8 @@ resource "aws_scheduler_schedule_group" "this" {
   tags = merge(var.tags, { Type = "ScheduleGroup" })
 }
 
-# A schedule is not addressed as a child of its group's ARN: the group is
-# ...:schedule-group/<group> while a schedule is ...:schedule/<group>/<name>. A grant scoped
-# to "<group-arn>/*" therefore matches no schedule at all and every scheduler call is denied,
-# so the component grants are scoped to the schedule namespace derived here.
+# A schedule's ARN is .../schedule/<group>/<name>, not a child of the group's own ARN
+# (.../schedule-group/<group>), so component grants must use the pattern derived below.
 
 locals {
   schedule_arn_pattern = "${replace(aws_scheduler_schedule_group.this.arn, ":schedule-group/", ":schedule/")}/*"

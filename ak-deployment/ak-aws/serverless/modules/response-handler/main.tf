@@ -279,9 +279,8 @@ resource "aws_lambda_event_source_mapping" "response_handler_output_queue" {
   function_response_types = ["ReportBatchItemFailures"]
 }
 
-# Scheduled tasks: the response handler records run outcomes, so it reads and updates the
-# table and gets no EventBridge Scheduler permissions at all — it never registers or
-# removes a schedule.
+# The response handler only records run outcomes, so it gets table read/update access but no
+# EventBridge Scheduler permissions — it never registers or removes a schedule.
 
 resource "aws_iam_policy" "scheduler_policy" {
   count = var.scheduled_task ? 1 : 0

@@ -258,10 +258,8 @@ module "agent_runner_lambda" {
       AK_EXECUTION__QUEUES__INPUT__MAX_RECEIVE_COUNT = tostring(local.queue_input_consumer_max_receive_count)
       AK_EXECUTION__QUEUES__OUTPUT__URL              = local.queue_output_url
     },
-    # The runner consumes the input queue through its event source mapping, so it needs the URL
-    # only when the scheduling tools are on: an agent-registered schedule delivers its fire to
-    # the input queue, and the same URL sizes the soft-delete grace window this module already
-    # grants sqs:GetQueueAttributes for.
+    # Needed only when scheduling is on: a registered schedule fires into the input queue, and
+    # this URL also sizes the soft-delete grace window (see the sqs:GetQueueAttributes grant below).
     var.scheduled_task && local.queue_input_url != null ? {
       AK_EXECUTION__QUEUES__INPUT__URL = local.queue_input_url
     } : {}
@@ -282,9 +280,8 @@ resource "aws_lambda_event_source_mapping" "agent_runner_input_queue" {
   function_response_types            = ["ReportBatchItemFailures"]
 }
 
-# Scheduled tasks: table read/write plus EventBridge Scheduler registration management.
-# iam:PassRole is required because registering a schedule hands EventBridge Scheduler the
-# role it assumes to deliver the fire.
+# Table read/write plus EventBridge Scheduler registration management. iam:PassRole lets it
+# hand EventBridge Scheduler the role it assumes when registering a schedule.
 
 resource "aws_iam_policy" "scheduler_policy" {
   count = var.scheduled_task ? 1 : 0

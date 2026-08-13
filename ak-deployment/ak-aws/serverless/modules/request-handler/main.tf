@@ -325,9 +325,8 @@ module "lambda_deployment" {
   cloudwatch_logs_kms_key_id = var.cloudwatch_kms_key_arn != null ? var.cloudwatch_kms_key_arn : null
 }
 
-# Scheduled tasks: table read/write plus EventBridge Scheduler registration management.
-# iam:PassRole is required because registering a schedule hands EventBridge Scheduler the
-# role it assumes to deliver the fire.
+# Table read/write plus EventBridge Scheduler registration management. iam:PassRole lets it
+# hand EventBridge Scheduler the role it assumes when registering a schedule.
 
 resource "aws_iam_policy" "scheduler_policy" {
   count = var.scheduled_task ? 1 : 0
