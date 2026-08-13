@@ -1,8 +1,7 @@
 """Enablement checks and construction of the configured ``Scheduler``.
 
-The two entry points are deliberately split: ``validate_config()`` is pure config
-validation that never touches AWS, so a misconfiguration surfaces at component
-initialization rather than at the first ``create_schedule`` call.
+``validate_config()`` is pure config validation that never touches AWS, so a
+misconfiguration surfaces at component initialization, not at the first ``create_schedule`` call.
 """
 
 import logging
@@ -17,9 +16,9 @@ from .store.base import DURABLE_SESSION_TYPES
 if TYPE_CHECKING:
     from .service import ScheduledTaskService
 
-# session.type -> (config block, field, whether the deployment must supply it). A DynamoDB
-# table name can't be guessed, so it's required; Redis/Valkey reuse the session cluster's URL
-# with a constant prefix, so neither needs a supplied value.
+# session.type -> (config block, field, whether the deployment must supply it). DynamoDB's
+# table name can't be guessed; Redis/Valkey default to the session cluster's URL with a
+# constant prefix.
 _REQUIRED_BACKEND_FIELD = {
     "dynamodb": ("dynamodb", "table_name", True),
     "redis": ("redis", "prefix", False),
@@ -49,9 +48,8 @@ class SchedulerFactory:
     def validate_config() -> None:
         """Enforce every precondition the capability depends on, without touching AWS.
 
-        Called by each scheduler-enabled component at initialization — process startup on
-        ECS, cold start on serverless — so a non-viable deployment fails loudly rather than
-        silently.
+        Called by each scheduler-enabled component at initialization (ECS startup, serverless
+        cold start) so a non-viable deployment fails loudly rather than silently.
 
         :raises AKConfigError: A precondition is not met.
         """
@@ -67,8 +65,8 @@ class SchedulerFactory:
     def build() -> Scheduler:
         """Return the process-wide ``Scheduler``, constructing it on first use.
 
-        Memoized because construction creates boto3 clients and the store — work that
-        belongs once per process, not once per request.
+        Memoized: construction creates boto3 clients and the store, which belongs once per
+        process, not once per request.
 
         :return: The configured scheduler.
         :raises AKConfigError: A precondition is not met.
@@ -107,9 +105,8 @@ class SchedulerFactory:
     def _validate_timer_wiring(config: AKConfig) -> None:
         """Reject scheduling enabled in YAML without the deployment values Terraform injects.
 
-        An empty string counts as unset: the examples declare these as ``""`` placeholders
-        that Terraform fills, so a deployment missing the wiring must fail here rather than
-        at the first registration.
+        An empty string counts as unset: the examples ship ``""`` placeholders for Terraform
+        to fill, so a deployment missing the wiring fails here, not at first registration.
 
         :param config: The loaded configuration.
         :raises AKConfigError: ``group_name`` or ``target_role_arn`` is missing.
@@ -125,9 +122,7 @@ class SchedulerFactory:
     def _validate_backend_block(config: AKConfig) -> None:
         """Reject a scheduler store block that contradicts the resolved session type.
 
-        The store follows ``session.type`` and is never selected separately, so the only
-        failures possible here are a deployment value that was not injected and a block for a
-        backend that will never be read.
+        The store follows ``session.type`` and is never selected separately.
 
         :param config: The loaded configuration.
         :raises AKConfigError: A required deployment value is missing, a declared value is
@@ -162,8 +157,7 @@ class SchedulerFactory:
     def service() -> Optional["ScheduledTaskService"]:
         """Return a ``ScheduledTaskService`` over the configured scheduler, or None when disabled.
 
-        The one place the create paths and route layers obtain the service, so no surface
-        has to repeat the enabled check plus construction.
+        The one place callers obtain the service, so no surface repeats the enabled check.
 
         :return: The service, or None when scheduling is disabled for this deployment.
         """

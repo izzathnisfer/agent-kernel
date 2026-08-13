@@ -656,11 +656,9 @@ class _SchedulerConfig(BaseModel):
     def store_block(self, session_type: str) -> Optional[BaseModel]:
         """Return the store block matching the session backend, defaulted when not declared.
 
-        The scheduled-task store follows ``session.type``, so the block is looked up by that
-        type rather than chosen. An undeclared block is defaulted rather than an error: a
-        deployment only has to declare the one value it cannot supply a default for, which is
-        the DynamoDB table name. The Redis and Valkey keyspace prefixes are constants, and
-        those stores reuse the session cluster's own URL.
+        The store always follows ``session.type``. Undeclared blocks default rather than
+        error — only the DynamoDB table name has no sensible default; Redis/Valkey reuse the
+        session cluster's own URL under a fixed key prefix.
 
         :param session_type: The resolved, lower-cased ``session.type``.
         :return: The declared or defaulted block, or None when the type has no store block.

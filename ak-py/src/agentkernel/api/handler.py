@@ -98,10 +98,8 @@ class AgentRESTRequestHandler(RESTRequestHandler):
     def _reject_schedule(body: BaseRunRequest) -> None:
         """Reject a chat body asking to be scheduled on a route that cannot schedule it.
 
-        This route runs the prompt now. Scheduling is a queue-mode capability — the timer's
-        target is the input queue — so on this route a ``schedule`` block would otherwise be
-        ignored and the prompt executed immediately, which is the one outcome a caller asking
-        for "later" must never get.
+        Scheduling requires queue mode; this route runs the prompt immediately, so an unrejected
+        ``schedule`` block would silently run now instead of later.
 
         :param body: The chat body as supplied.
         :raises HTTPException: 400 when the body carries a ``schedule`` block.

@@ -46,7 +46,6 @@ class DefaultEndpointsHandler:
     """Provides default endpoint routes depending on EXECUTION_MODE."""
 
     def __init__(self):
-        """Initialize default REST endpoints handler."""
         self._log = logging.getLogger("ak.aws.lambda.default_endpoints")
         self._default_chat_path = "default_chat_path"
         self._default_chat_method = "POST"
@@ -57,10 +56,7 @@ class DefaultEndpointsHandler:
         self._schedule_service = SchedulerFactory.service()
 
     def get_default_endpoint_info(self):
-        """
-        Return default endpoint configuration.
-        :return: Tuple of (default_chat_path, default_chat_method, default_user_polling_method)
-        """
+        """:return: (default_chat_path, default_chat_method, default_user_polling_method)."""
         default_user_polling_method = "GET" if self._config.execution.mode == ExecutionMode.REST_ASYNC else None
         return (
             self._default_chat_path,
@@ -69,10 +65,7 @@ class DefaultEndpointsHandler:
         )
 
     def get_routes(self) -> Dict[str, Dict[str, Callable]]:
-        """
-        Return route mappings based on execution mode.
-        :return: Dictionary mapping paths → HTTP methods → handler functions
-        """
+        """Return route mappings (path -> method -> handler) based on execution mode."""
 
         input_queue_url = SQSHandler.get_input_queue_url()
         exec_mode = self._config.execution.mode
@@ -107,25 +100,11 @@ class DefaultEndpointsHandler:
         raise ValueError(f"Unsupported EXECUTION_MODE: {exec_mode}")
 
     def _parse_body(self, event: Dict[str, Any]) -> BaseRequest:
-        """
-        Parse request body from API Gateway event.
-
-        :param event: API Gateway event
-        :return: Parsed BaseRequest object
-        """
         body = event.get("body")
         body_dict = json.loads(body) if isinstance(body, str) else (body or {})
         return BaseRequest.from_payload(body_dict)
 
     def _build_failure_body(self, request_id: Optional[str] = None, status: Optional[str] = None, message: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Build standardized error response body.
-
-        :param request_id: Optional request ID to include
-        :param status: Optional status code to include
-        :param message: Error message
-        :return: Error response dictionary
-        """
         error_body = {"error": message or "An unexpected error occurred"}
         if status is not None:
             error_body["status"] = status
@@ -138,13 +117,10 @@ class DefaultEndpointsHandler:
         event: Dict[str, Any],
         operation: Callable[[BaseRequest, Dict[str, Any]], Any],
     ) -> tuple[int, Dict[str, Any]]:
-        """
-        Execute operation with standard request parsing and error handling.
+        """Run ``operation`` with standard request parsing and error handling.
 
-        :param event: API Gateway event
-        :param operation: Function executed with the parsed payload and the raw event. It
-            returns either a body (answered 200) or an explicit ``(statusCode, body)`` pair.
-        :return: API Gateway formatted response (statusCode, body)
+        :param operation: Returns either a body (answered 200) or an explicit
+            ``(statusCode, body)`` pair.
         """
         request_id = None
         try:
@@ -242,12 +218,9 @@ class DefaultEndpointsHandler:
         return (201, ack.model_dump(mode="json", exclude_none=True))
 
     def _send_to_queue(self, payload: BaseRequest) -> Dict[str, Any]:
-        """
-        Send request payload to SQS queue.
+        """Send request payload to the SQS input queue.
 
-        :param payload: Request payload containing a request_id and nested run body
-        :return: Queue submission status
-        :raises ValueError: If body, request_id, or session_id is missing
+        :raises ValueError: body, request_id, or session_id is missing.
         """
         request_body = payload.body
         if request_body is None:
@@ -268,12 +241,9 @@ class DefaultEndpointsHandler:
         return response
 
     def _get_message(self, payload: BaseRequest) -> Dict[str, Any]:
-        """
-        Fetch messages from response database.
+        """Fetch the response message for ``payload.request_id``.
 
-        :param payload: Request payload containing request_id
-        :return: Message for request
-        :raises ValueError: If request_id is missing
+        :raises ValueError: request_id is missing.
         """
         request_id = payload.request_id
         if not request_id:
@@ -281,13 +251,7 @@ class DefaultEndpointsHandler:
         return self._response_store.get_message_with_retry(request_id=request_id, get_and_delete=True)
 
     def _handle_rest_sync(self, event: Dict[str, Any], context: Any) -> tuple[int, Dict[str, Any]]:
-        """
-        Send request to queue and immediately fetch response.
-
-        :param event: API Gateway event
-        :param context: Lambda context
-        :return: Tuple of (status_code, response_body)
-        """
+        """Send request to queue and immediately fetch response."""
 
         def sync_operation(payload: BaseRequest, request_event: Dict[str, Any]) -> Any:
             ack = self._maybe_schedule(payload, request_event)
@@ -319,13 +283,7 @@ class DefaultEndpointsHandler:
         return self._handle_request(event, sync_operation)
 
     def _handle_async_submit(self, event: Dict[str, Any], context: Any) -> tuple[int, Dict[str, Any]]:
-        """
-        Submit message to queue (async mode).
-
-        :param event: API Gateway event
-        :param context: Lambda context
-        :return: Tuple of (status_code, response_body)
-        """
+        """Submit message to queue (async mode)."""
 
         def submit_operation(payload: BaseRequest, request_event: Dict[str, Any]) -> Any:
             ack = self._maybe_schedule(payload, request_event)
@@ -344,13 +302,7 @@ class DefaultEndpointsHandler:
         return self._handle_request(event, submit_operation)
 
     def _handle_async_poll(self, event: Dict[str, Any], context: Any) -> tuple[int, Dict[str, Any]]:
-        """
-        Poll database for messages (async mode).
-
-        :param event: API Gateway event
-        :param context: Lambda context
-        :return: Tuple of (status_code, response_body)
-        """
+        """Poll database for messages (async mode)."""
 
         def poll_operation(payload: BaseRequest, request_event: Dict[str, Any]) -> Dict[str, Any]:
             self._log.info(f"Performing REST_ASYNC poll operation for payload: '{payload}'")
@@ -374,13 +326,7 @@ class DefaultEndpointsHandler:
         return self._handle_request(event, poll_operation)
 
     def _handle_agent_chat(self, event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-        """
-        Process chat request directly without queue.
-
-        :param event: API Gateway event
-        :param context: Lambda context
-        :return: API Gateway formatted response with statusCode and body
-        """
+        """Process chat request directly without queue."""
 
         try:
             request = self._parse_body(event)
@@ -402,13 +348,7 @@ class DefaultEndpointsHandler:
             }
 
     def _handle_stream(self, event: Dict[str, Any], context: Any) -> tuple[int, Dict[str, Any]]:
-        """
-        Handle streaming request.
-
-        :param event: API Gateway event
-        :param context: Lambda context
-        :return: Tuple of (status_code, error_body) — SSE streaming via REST API Gateway is not supported in Lambda
-        """
+        """Reject: SSE streaming isn't supported via REST API Gateway in Lambda."""
         return (
             400,
             {
@@ -421,15 +361,13 @@ class DefaultEndpointsHandler:
 
 
 class RESTLambdaRouter(BaseLambdaRouter):
-    """
-    Router for AWS Lambda events coming from API Gateway REST API v1.
-    - Register handlers per (method, route) for REST endpoints.
-    - Route can be provided in multiple forms and will be normalized.
-    - If no handler match is found, the router raises ValueError.
+    """Router for AWS Lambda events from API Gateway REST API v1.
+
+    Handlers are registered per (method, route); routes are normalized before lookup, and
+    dispatch raises ValueError when nothing matches.
     """
 
     def __init__(self):
-        """Initialize REST Lambda router."""
         super().__init__()
         self._default_chat_path = None
         self._default_chat_method = None
@@ -453,22 +391,13 @@ class RESTLambdaRouter(BaseLambdaRouter):
 
     @staticmethod
     def _normalize_method(method: Optional[str]) -> str:
-        """
-        Normalize HTTP method to uppercase.
-
-        :param method: HTTP method string
-        :return: Uppercase method string, defaults to GET
-        """
+        """Normalize HTTP method to uppercase, defaulting to GET."""
         return (method or "GET").upper()
 
     def register(self, route: str, method: Optional[str] = None) -> Callable[[Callable], Callable]:
-        """
-        Factory function that creates a decorator to register a handler for a given HTTP route and method.
+        """Return a decorator that registers a handler for the given HTTP route and method.
 
-        :param route: URL route for the handler
-        :param method: HTTP method (defaults to "GET")
-        :return: Decorator function that registers the handler and returns it unchanged
-        :raises ValueError: If HTTP method is not provided
+        :raises ValueError: method is not provided.
         """
         if method is None:
             raise ValueError("HTTP method is required for REST routes")
@@ -494,16 +423,12 @@ class RESTLambdaRouter(BaseLambdaRouter):
         method: str,
         env_base_path: Optional[str],
     ) -> Optional[Callable[[Dict[str, Any], Any], Any]]:
-        """Resolve a route registered under a path template rather than a literal path.
+        """Resolve a route registered under its API Gateway resource template rather than a literal path.
 
-        This router looks routes up by exact path string and has no path-parameter support, so
-        a route like ``/schedule/{scheduled_task_id}`` could never match. API Gateway puts the
-        matched resource template on the event, which is the key such a route is registered
-        under. Only reached where dispatch previously raised, so existing behaviour is unchanged.
+        This router matches exact path strings and has no path-parameter support, so a route
+        like ``/schedule/{scheduled_task_id}`` needs the resource template API Gateway puts on
+        the event. Only reached after a literal-path lookup already failed.
 
-        :param event: API Gateway event.
-        :param method: The normalized HTTP method.
-        :param env_base_path: The deployment's base path, when configured.
         :return: The matching handler, or None.
         """
         resource = event.get("resource")
@@ -513,13 +438,9 @@ class RESTLambdaRouter(BaseLambdaRouter):
         return self._routes.get(template, {}).get(method)
 
     def dispatch(self, event: Dict[str, Any], context: Any) -> Optional[Dict[str, Any]]:
-        """
-        Dispatch incoming API Gateway REST event to the appropriate registered handler.
+        """Dispatch an API Gateway REST event to its registered handler.
 
-        :param event: API Gateway event dictionary containing request information
-        :param context: AWS Lambda context object
-        :return: Formatted API Gateway response dictionary or None if no route matches
-        :raises ValueError: If no registered route matches the request
+        :raises ValueError: No registered route matches the request.
         """
         self._log.info("Dispatching REST endpoint")
         method = self._normalize_method(event.get("httpMethod"))

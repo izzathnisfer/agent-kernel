@@ -1,15 +1,12 @@
 """DynamoDB-backed scheduled-task store.
 
-Layout: partition key ``scheduled_task_id``, no sort key; a sparse global secondary index
-``owner-index`` on ``owner_index_key`` / ``created_at`` serving ``list_by_owner``; TTL
-attribute ``expiry_time`` written only by ``soft_delete``.
+Layout: partition key ``scheduled_task_id``, no sort key; sparse GSI ``owner-index`` on
+``owner_index_key`` / ``created_at`` serves ``list_by_owner``; TTL attribute ``expiry_time``
+is set only by ``soft_delete``.
 
-``owner_index_key`` mirrors ``owner_id`` while the row is live and is removed by
-``soft_delete``, which keeps tombstones out of the index and satisfies ``list_by_owner``'s
-live-rows-only contract. A ``FilterExpression`` would not: it filters after the read, so a
-page could come back with fewer live rows than ``limit`` while ``LastEvaluatedKey`` is still
-set. The index key is a separate attribute rather than ``owner_id`` itself so the row stays
-readable by primary key during the grace window, which the outcome-write guards need.
+``soft_delete`` removes ``owner_index_key`` so tombstones drop out of the index instead of
+being filtered post-read, which could otherwise return a short page. The row stays readable
+by primary key throughout, which the outcome-write guards need.
 """
 
 import time
@@ -71,10 +68,9 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
         }
         if expression_values:
             kwargs["ExpressionAttributeValues"] = expression_values
-        # Always conditioned: an unconditioned update_item on an absent key *creates* an item
-        # holding only the key and the updated fields, which a later get cannot parse as a
-        # ScheduledTask. The version condition subsumes existence; without one, existence alone
-        # is still required so this backend returns False for an absent row like the other two.
+        # Always conditioned: an unconditioned update_item on an absent key would silently
+        # create a partial item. Checking existence even without a version keeps this backend
+        # consistent with the other two, which return False for an absent row.
         kwargs["ConditionExpression"] = (
             DDBAttr("scheduled_task_version").eq(expected_version) if expected_version is not None else DDBAttr("scheduled_task_id").exists()
         )
@@ -128,11 +124,9 @@ class DynamoDBScheduledTaskStore(ScheduledTaskStore):
                 # Removing the index key drops the tombstone out of the GSI while the row itself
                 # stays readable by primary key.
                 UpdateExpression="SET #deleted = :deleted, #deleted_at = :deleted_at, #ttl = :ttl REMOVE #owner_index",
-                # Without this, an update_item on an absent id *creates* an item holding only the
-                # key and the delete fields, which a later get cannot parse as a ScheduledTask.
-                # Reachable through the check-then-act in AWSScheduler.delete when the row
-                # TTL-expires between the get and this call. The Redis backend writes nothing in
-                # the same situation, and this makes the two agree.
+                # Without this, update_item on an absent id would create a partial item. Reachable
+                # when the row TTL-expires between AWSScheduler.delete's get and this call; this
+                # keeps parity with Redis, which writes nothing in the same situation.
                 ConditionExpression=DDBAttr("scheduled_task_id").exists(),
                 ExpressionAttributeNames={
                     "#deleted": "deleted",

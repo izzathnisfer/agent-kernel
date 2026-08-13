@@ -1,10 +1,7 @@
 """Records a scheduled run's terminal outcome from an output-queue response body.
 
-Shared by both output consumers (the serverless response handler and the ECS output
-consumer) so the recognition step is written once and behaves identically on both targets.
-
-No outcome-write policy lives here. Loading the row, applying the guards, updating the run
-fields and completing a one-time task all happen inside the ``Scheduler`` implementation.
+Shared by both output consumers so the recognition step is written once. The write policy
+itself (guards, run-field updates, one-time completion) lives in the ``Scheduler``.
 """
 
 import json
@@ -15,11 +12,8 @@ from typing import Any, Optional
 from ...core.model import ScheduledRunMetadata
 from ...scheduler import RunStatus, ScheduleExpression, SchedulerFactory
 
-# A fire whose outcome arrives more than this long after its scheduled time is logged, so a
-# late-firing or badly backed-up deployment is visible rather than silently on time. Matches the
-# floor of the providers' derived grace window, and is a fixed number precisely so recording an
-# outcome needs no queue-attribute read (the output consumers deliberately have no permission
-# for one).
+# An outcome arriving later than this after its scheduled time gets logged, so a backed-up
+# deployment is visible. Fixed rather than read from queue attributes, which consumers can't access.
 STALE_RUN_WARNING_SECONDS = 900
 
 
@@ -32,14 +26,12 @@ class ScheduledRunRecorder:
     def record(cls, body: Any) -> bool:
         """Record the outcome if the body carries a ``scheduled_run`` block.
 
-        The block's presence is how a consumer tells a scheduled run from an ordinary one, and
-        the status comes from the ordinary response shape (an ``error`` key means FAILED), so
-        no scheduling-specific status or error field is needed.
+        The block's presence is how a consumer tells a scheduled run from an ordinary one; an
+        ``error`` key in the body still means FAILED, so no scheduling-specific status is needed.
 
         :param body: The output-queue message body, parsed or raw JSON.
-        :return: True when this was a scheduled run and the consumer should stop here, since a
-            scheduled run has no client channel to broadcast on and nobody polling the
-            response store for it.
+        :return: True when this was a scheduled run — it has no client channel to broadcast on
+            and nobody polling the response store, so the consumer should stop here.
         """
         parsed = cls._as_dict(body)
         if parsed is None:
@@ -55,18 +47,15 @@ class ScheduledRunRecorder:
     def record_before_discard(cls, raw_body: Any) -> bool:
         """Make the last possible attempt to record the outcome, for a consumer that is giving up.
 
-        Called from the output consumers' ``on_permanent_failure``, the last code to see the
-        message: the consumers' retry limit is one below the queue's and swallowing the failure
-        deletes the message rather than moving it to a DLQ. An outcome not written here is lost
-        and the row keeps a stale ``last_run_*`` forever.
+        Called from ``on_permanent_failure``, the last code to see the message before it's
+        deleted rather than moved to a DLQ — an outcome not written here is lost forever.
 
-        The status still comes from the body, not from the fact that this is the failure path.
-        A body reporting a result describes a run the agent completed where only the recording
-        failed, so inventing FAILED would report a broken task to a caller whose agent ran fine.
+        Status still comes from the body, not from the fact that this is the failure path: a
+        body reporting a result means the agent finished and only the recording failed, so
+        inventing FAILED here would misreport a task whose agent actually ran fine.
 
         :param raw_body: The raw output-queue message body, parsed or raw JSON.
-        :return: True when this was a scheduled run and the consumer should stop here,
-            whether or not the outcome could be written.
+        :return: True when this was a scheduled run, whether or not the outcome could be written.
         """
         # from_raw_body, not from_body: this path has no error channel left, so a malformed
         # block must read as "not a scheduled run" rather than raise.
@@ -117,11 +106,10 @@ class ScheduledRunRecorder:
 
     @classmethod
     def _warn_if_stale(cls, scheduled_run: ScheduledRunMetadata) -> None:
-        """Log a run whose outcome arrives long after the time it was scheduled for.
+        """Log a run whose outcome arrives long after its scheduled time; recording it is unaffected.
 
-        The run is still recorded: a late fire is a real run whose outcome belongs on the row.
-        The log is what lets an operator tell a late deployment from an on-time one, since
-        ``last_run_at`` alone shows only that the run happened.
+        ``last_run_at`` alone can't distinguish a late deployment from an on-time one — this is
+        what lets an operator tell the difference.
 
         :param scheduled_run: The identity block the fire carried.
         """

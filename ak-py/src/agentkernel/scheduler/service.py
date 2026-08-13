@@ -1,8 +1,7 @@
 """The single place all scheduling logic lives.
 
-Its three callers — the chat create path, the ``/api/v1/schedule`` routes, and the
-agent-callable tools — all go through it, so there are no parallel code paths. Unlike
-``ChatService`` it never runs an agent; it only registers and manages schedules.
+The chat create path, ``/api/v1/schedule`` routes, and agent tools all go through it.
+Unlike ``ChatService`` it never runs an agent; it only registers and manages schedules.
 """
 
 import logging
@@ -41,10 +40,9 @@ class ScheduledTaskService:
         owner_id: str,
         request_id: Optional[str] = None,
     ) -> CreateAck:
-        """Register a message to run later, and acknowledge the registration.
+        """Register a message to run later and acknowledge the registration.
 
-        Nothing is enqueued: the first message on the input queue appears when the timer
-        fires.
+        Nothing is enqueued until the timer fires.
 
         :param spec: The timing expression plus conversation mode.
         :param prompt: The prompt the agent receives on every fire.
@@ -92,18 +90,16 @@ class ScheduledTaskService:
     ) -> ScheduledTask:
         """Change an existing scheduled task's schedule or message.
 
-        Update never creates, and updates affect future executions only: a fire already
-        enqueued continues with the definition it was enqueued with.
+        Never creates. A fire already enqueued keeps the definition it was enqueued with.
 
         :param scheduled_task_id: Identity of the scheduled task to change.
         :param owner_id: The caller's authenticated identity.
         :param spec: Replacement schedule; the existing one is kept when omitted.
         :param prompt: Replacement prompt; the existing one is kept when omitted.
         :param agent: Replacement agent; the existing one is kept when omitted.
-        :param mode: Replacement conversation mode, for a caller changing the mode without
-            retiming the task. It is applied to whichever schedule this update keeps, so a
-            mode-only change is a real change rather than a silently dropped argument. A
-            replacement ``spec`` carries its own mode, so the two are not combined.
+        :param mode: Replacement conversation mode, applied when ``spec`` is omitted so a
+            mode-only change isn't silently dropped. A replacement ``spec`` carries its own
+            mode instead.
         :return: The updated scheduled task.
         :raises SchedulerNotFoundError: There is no live row at that id.
         :raises SchedulerPermissionError: The caller does not own it.
@@ -118,8 +114,8 @@ class ScheduledTaskService:
         if spec is not None:
             ScheduleExpression.validate(schedule, self._scheduler.minimum_granularity)
         elif mode is not None:
-            # No timing change, so nothing to re-validate: only the conversation the runs share
-            # moves. The re-registration below is what makes the new session id take effect.
+            # No timing change to re-validate; re-registering below moves the conversation
+            # to the new session id.
             schedule = schedule.model_copy(update={"mode": mode})
 
         task = existing.model_copy(
@@ -185,9 +181,8 @@ class ScheduledTaskService:
     def _validate_id(self, scheduled_task_id: str) -> None:
         """Reject an id the provider's timer could not register, before anything is written.
 
-        A caller-chosen id becomes the timer's own registration name, so an id outside the
-        provider's charset would otherwise fail on the provider round trip — after the row
-        write, leaving the caller a provider-side error instead of a validation one.
+        A caller-chosen id becomes the timer's own registration name; validating here avoids
+        a provider-side failure surfacing only after the row write.
 
         :param scheduled_task_id: The resolved id, caller-supplied or generated.
         :raises ScheduleValidationError: The id does not match the provider's pattern.
@@ -238,9 +233,8 @@ class ScheduledTaskService:
     def _require_instant_to_rearm(existing: ScheduledTask, spec: Optional[ScheduleSpec]) -> None:
         """Require a new instant before a one-time task that has already run may be updated.
 
-        Its ``at`` has elapsed, so re-registering the schedule unchanged would be rejected as a
-        schedule in the past. Asking for the replacement here names the field the caller has to
-        change, rather than failing on a schedule they never supplied.
+        Its ``at`` has elapsed, so an unchanged re-registration would fail as in the past;
+        asking for a replacement here names the field the caller needs to fix.
 
         :param existing: The live row being updated.
         :param spec: The replacement schedule, or None when the caller supplied none.
@@ -261,9 +255,8 @@ class ScheduledTaskService:
     def _with_existing_mode(spec: ScheduleSpec, existing: ScheduleSpec) -> ScheduleSpec:
         """Carry the current conversation mode onto a replacement schedule that names none.
 
-        ``mode`` has a model default, so a caller changing only the timing would otherwise
-        silently move a continuous task to per-run — which changes its session id and abandons
-        the conversation it had been accumulating.
+        ``mode`` has a model default, so an unqualified replacement would silently reset a
+        continuous task to per-run, changing its session id and losing its conversation.
 
         :param spec: The replacement schedule as supplied.
         :param existing: The schedule being replaced.

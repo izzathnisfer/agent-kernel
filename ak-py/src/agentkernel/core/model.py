@@ -258,9 +258,8 @@ class ScheduledRunMetadata(BaseModel):
     def from_body(cls, body: dict) -> "ScheduledRunMetadata | None":
         """Extract the block from an already-parsed body.
 
-        The output consumers call this on every output-queue message, so a miss costs one
-        ``dict.get``. A malformed block raises ``ValidationError``, which on the ordinary path
-        is a real bug worth surfacing.
+        Called on every output-queue message, so a miss is just a ``dict.get``; a malformed
+        block raises ``ValidationError`` since that would be a real bug.
 
         :param body: The parsed response/request body.
         :return: The parsed metadata, or None when the body carries no block.
@@ -310,8 +309,7 @@ class BaseRunRequest(BaseChatRequest):
 
     files: Optional[List[FileData]] = None
     images: Optional[List[ImageData]] = None
-    # schedule is create-time only (registers the message to run later); scheduled_run is
-    # fire-time only (correlates one run). They never appear on the same request.
+    # schedule (create-time) and scheduled_run (fire-time) never appear on the same request.
     schedule: Optional[ScheduleSpec] = None
     scheduled_run: Optional[ScheduledRunMetadata] = None
     model_config = ConfigDict(extra="allow")

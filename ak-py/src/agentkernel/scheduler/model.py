@@ -1,9 +1,8 @@
 """Data shapes of the scheduled-task capability.
 
-``ScheduleSpec``, ``ScheduleMode`` and ``ScheduledRunMetadata`` are defined in
-``core/model.py`` and re-exported here. They are fields on ``BaseRunRequest``, and Pydantic
-resolves field annotations at import time, so a lazy import cannot satisfy them. Defining
-them in core keeps the dependency one-way: ``core/`` imports nothing from ``scheduler/``.
+``ScheduleSpec``, ``ScheduleMode`` and ``ScheduledRunMetadata`` are defined in ``core/model.py``
+and re-exported here, since they're fields on ``BaseRunRequest`` that Pydantic resolves at import
+time (a lazy import can't satisfy them). This keeps ``core/`` free of any dependency on ``scheduler/``.
 """
 
 from datetime import datetime
@@ -48,8 +47,8 @@ class ScheduledTask(BaseModel):
     """
 
     scheduled_task_id: str
-    # Incarnation token. Caller-chosen ids become reusable once a deleted row's TTL expires,
-    # so an outcome write carries this to prove it belongs to the row it lands on.
+    # Incarnation token: proves an outcome write belongs to this row even after a
+    # caller-chosen id becomes reusable post-TTL.
     scheduled_task_version: str
     owner_id: str
     schedule: ScheduleSpec
@@ -85,8 +84,7 @@ class CreateAck(BaseModel):
     status: Literal["SCHEDULED"] = "SCHEDULED"
     scheduled_task_id: str
     scheduled_task_version: str
-    # CONTINUOUS mode only. A PER_RUN session id is a template resolved at fire time, which
-    # would look like a usable session id without being one.
+    # CONTINUOUS mode only; a PER_RUN id is an unresolved template, not a usable session id.
     session_id: Optional[str] = None
     # Best-effort: set when derivable from the expression, None for cron. None never means
     # "not scheduled".

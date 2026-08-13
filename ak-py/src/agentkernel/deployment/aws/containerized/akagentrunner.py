@@ -168,13 +168,9 @@ class ECSStreamAgentRunner(ECSAgentRunner):
     def _is_scheduled_fire(cls, record: dict) -> bool:
         """Tell a timer-delivered fire from an interactive streaming request.
 
-        A fire has no client connection to stream to: the timer stamps only request_id and
-        user_id, never the endpoint_url this runner requires, and a StreamChunk has nowhere to
-        carry the scheduled_run block the output consumer records outcomes from. So a fire is
-        run as an ordinary non-stream execution, whose response echoes that block.
-
-        The presence of the block is the same signal the output consumers already fan out on,
-        ahead of their own execution-mode branch.
+        A fire has no client connection (no endpoint_url) and a StreamChunk has nowhere to
+        carry the scheduled_run block, so fires run as an ordinary non-stream execution instead
+        — the same block the output consumers already fan out on.
 
         :param record: boto3 SQS message dict.
         :return: True when this record is one fire of a scheduled task.

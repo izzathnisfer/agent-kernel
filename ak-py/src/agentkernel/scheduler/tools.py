@@ -1,9 +1,8 @@
 """Scheduler system tools — the agent-facing surface of the scheduled-task capability.
 
 Registered on an agent (via ``SystemToolFactory``) when ``scheduler.enabled`` is true and the
-agent is in scope. They are the agent's equivalent of the chat endpoint's ``schedule`` block,
-since an agent has no HTTP client into its own deployment. All go through the same
-``ScheduledTaskService`` as the REST surfaces and return JSON strings, reporting failures as
+agent is in scope, since an agent has no HTTP client into its own deployment. All go through the
+same ``ScheduledTaskService`` as the REST surfaces and return JSON, reporting failures as
 ``{"error": ...}`` rather than raising into the framework.
 """
 
@@ -35,10 +34,9 @@ class _ToolSupport:
     def owner_id() -> Optional[str]:
         """Resolve the human identity that owns the invoking session.
 
-        A tool cannot set an arbitrary owner. The id is the ``user_id`` of the request that
-        started the invoking session, which ``ChatService`` binds to the session's volatile
-        cache. On a scheduled fire that is the task's own owner, so a task created from a
-        scheduled run stays with the same user.
+        A tool cannot set an arbitrary owner: the id is the ``user_id`` of the request that
+        started the session, which ``ChatService`` binds to the session's volatile cache. On a
+        scheduled fire that's the task's own owner, so a chained task stays with the same user.
 
         :return: The owning user id, or None when the session has no authenticated user.
         """
@@ -183,9 +181,8 @@ def update_scheduled_task(
         if owner_id is None:
             return _NO_OWNER
         spec = _ToolSupport.build_spec(cron, rate, at, mode, scheduled_task_id) if (cron or rate or at) else None
-        # A mode-only change carries no timing expression to hang the mode on, so it is passed
-        # separately and applied to the schedule the task already has. Dropping it here would
-        # report success for a change that never happened.
+        # A mode-only change has no timing expression to hang the mode on, so it's passed
+        # separately and applied to the task's existing schedule.
         task = service.update(
             scheduled_task_id,
             owner_id=owner_id,
@@ -252,10 +249,9 @@ def list_scheduled_tasks(limit: Optional[int] = None, cursor: Optional[str] = No
 def get_scheduler_tools() -> list[SystemTool]:
     """Build the scheduler system tools; called by ``SystemToolFactory`` when enabled.
 
-    Following the sandbox pattern, the capability's whole system-prompt section sits on the
-    first tool's ``description``, so agent authors never describe these tools in their own
-    instructions. The rest have empty descriptions; their LLM-facing schemas come from the
-    function docstrings when the tools are bound.
+    Following the sandbox pattern, the whole system-prompt section sits on the first tool's
+    ``description`` so agent authors never repeat it; the rest have empty descriptions and rely
+    on their own docstrings as LLM-facing schemas.
 
     :return: The four scheduler tools.
     """

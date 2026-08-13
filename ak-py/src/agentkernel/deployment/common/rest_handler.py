@@ -37,7 +37,6 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         :raises AKConfigError: Scheduling is enabled but no Authoriser was supplied.
         """
         super().__init__()
-        # Override base logger with the deployment-specific one.
         self._log = logging.getLogger(logger_name)
         self._config = AKConfig.get()
         self._authoriser = authoriser
@@ -63,14 +62,12 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
     async def enqueue_and_wait(self, body: BaseRunRequest, request: Request = None):
         """Enqueue request; REST_SYNC waits for the response, REST_ASYNC returns request_id immediately.
 
-        A body carrying a ``schedule`` block is registered instead: nothing is enqueued, and
-        the first message on the input queue appears when the timer fires.
+        A body carrying a ``schedule`` block is registered instead of enqueued; the first queue
+        message appears only once the timer fires.
 
-        ``request`` must stay annotated as a bare ``Request`` — FastAPI decides injection from
-        the annotation, so under ``Optional[Request]`` it stops injecting and treats it as a
-        body field. The default keeps existing direct callers and subclass overrides working;
-        only the scheduling branch needs the request, and it rejects a call that arrived
-        without one.
+        ``request`` must stay typed as a bare ``Request``, not ``Optional[Request]`` — FastAPI
+        stops injecting it and treats it as a body field otherwise. Only the scheduling branch
+        needs it, and rejects a call that arrived without one.
 
         :param body: The chat body, optionally carrying a ``schedule`` block.
         :param request: The incoming request, used to resolve the scheduled task's owner.
@@ -86,7 +83,6 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
             if not body.prompt:
                 raise HTTPException(status_code=400, detail="prompt is required")
 
-            # Unique request_id, distinct from session_id.
             request_id = str(uuid.uuid4())
 
             self._log.info(f"[REQUEST START] session_id={body.session_id}, request_id={request_id}, agent={body.agent}, prompt={body.prompt[:50]}")
@@ -102,7 +98,6 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
             self._log.info(f"[ENQUEUED] MessageId={queue_result.get('MessageId')}, request_id={request_id}")
 
             if self._config.execution.mode == ExecutionMode.REST_SYNC:
-                # Wait for the response in the response store.
                 self._log.info(f"[WAITING] Polling response store for request_id={request_id}")
 
                 response = await self.get_response_store().get_message_with_retry(request_id, True, async_mode=True)
@@ -122,7 +117,6 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
                 return response.get("body", response)
 
             elif self._config.execution.mode == ExecutionMode.REST_ASYNC:
-                # Return request_id for later polling.
                 return {"status": "ACCEPTED", "request_id": request_id, "session_id": body.session_id}
 
             else:
@@ -150,14 +144,13 @@ class RestHandler(BearerIdentityMixin, AgentRESTRequestHandler):
         if self._schedule_service is None:
             raise HTTPException(status_code=400, detail="Scheduling is not enabled for this deployment")
         if request is None:
-            # A direct call rather than an HTTP request, so there is no token to resolve an
-            # owner from — and a scheduled task with no owner must never be created.
+            # No HTTP request means no token to resolve an owner from, and a scheduled task
+            # must always have one.
             raise HTTPException(status_code=401, detail="A scheduled task requires an authenticated caller")
 
         owner_id = self._resolve_user(request)
         try:
-            # Offload the blocking create: it does a store read, a store write and a timer
-            # registration, none of them async.
+            # create() does a store read, a store write and a timer registration — none async.
             ack = await asyncio.to_thread(
                 self._schedule_service.create,
                 spec=body.schedule,

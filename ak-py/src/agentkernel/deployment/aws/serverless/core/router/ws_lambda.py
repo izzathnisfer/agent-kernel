@@ -41,24 +41,12 @@ class LambdaWSHandler(AWSWebSocketHandler):
         self.CHAT_ROUTE = config.websocket_api.chat_route
 
     def _parse_body(self, event: Dict[str, Any]) -> BaseRequest:
-        """
-        Parse request body from WebSocket event.
-
-        :param event: WebSocket event dictionary
-        :return: Parsed BaseRequest object
-        """
         body = event.get("body")
         body_dict = json.loads(body) if isinstance(body, str) and body else (body or {})
         return BaseRequest.from_payload(body_dict)
 
     def _extract_connection_id(self, event: Dict[str, Any]) -> str:
-        """
-        Extract connection ID from WebSocket event.
-
-        :param event: WebSocket event dictionary
-        :return: Connection ID string
-        :raises ValueError: If connectionId is missing
-        """
+        """:raises ValueError: connectionId is missing."""
         request_context = event.get("requestContext", {})
         connection_id = request_context.get("connectionId")
         if not connection_id:
@@ -66,13 +54,7 @@ class LambdaWSHandler(AWSWebSocketHandler):
         return connection_id
 
     def _parse_event_to_wsmessage(self, event: Dict[str, Any]) -> "LambdaWSHandler.WSMessageInfo":
-        """
-        Parse WebSocket event to WSMessageInfo object.
-
-        :param event: WebSocket event dictionary
-        :return: WSMessageInfo object with user_id and request
-        :raises ValueError: If connection_id is missing or user_id cannot be found
-        """
+        """:raises ValueError: connection_id is missing or has no associated user_id."""
         request = self._parse_body(event)
         connection_id = self._extract_connection_id(event)
         user_id = self.get_user_id(connection_id)
@@ -86,14 +68,7 @@ class LambdaWSHandler(AWSWebSocketHandler):
         operation: Callable[[WSMessageInfo], Dict[str, Any]],
         message_type: Optional["LambdaWSHandler.MessageType"] = None,
     ) -> Tuple[int, Dict[str, Any]]:
-        """
-        Handle message and broadcast result to user.
-
-        :param event: WebSocket event dictionary
-        :param operation: Function to process the request
-        :param message_type: Optional message type for broadcasting
-        :return: Tuple of (status_code, response_body)
-        """
+        """Run ``operation`` on the parsed message and broadcast its result to the user."""
         user_id = None
         try:
             ws_message_info = self._parse_event_to_wsmessage(event)
@@ -118,14 +93,7 @@ class LambdaWSHandler(AWSWebSocketHandler):
         msg: Optional[str] = None,
         success: bool = True,
     ) -> Dict[str, Any]:
-        """
-        Build a standardized response body.
-
-        :param user_id: Optional user ID for tracking
-        :param msg: Message to include in the response
-        :param success: Whether the response is a success or failure
-        :return: Standardized response dictionary
-        """
+        """Build a standardized response body."""
         msg = msg or ("Operation successful" if success else "An unexpected error occurred")
         body = {"status": "SUCCESS", "message": msg} if success else {"status": "FAILED", "message": msg}
         if user_id:
@@ -136,61 +104,30 @@ class LambdaWSHandler(AWSWebSocketHandler):
 class ConnectionRoutesHandler(LambdaWSHandler):
     """Handles WebSocket connection lifecycle routes ($connect, $disconnect).
 
-    This handler is responsible for managing WebSocket connections and requires
-    authentication tokens before allowing connections.
-
-    Authentication is mandatory for WebSocket connections. The auth_validator
-    must be provided and will validate JWT tokens. user_id is extracted from the
-    JWT token's user_id claim after signature verification. The JWT token should
-    include a user_id claim containing the user's identifier (email, username,
-    or any other identifier).
+    Authentication is mandatory: ``auth_validator`` validates the JWT and user_id comes from
+    its ``userId`` claim.
     """
 
     _log = logging.getLogger("ak.aws.serverless.connection_routes")
 
     def __init__(self, auth_validator: AuthValidator):
-        """Initialize connection routes handler.
-
-        :param auth_validator: Required auth validator for $connect route
-        """
         super().__init__()
         self.auth_validator = auth_validator
 
     def _extract_auth_token(self, event: Dict[str, Any]) -> Optional[str]:
-        """
-        Extract authentication token from WebSocket event query string.
-
-        :param event: WebSocket event dictionary
-        :return: Token string if found, None otherwise
-        """
         query_params = event.get("queryStringParameters", {})
         if isinstance(query_params, dict):
             return query_params.get("token")
         return None
 
     def get_routes(self) -> Dict[str, Callable[[Dict[str, Any], Any], Any]]:
-        """
-        Get registered connection route handlers.
-
-        :param: None
-        :return: Dictionary mapping route keys to handler functions
-        """
         return {
             self.CONNECT_ROUTE: self._handle_connect,
             self.DISCONNECT_ROUTE: self._handle_disconnect,
         }
 
     def _handle_connect(self, event: Dict[str, Any], context: Optional[Any] = None) -> Tuple[int, Dict[str, Any]]:
-        """
-        Handle WebSocket $connect route with mandatory authentication.
-
-        user_id is extracted from the JWT token's user_id claim after validation.
-        The JWT token structure should include a user_id claim containing email, username, or any identifier.
-
-        :param event: WebSocket connect event
-        :param context: Lambda context object
-        :return: Tuple of (status_code, response_body)
-        """
+        """Validate the token and admit the connection; user_id comes from its ``userId`` claim."""
         try:
             connection_id = self._extract_connection_id(event)
 
@@ -217,13 +154,6 @@ class ConnectionRoutesHandler(LambdaWSHandler):
             return 500, self._build_lambda_response(msg="Failed to establish WebSocket connection", success=False)
 
     def _handle_disconnect(self, event: Dict[str, Any], context: Optional[Any] = None) -> Tuple[int, Dict[str, Any]]:
-        """
-        Handle WebSocket $disconnect route.
-
-        :param event: WebSocket disconnect event
-        :param context: Lambda context object
-        :return: Tuple of (status_code, response_body)
-        """
         try:
             connection_id = self._extract_connection_id(event)
 
@@ -235,17 +165,11 @@ class ConnectionRoutesHandler(LambdaWSHandler):
 
 
 class SystemRoutesHandler(LambdaWSHandler):
-    """Handles WebSocket application routes ($default, /chat).
-
-    This handler is responsible for application-level WebSocket operations
-    like chat processing. Connection authentication is assumed to be already
-    validated by the connection handler.
-    """
+    """Handles WebSocket application routes ($default, /chat); assumes the connection is already authenticated."""
 
     _log = logging.getLogger("ak.aws.serverless.system_routes")
 
     def __init__(self):
-        """Initialize system routes handler."""
         super().__init__()
         if not self.CHAT_ROUTE:
             raise ValueError("websocket_api.chat_route must be configured")
@@ -256,46 +180,21 @@ class SystemRoutesHandler(LambdaWSHandler):
         self._schedule_service = SchedulerFactory.service()
 
     def _is_queue_mode(self) -> bool:
-        """
-        Check if queue mode is enabled (queues are configured).
-
-        :param: None
-        :return: True if both input and output queues are configured
-        """
         return self._config.execution.queues.input.url is not None
 
     def get_routes(self) -> Dict[str, Callable[[Dict[str, Any], Any], Any]]:
-        """
-        Get registered system route handlers.
-
-        :param: None
-        :return: Dictionary mapping route keys to handler functions
-        """
         return {
             self.DEFAULT_ROUTE: self._handle_default,
             self.CHAT_ROUTE: self._get_chat_handler_by_mode(),
         }
 
     def _get_chat_handler_by_mode(self) -> Callable:
-        """
-        Return the appropriate chat handler based on execution mode and queue configuration.
-
-        :param: None
-        :return: Chat handler callable
-        """
+        """Pick the chat handler for the current execution mode and queue configuration."""
         if self._config.execution.mode == ExecutionMode.STREAM:
             return self._handle_queue_mode if self._is_queue_mode() else self._handle_stream_direct
         return self._handle_queue_mode if self._is_queue_mode() else self._handle_direct_chat
 
     def _handle_default(self, event: Dict[str, Any], context: Optional[Any] = None) -> Tuple[int, Dict[str, Any]]:
-        """
-        Handle WebSocket $default route.
-
-        :param event: WebSocket default route event
-        :param context: Lambda context object
-        :return: Tuple of (status_code, response_body)
-        """
-
         def _process_default(ws_message_info: "LambdaWSHandler.WSMessageInfo") -> Dict[str, Any]:
             self.on_default()
             requested_route = ws_message_info.request.route
@@ -308,16 +207,9 @@ class SystemRoutesHandler(LambdaWSHandler):
         )
 
     def _handle_direct_chat(self, event: Dict[str, Any], context: Optional[Any] = None) -> Tuple[int, Dict[str, Any]]:
-        """
-        Handle direct chat request without queue.
+        """Handle direct chat request without queue."""
 
-        :param event: WebSocket chat event
-        :param context: Lambda context object
-        :return: Tuple of (status_code, response_body)
-        """
-
-        # Checked before delegating: _handle_msg_and_brdcst answers 200 or 500 only, so a
-        # rejection cannot be expressed from inside the operation.
+        # Checked before delegating: _handle_msg_and_brdcst can only answer 200 or 500.
         rejection = self._reject_direct_mode_schedule(event)
         if rejection is not None:
             return rejection
@@ -336,15 +228,7 @@ class SystemRoutesHandler(LambdaWSHandler):
         )
 
     def _handle_stream_direct(self, event: Dict[str, Any], context: Optional[Any] = None) -> Tuple[int, Dict[str, Any]]:
-        """
-        Handle direct streaming chat request without queue (non-queue STREAM mode).
-
-        Streams agent response chunks directly via WebSocket.
-
-        :param event: WebSocket chat event
-        :param context: Lambda context object
-        :return: Tuple of (status_code, response_body)
-        """
+        """Handle direct streaming chat (non-queue STREAM mode): stream agent chunks via WebSocket."""
         user_id = None
         session_id = None
         try:
@@ -381,14 +265,10 @@ class SystemRoutesHandler(LambdaWSHandler):
     def _reject_direct_mode_schedule(self, event: Dict[str, Any]) -> Optional[Tuple[int, Dict[str, Any]]]:
         """Refuse a frame asking to be scheduled on a deployment that consumes no input queue.
 
-        Scheduling is a queue-mode capability: the timer's target is the input queue, and in
-        direct mode nothing consumes it, so a registration here would be acknowledged and then
-        never run. Refusing keeps the whole capability queue-mode-only, as the design scopes it.
+        A timer fires onto the input queue; in direct mode nothing consumes it, so a
+        registration here would be acknowledged and then never run. Parses the frame a second
+        time (cheap: one frame) to produce a rejection the generic handler can't express.
 
-        The frame is parsed a second time (the normal path parses it again), which is one
-        in-memory parse of one frame and buys a rejection the generic handler cannot express.
-
-        :param event: WebSocket event dictionary.
         :return: The 400 rejection, or None when the frame carries no ``schedule`` block.
         """
         try:
@@ -401,11 +281,7 @@ class SystemRoutesHandler(LambdaWSHandler):
         return self._direct_mode_rejection(ws_message_info.user_id)
 
     def _direct_mode_rejection(self, user_id: Optional[str]) -> Tuple[int, Dict[str, Any]]:
-        """Build the direct-mode refusal, so both direct chat paths answer it identically.
-
-        :param user_id: The connection's authenticated user, for the response envelope.
-        :return: Tuple of (400, response_body).
-        """
+        """Build the direct-mode refusal, so both direct chat paths answer it identically."""
         message = "Scheduling requires queue mode; this deployment runs requests directly"
         self._log.warning(f"Rejected a schedule frame on a direct-mode deployment for user_id={user_id}")
         return (400, self._build_lambda_response(user_id=user_id, msg=message, success=False))
@@ -417,12 +293,8 @@ class SystemRoutesHandler(LambdaWSHandler):
     ) -> Tuple[int, Dict[str, Any]]:
         """Register a chat frame to run later and broadcast the acknowledgement.
 
-        The acknowledgement is sent here rather than by the response handler, so it goes out on
-        the caller's live connection without passing through the queues.
-
-        :param event: WebSocket event dictionary.
-        :param ws_message_info: The parsed frame and its authenticated user.
-        :return: Tuple of (status_code, response_body).
+        Sent here rather than by the response handler, so it goes straight out on the caller's
+        live connection without passing through the queues.
         """
         user_id = ws_message_info.user_id
         try:
@@ -442,10 +314,8 @@ class SystemRoutesHandler(LambdaWSHandler):
     def _register_schedule(self, ws_message_info: "LambdaWSHandler.WSMessageInfo") -> CreateAck:
         """Register the frame's ``schedule`` block against the connection's authenticated user.
 
-        Reached from the queue-mode chat paths only; the direct-mode paths refuse before here.
+        Reached from the queue-mode chat paths only; direct-mode paths refuse before here.
 
-        :param ws_message_info: The parsed frame and its authenticated user.
-        :return: The creation acknowledgement.
         :raises ValueError: Scheduling is not enabled for this deployment.
         :raises SchedulerError: The schedule was rejected.
         """
@@ -463,13 +333,8 @@ class SystemRoutesHandler(LambdaWSHandler):
     def _broadcast_ack(self, ack: CreateAck, event: Dict[str, Any], user_id: str) -> None:
         """Push the creation acknowledgement over the caller's connection.
 
-        In stream mode it is a single terminal frame: nothing is generated at creation time,
-        so there are no token deltas to precede it.
-
-        :param ack: The acknowledgement payload.
-        :param event: WebSocket event dictionary.
-        :param user_id: The authenticated user to push to.
-        :return: None
+        In stream mode it's a single terminal frame: nothing is generated at creation time, so
+        there are no token deltas to precede it.
         """
         payload = ack.model_dump(mode="json", exclude_none=True)
         if self._config.execution.mode == ExecutionMode.STREAM:
@@ -486,16 +351,7 @@ class SystemRoutesHandler(LambdaWSHandler):
         )
 
     def _handle_queue_mode(self, event: Dict[str, Any], context: Optional[Any] = None) -> Tuple[int, Dict[str, Any]]:
-        """
-        Handle chat request in queue mode - send message to SQS input queue.
-
-        Used for both STREAM and non-STREAM execution modes when queues are configured.
-        Response will arrive via output queue -> ResponseHandler -> WebSocket.
-
-        :param event: WebSocket event
-        :param context: Lambda context object
-        :return: Tuple of status code and response body
-        """
+        """Send the chat request to the SQS input queue; response arrives via output queue -> ResponseHandler -> WebSocket."""
         user_id = None
         try:
             ws_message_info = self._parse_event_to_wsmessage(event)
@@ -545,20 +401,17 @@ class SystemRoutesHandler(LambdaWSHandler):
 
 
 class WSLambdaRouter(BaseLambdaRouter):
-    """
-    Router for AWS Lambda events coming from API Gateway WebSocket APIs.
-    - Register handlers per route for WebSocket endpoints.
-    - Route can be provided in multiple forms and will be normalized.
-    - If no handler match is found, the router raises ValueError.
+    """Router for AWS Lambda events from API Gateway WebSocket APIs.
+
+    Handlers are registered per route; routes are normalized before lookup, and dispatch
+    raises ValueError when nothing matches.
     """
 
     def __init__(self, connection_routes: bool = False, system_routes: bool = True, auth_validator: Optional[AuthValidator] = None):
-        """Initialize WebSocket Lambda router.
-
-        :param connection_routes: Include $connect and $disconnect routes (requires auth_validator)
-        :param system_routes: Include $default and /chat routes
-        :param auth_validator: Required auth validator for $connect route when connection_routes is True
-        :raises ValueError: If connection_routes is True but auth_validator is not provided
+        """
+        :param connection_routes: Include $connect and $disconnect routes (requires auth_validator).
+        :param system_routes: Include $default and /chat routes.
+        :raises ValueError: connection_routes is True but auth_validator is not provided.
         """
         super().__init__()
         self._log.info("Initializing WebSocket routes")
@@ -580,11 +433,7 @@ class WSLambdaRouter(BaseLambdaRouter):
         self._log.info(f"Registered WebSocket Routes: {self._websocket_routes}")
 
     def _get_ws_handler_function(self, handler_logic_func: Callable[[Dict[str, Any], Any], Any]):
-        """Wrap handler function with WebSocket broadcasting.
-
-        :param handler_logic_func: Handler function to wrap
-        :return: Wrapped handler function
-        """
+        """Wrap a handler function so its result is broadcast over WebSocket."""
 
         def _handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             try:
@@ -601,15 +450,10 @@ class WSLambdaRouter(BaseLambdaRouter):
         return _handler
 
     def register(self, route: str, method: Optional[str] = None) -> Callable[[Callable], Callable]:
-        """
-        Factory function that creates a decorator to register a WebSocket handler for a given route.
+        """Return a decorator that registers a WebSocket handler for the given route.
 
-        WebSocket routes do not use HTTP methods, only the route.
-
-        :param route: Route key for the WebSocket route
-        :param method: Not used for WebSocket routes (kept for interface compatibility)
-        :return: Decorator function that registers the handler and returns it unchanged
-        :raises ValueError: If HTTP method is provided
+        :param method: Not used — WebSocket routes have no HTTP method; kept for interface compatibility.
+        :raises ValueError: A method is provided.
         """
         if method is not None:
             raise ValueError("HTTP method is not allowed in WebSocket mode")
@@ -631,13 +475,6 @@ class WSLambdaRouter(BaseLambdaRouter):
         return _decorator
 
     def _broadcast_error(self, event: Dict[str, Any], error_message: str) -> None:
-        """
-        Broadcast an error message to the WebSocket client.
-
-        :param event: WebSocket event dictionary
-        :param error_message: Error message to broadcast
-        :return: None
-        """
         try:
             request_context = event.get("requestContext", {})
             connection_id = request_context.get("connectionId")
@@ -663,13 +500,9 @@ class WSLambdaRouter(BaseLambdaRouter):
             self._log.error(f"Failed to broadcast error: {e}\n{traceback.format_exc()}")
 
     def dispatch(self, event: Dict[str, Any], context: Any) -> Optional[Dict[str, Any]]:
-        """
-        Dispatch incoming API Gateway WebSocket event to the appropriate registered handler.
+        """Dispatch an API Gateway WebSocket event to its registered handler.
 
-        :param event: API Gateway WebSocket event dictionary containing request information
-        :param context: AWS Lambda context object
-        :return: Formatted API Gateway response dictionary or None if no route matches
-        :raises ValueError: If no registered route matches the request
+        :raises ValueError: No registered route matches the request.
         """
         try:
             self._log.info("Dispatching WebSocket endpoint")

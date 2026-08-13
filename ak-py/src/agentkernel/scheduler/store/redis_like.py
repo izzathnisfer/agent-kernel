@@ -66,9 +66,8 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
     def _merge_locked(self, scheduled_task_id: str, fields: dict[str, Any], expected_version: Optional[str]) -> bool:
         """Read, merge and write one row. **The caller must already hold the row lock.**
 
-        Split out of ``update_fields`` so ``soft_delete`` can merge and then set the row's
-        expiry without releasing the lock in between; the lock is not reentrant, so it cannot
-        simply call ``update_fields``.
+        Split out of ``update_fields`` so ``soft_delete`` can merge, then set expiry, without
+        releasing the non-reentrant lock in between.
 
         :param scheduled_task_id: Identity of the row to merge into.
         :param fields: Attribute names mapped to their new values.
@@ -131,9 +130,8 @@ class _RedisLikeScheduledTaskStore(ScheduledTaskStore):
 
     def soft_delete(self, scheduled_task_id: str, deleted_at: datetime, ttl_seconds: int) -> None:
         self._log.debug("Soft-deleting scheduled task %s with a %ss grace window", scheduled_task_id, ttl_seconds)
-        # One lock across both steps: with the expiry set after releasing it, a concurrent put
-        # landing in between would rewrite the row and clear the grace window, leaving a
-        # tombstone that never expires.
+        # One lock across both steps: releasing before setting expiry would let a concurrent
+        # put land in between and leave a tombstone that never expires.
         with self._row_lock(scheduled_task_id):
             if not self._merge_locked(scheduled_task_id, {"deleted": True, "deleted_at": deleted_at}, None):
                 # Idempotent, like the rest of the delete path: no row left to tombstone.

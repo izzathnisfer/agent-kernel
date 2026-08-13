@@ -110,10 +110,7 @@ class ScheduleRESTRequestHandler(BearerIdentityMixin, RESTRequestHandler):
         return router
 
     def _require_service(self) -> None:
-        """Reject the request when the handler was built without a service.
-
-        This happens when a deployment constructs the handler directly while scheduling is
-        disabled in its config.
+        """Reject the request when the handler was built without a service (scheduling disabled).
 
         :raises HTTPException: 404 when scheduling is not enabled for this deployment.
         """

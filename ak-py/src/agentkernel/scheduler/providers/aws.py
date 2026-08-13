@@ -1,8 +1,7 @@
 """EventBridge Scheduler + SQS implementation of the ``Scheduler`` contract.
 
-The timer's target is the deployment's input queue, not the agent: when a schedule fires,
-EventBridge Scheduler puts an ordinary agent message on the queue and the existing agent
-runner consumes it exactly as it would any other queued request.
+The timer's target is the input queue, not the agent: a fire is an ordinary agent message
+the existing runner consumes like any other queued request.
 """
 
 import json
@@ -302,10 +301,9 @@ class AWSScheduler(Scheduler):
     def _schedule_timezone(task: ScheduledTask) -> str:
         """Resolve the timezone the rendered expression is evaluated in.
 
-        An ``at`` is an absolute instant and is rendered already converted to UTC, so declaring
-        the spec's own timezone next to it would apply the offset a second time and fire hours
-        away from the requested moment. ``ScheduleSpec.timezone`` therefore governs the
-        wall-clock expressions — cron and rate — only.
+        An ``at`` is rendered already converted to UTC; declaring the spec's own timezone
+        alongside it would apply the offset twice. ``ScheduleSpec.timezone`` therefore governs
+        only the wall-clock expressions — cron and rate.
 
         :param task: The scheduled task being registered.
         :return: The timezone name to declare with the expression.
@@ -380,14 +378,10 @@ class AWSScheduler(Scheduler):
     def _require_input_queue_url(self) -> None:
         """Refuse to register a schedule that could never deliver a fire.
 
-        EventBridge Scheduler treats a universal target's ``Input`` as an opaque string, so it
-        accepts a registration carrying a blank ``QueueUrl`` and only fails at *fire* time —
-        after the row was written and the caller was acknowledged. Checking before the store
-        write turns that silent never-runs into a loud failure of the create call.
-
-        A blank URL means this component was not given ``execution.queues.input.url``: a
-        component that registers schedules (the request handler, or an agent runner with the
-        scheduling tools enabled) must have it injected.
+        EventBridge Scheduler accepts a blank ``QueueUrl`` and only fails at fire time, after
+        the row is written and the caller acknowledged — checking here turns that silent
+        never-runs into a loud failure. A blank URL means ``execution.queues.input.url`` was
+        not injected into this component.
 
         :raises SchedulerError: The input queue URL is missing or blank.
         """
@@ -402,9 +396,8 @@ class AWSScheduler(Scheduler):
     def _create(self, task: ScheduledTask) -> None:
         """Write a brand-new row and register its timer.
 
-        The only path that uses a whole-row ``put``: there is no prior state to preserve, and
-        the immutable fields (``owner_id``, ``created_at``, ``scheduled_task_version``) are
-        written here and never again for this incarnation.
+        The only path using a whole-row ``put``: immutable fields (``owner_id``,
+        ``created_at``, ``scheduled_task_version``) are written here, never again.
 
         :param task: The scheduled task to create.
         :raises Exception: Whatever the registration raised, after rolling the row back.
@@ -421,9 +414,8 @@ class AWSScheduler(Scheduler):
     def _write_definition(self, task: ScheduledTask, previous: ScheduledTask) -> None:
         """Replace an existing row's definition, leaving its run history untouched.
 
-        A field update rather than a ``put``: a whole-row write would reset ``last_run_*`` from
-        an object that never carried them, destroying the history a re-create is supposed to
-        keep — and reverting any outcome recorded since the caller read the row.
+        A field update, not a ``put``: a whole-row write would reset ``last_run_*`` and
+        revert any outcome recorded since the caller read the row.
 
         :param task: The scheduled task carrying the new definition.
         :param previous: The row as it was, used to roll back a failed registration.
@@ -440,10 +432,8 @@ class AWSScheduler(Scheduler):
     def _apply_definition(self, task: ScheduledTask) -> None:
         """Write just the definition fields, conditioned on the incarnation.
 
-        ``expected_version`` is not optional here. Without it a missing row is not an error on
-        DynamoDB — ``update_item`` would create a partial one — while Redis and the in-memory
-        store return False. With it all three agree, so a False means the row is gone or has
-        been recreated under a new incarnation.
+        ``expected_version`` is required, not optional: without it, a missing row behaves
+        differently per backend (DynamoDB creates a partial item; others return False).
 
         :param task: The scheduled task whose definition to write.
         :raises SchedulerConflictError: The row vanished or its incarnation changed.
@@ -463,9 +453,8 @@ class AWSScheduler(Scheduler):
     def _definition_fields(task: ScheduledTask) -> dict[str, Any]:
         """Extract the definition fields in the JSON-safe form the stores expect.
 
-        Taken from the serializer rather than the model attributes: ``schedule`` is a nested
-        model and ``encode_fields`` only flattens datetimes and enums, so passing the attribute
-        straight through would reach ``json.dumps`` on Redis as an unserializable object.
+        Read from the serializer, not the model attributes: ``schedule`` is a nested model
+        that ``encode_fields`` cannot flatten, so it would reach ``json.dumps`` unserialized.
 
         :param task: The scheduled task to read the definition from.
         :return: The definition field names mapped to JSON-safe values.
@@ -487,10 +476,8 @@ class AWSScheduler(Scheduler):
     def _derive_soft_delete_ttl(self) -> int:
         """Size the window during which a deleted scheduled task's id stays reserved.
 
-        Sized to outlive the longest execution an already-enqueued fire can have, so an
-        in-flight run's id is not claimed by a new scheduled task. This is a convenience, not
-        a correctness requirement: the incarnation guard rejects cross-incarnation outcomes
-        regardless of the window.
+        Sized to outlive the longest in-flight execution. A convenience, not a correctness
+        requirement — the incarnation guard rejects cross-incarnation outcomes regardless.
 
         :return: The grace window in seconds.
         :raises SchedulerError: The queue's attributes could not be read.
@@ -505,8 +492,7 @@ class AWSScheduler(Scheduler):
 
         visibility_timeout = int(attributes["VisibilityTimeout"])
         redrive_policy = json.loads(attributes.get("RedrivePolicy") or "{}")
-        # A deployment with no DLQ has no redrive policy, so fall back to the configured
-        # count. Taking the max of both keeps the TTL an upper bound either way.
+        # No DLQ means no redrive policy; fall back to the configured count either way.
         receives = max(int(redrive_policy.get("maxReceiveCount", 0)), AKConfig.get().execution.queues.input.max_receive_count)
         return max(visibility_timeout * receives + TTL_SAFETY_MARGIN_SECONDS, TTL_FLOOR_SECONDS)
 

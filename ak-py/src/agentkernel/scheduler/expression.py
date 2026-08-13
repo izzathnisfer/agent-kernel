@@ -11,27 +11,24 @@ from typing import Optional
 from .errors import ScheduleValidationError
 from .model import ScheduleSpec
 
-# "<n> <unit>" — the rate grammar every supported timer shares. Seconds are matched only so
-# they can be rejected with the reason; no supported timer has a sub-minute rate unit.
+# Seconds are matched (then rejected with a reason) since no supported timer has a sub-minute unit.
 _RATE_PATTERN = re.compile(r"^\s*(\d+)\s+(minute|minutes|hour|hours|day|days|second|seconds)\s*$", re.IGNORECASE)
 
-# Matched by the grammar but never registrable: "60 seconds" passes the granularity check as an
-# interval yet is rejected by the timer, so it is caught here instead.
+# Matches the grammar but never registrable: "60 seconds" clears granularity yet no timer accepts it.
 _UNSUPPORTED_RATE_UNITS = ("second",)
 
-# Rejects an already-wrapped native form up front; the provider adds its own wrapper, so
-# letting one through would double-wrap it into an opaque failure at the timer.
+# Rejects an already-wrapped native form; the provider adds its own, so passing one through
+# would double-wrap it into an opaque failure at the timer.
 _WRAPPED_PATTERN = re.compile(r"^\s*(cron|rate|at)\s*\((.*)\)\s*$", re.IGNORECASE | re.DOTALL)
 
-# Only the registrable units; a rate in seconds is rejected before this lookup.
 _RATE_UNITS = {
     "minute": timedelta(minutes=1),
     "hour": timedelta(hours=1),
     "day": timedelta(days=1),
 }
 
-# Fields are: minute hour day-of-month month day-of-week year. A seventh leading field would
-# be seconds, which is finer than any supported timer, so it is rejected rather than rounded.
+# minute hour day-of-month month day-of-week year. A 7th (seconds) field is finer than any
+# supported timer, so it's rejected rather than rounded.
 _CRON_FIELD_COUNT = 6
 
 
@@ -87,9 +84,8 @@ class ScheduleExpression:
     def _reject_unsupported_unit(rate: str, unit: str) -> None:
         """Reject a rate unit that parses as an interval but no supported timer accepts.
 
-        Rejected on the unit rather than on the resulting interval, because a unit can be too
-        fine while the interval it expresses is not: ``60 seconds`` clears the minimum
-        granularity yet is still not an expression any timer can register.
+        Checked on the unit, not the interval: ``60 seconds`` clears the minimum granularity
+        yet is still not an expression any timer can register.
 
         :param rate: The rate expression, for the message.
         :param unit: The unit with any plural 's' removed.
@@ -103,8 +99,8 @@ class ScheduleExpression:
     def _reject_plural_mismatch(rate: str, amount: int, supplied_unit: str, unit: str) -> None:
         """Reject a rate whose unit does not agree in number with its amount.
 
-        The timers require the agreement — ``rate(1 minute)``, ``rate(5 minutes)``. Caught here
-        so the caller gets a validation error instead of an opaque rejection from the timer.
+        The timers require agreement (``rate(1 minute)``, ``rate(5 minutes)``); caught here
+        for a validation error instead of an opaque rejection at the timer.
 
         :param rate: The rate expression, for the message.
         :param amount: The parsed interval count.
@@ -121,9 +117,8 @@ class ScheduleExpression:
     def next_run_at(spec: ScheduleSpec, registered_at: datetime) -> Optional[datetime]:
         """Derive the next fire time, where it is knowable without evaluating the expression.
 
-        Best-effort by design: no timer API supplies a next-invocation time, and a cron
-        evaluator is not worth the dependency for a convenience field. ``None`` means "not
-        computed", never "not scheduled"; ``last_run_at`` is the authoritative history.
+        Best-effort: no timer API supplies a next-invocation time and a cron evaluator isn't
+        worth the dependency. ``None`` means "not computed", never "not scheduled".
 
         :param spec: The schedule to read.
         :param registered_at: When the definition was registered with the timer; a rate counts

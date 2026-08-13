@@ -25,14 +25,11 @@ class ResponseHandler(LambdaSQSConsumer):
     def handle(cls, event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         """Validate the scheduler wiring, then process the batch.
 
-        The check belongs here rather than in the class body because ``agentkernel.aws``
-        re-exports every deployment class, so importing it for an unrelated entry point would
-        assert on wiring only the scheduler-enabled components are given. Validating on
-        invocation still fails this Lambda before it can record any scheduled outcome.
+        Checked here, not in the class body, since ``agentkernel.aws`` re-exports every
+        deployment class — validating at import time would assert on wiring an unrelated
+        entry point never uses.
 
-        :param event: Lambda event containing SQS Records
-        :param context: Lambda context object
-        :return: A dict with "batchItemFailures" per AWS format
+        :return: A dict with "batchItemFailures" per AWS format.
         :raises AKConfigError: Scheduling is enabled but the deployment wiring is missing.
         """
         SchedulerFactory.validate_config()
@@ -56,13 +53,9 @@ class ResponseHandler(LambdaSQSConsumer):
 
     @classmethod
     def _construct_message_for_store(cls, record: Dict[str, Any], body: Optional[Any] = None) -> Dict[str, Any]:
-        """
-        Construct the message object to be stored in the response store.
+        """Build the message stored in the response store, using ``body`` in place of record["body"] when given.
 
-        :param record: SQS record
-        :param body: Optional message body payload. If not provided, uses record["body"]
-        :return: Message dictionary for storage
-        :raises ValueError: If request_id is missing in SQS message attributes
+        :raises ValueError: request_id is missing in SQS message attributes.
         """
         message_body = body if body is not None else record.get("body")
         if isinstance(message_body, str):
@@ -78,12 +71,9 @@ class ResponseHandler(LambdaSQSConsumer):
 
     @classmethod
     def _broadcast_via_websocket(cls, record: Dict[str, Any], message_type: Optional[LambdaWSHandler.MessageType] = None) -> None:
-        """
-        Broadcast a message via WebSocket; wraps the body in a typed envelope when message_type is given, else sends it raw.
+        """Broadcast a message via WebSocket, wrapped in ``message_type``'s envelope when given.
 
-        :param record: SQS record containing the response payload
-        :param message_type: Optional envelope type; if None the body is broadcast directly
-        :raises ValueError: If endpoint_url or user_id is missing in message attributes
+        :raises ValueError: endpoint_url or user_id is missing in message attributes.
         """
         message_attributes = SQSHandler.get_message_custom_attributes(record)
         endpoint_url = message_attributes.get("endpoint_url")
@@ -107,19 +97,11 @@ class ResponseHandler(LambdaSQSConsumer):
 
     @classmethod
     def process_message(cls, record: Dict[str, Any]) -> None:
-        """
-        Process a single SQS record based on execution mode.
-
-        - ASYNC mode: Broadcast via WebSocket
-        - Other modes: Store in response store
-
-        :param record: SQS record containing the response payload
-        :return: None
-        """
+        """Process one SQS record: broadcast via WebSocket in ASYNC/STREAM mode, else store it."""
         cls._log.info(f"Processing message: {record}")
 
-        # Checked before the execution-mode fan-out: a fire carries no endpoint_url attribute,
-        # so the WebSocket branches would raise, and no REST caller is polling for it.
+        # Checked first: a fire carries no endpoint_url, so the WebSocket branches would raise,
+        # and no REST caller is polling for it.
         if ScheduledRunRecorder.record(record.get("body")):
             cls._log.info("Recorded scheduled run outcome; not broadcast and not stored")
             return
@@ -135,19 +117,11 @@ class ResponseHandler(LambdaSQSConsumer):
 
     @classmethod
     def on_permanent_failure(cls, record: Dict[str, Any]) -> None:
-        """
-        Handle messages that have reached their maximum retry count based on execution mode.
-
-        - ASYNC mode: Broadcast error via WebSocket
-        - Other modes: Store error message in response store
-
-        :param record: SQS record that failed processing after all retries
-        :return: None
-        """
+        """Handle a record that exhausted its retries: broadcast the error via WebSocket in ASYNC/STREAM mode, else store it."""
         cls._log.error(f"Permanent failure: {record}: Retried message {cls._get_max_receive_count()} times")
 
-        # Returns early for the same reasons as process_message, plus one more: a fire's group
-        # id is the scheduled_task_id, so an error entry would be filed under a missing session.
+        # Same reasons as process_message, plus: a fire's group id is the scheduled_task_id, so
+        # an error entry here would be filed under a missing session.
         if ScheduledRunRecorder.record_before_discard(record.get("body")):
             cls._log.info("Scheduled run: not broadcast and not stored")
             return
@@ -164,7 +138,6 @@ class ResponseHandler(LambdaSQSConsumer):
                 error_message["session_id"] = session_id
 
             if AKConfig.get().execution.mode == ExecutionMode.ASYNC:
-                # Broadcast error via WebSocket for ASYNC mode
                 endpoint_url = message_attributes.get("endpoint_url")
                 user_id = message_attributes.get("user_id")
 
@@ -181,7 +154,6 @@ class ResponseHandler(LambdaSQSConsumer):
                 else:
                     cls._log.warning("Cannot broadcast permanent failure error: endpoint_url or user_id missing in message attributes")
             elif AKConfig.get().execution.mode == ExecutionMode.STREAM:
-                # Broadcast error chunk via WebSocket for STREAM mode
                 endpoint_url = message_attributes.get("endpoint_url")
                 user_id = message_attributes.get("user_id")
 
@@ -205,10 +177,9 @@ class ResponseHandler(LambdaSQSConsumer):
                 else:
                     cls._log.warning("Cannot broadcast permanent failure stream chunk: endpoint_url or user_id missing in message attributes")
             else:
-                # Store error message in response store for non-ASYNC/STREAM modes
                 message = cls._construct_message_for_store(record, body=error_message)
                 cls._get_response_store().add_message(message)
                 cls._log.info(f"Stored permanent failure message for session_id: {message['session_id']}, request_id: {message['request_id']}")
         except Exception as e:
-            # Catch the error to prevent this message from being returned as batchItemFailures for another retry
+            # Swallowed so this already-exhausted message isn't returned as a batchItemFailure for another retry.
             cls._log.error(f"Failed to handle permanent failure message due to error: {str(e)}")

@@ -222,9 +222,8 @@ class AgentHandler:
     def bind_request_user(self, user_id: Optional[str]) -> None:
         """Make the request's authenticated user id reachable from tool code.
 
-        Tools that act on the caller's behalf, such as scheduling, need a trustworthy identity,
-        but user_id is kept out of the agent's request context, so it travels on the session's
-        volatile cache instead. No-op when the request carries no user.
+        user_id isn't part of the agent's request context, so tools acting on the caller's
+        behalf (e.g. scheduling) read it from the session's volatile cache instead.
 
         :param user_id: The authenticated user id from the request.
         :return: None

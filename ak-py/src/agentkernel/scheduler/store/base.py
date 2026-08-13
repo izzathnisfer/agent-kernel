@@ -90,9 +90,8 @@ class PageCursor:
     def decode(cursor: Optional[str], expected_type: Optional[type] = None) -> Any:
         """Decode an opaque cursor back into backend continuation state.
 
-        The decoded shape is checked as well as the encoding: a well-formed cursor carrying the
-        wrong type is still a client error, and left unchecked it surfaces further down as a
-        ``TypeError`` or a provider-side rejection rather than as a rejected cursor.
+        Checks the decoded shape too: a well-formed cursor of the wrong type is still a
+        client error, not a ``TypeError`` surfacing further down.
 
         :param cursor: The cursor from a previous page, or None for the first page.
         :param expected_type: The continuation state the calling backend paginates on; None

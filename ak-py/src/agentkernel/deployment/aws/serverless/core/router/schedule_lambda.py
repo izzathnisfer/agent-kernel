@@ -48,11 +48,7 @@ class ScheduleEndpointsHandler:
         self._service = service or SchedulerFactory.service()
 
     def get_routes(self) -> Dict[str, Dict[str, Callable[[Dict[str, Any], Any], Any]]]:
-        """
-        Return the schedule route table, keyed by API Gateway resource template.
-
-        :return: Dictionary mapping resource templates → HTTP methods → handler functions
-        """
+        """Return the schedule route table, keyed by API Gateway resource template."""
         return {
             self.LIST_PATH: {"GET": self._handle_list},
             self.ITEM_PATH: {

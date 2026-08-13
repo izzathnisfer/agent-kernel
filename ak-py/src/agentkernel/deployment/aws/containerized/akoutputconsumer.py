@@ -35,10 +35,8 @@ class ECSOutputConsumer(ECSSQSConsumer):
     def run(cls) -> None:
         """Validate the scheduler wiring, then poll the output queue forever.
 
-        The check belongs here rather than in the class body because ``agentkernel.aws``
-        re-exports every deployment class, so importing it for an unrelated entry point would
-        assert on wiring only the scheduler-enabled components are given. Validating at the
-        start of run() still fails the container at startup, not on the first outcome.
+        Checked here rather than in the class body: ``agentkernel.aws`` re-exports every
+        deployment class, so a class-body assertion would fire even for unrelated entry points.
 
         :raises AKConfigError: Scheduling is enabled but the deployment wiring is missing.
         """

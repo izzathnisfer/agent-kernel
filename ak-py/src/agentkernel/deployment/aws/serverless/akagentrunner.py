@@ -36,12 +36,9 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def _get_record_attributes(cls, raw_queue_message: dict) -> dict:
-        """
-        Extract attributes from the raw SQS message record.
+        """Extract message_group_id, request_id, user_id, and (in ASYNC/STREAM) endpoint_url.
 
-        :param raw_queue_message: Original SQS message (``dict``) received by the Lambda function
-        :return: Dictionary (``dict``) containing extracted attributes
-        :raises ValueError: If request_id is missing
+        :raises ValueError: request_id is missing.
         """
         attributes = SQSHandler.get_message_system_attributes(raw_queue_message)
         message_attributes = SQSHandler.get_message_custom_attributes(raw_queue_message)
@@ -69,23 +66,11 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def _construct_error_message_body(cls, error_msg: str) -> dict:
-        """
-        Build a standard error response body for failed message processing.
-
-        :param error_msg: Human-readable error description (``str``)
-        :return: Error payload (``dict``) to be sent to the response queue
-        """
         return {"error": error_msg}
 
     @classmethod
     def _send_to_output_queue(cls, message_body: dict, record_attributes: dict) -> None:
-        """
-        Send a prepared message to the configured response SQS queue using send_message_to_output_queue.
-
-        :param message_body: Message body (``dict``) to be sent to the response queue
-        :param record_attributes: Extracted attributes (``dict``) from the record
-        :return: None
-        """
+        """Send a prepared message to the configured response SQS queue."""
         cls._log.info("Sending message to output queue")
         cls._log.debug(f"Message body: {message_body}")
         cls._log.debug(f"Record attributes: {record_attributes}")
@@ -111,11 +96,6 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def _parse_body(cls, record: dict) -> BaseRunRequest:
-        """
-        Parse the JSON body from an SQS record.
-        :param record: SQS record (``dict``) passed from the Lambda event.
-        :return: Parsed JSON body as ``BaseRunRequest`` from the record.
-        """
         return BaseRunRequest.model_validate(json.loads(record["body"]))
 
     @classmethod
@@ -123,9 +103,6 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
         """Read the session id straight off a record's body, tolerating an unparseable one.
 
         Used only on the permanent-failure path, which has no error channel left.
-
-        :param record: SQS record (``dict``) passed from the Lambda event.
-        :return: The body's session_id, or None when it cannot be read.
         """
         try:
             body = json.loads(record.get("body") or "{}")
@@ -135,12 +112,7 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def process_message(cls, record: dict) -> None:
-        """
-        Process a single SQS record, invoke the chat service, and send the response (or an error) to the output queue.
-
-        :param record: SQS record (``dict``) containing the chat request payload
-        :return: None
-        """
+        """Invoke the chat service for a single SQS record and send the response to the output queue."""
         cls._log.info(f"Processing message: {record}")
         body = cls._parse_body(record)
         _, agent_response = cls._get_chat_service().process_chat_request(req=body)
@@ -151,12 +123,7 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def on_permanent_failure(cls, record: dict) -> None:
-        """
-        Handle messages that have reached their maximum retry count by sending an error response to the output queue.
-
-        :param record: SQS record (``dict``) that failed processing after all retries
-        :return: None
-        """
+        """Send an error response to the output queue for a record that exhausted its retries."""
         cls._log.info(f"Permanent failure: {record}: Retried message {cls._get_max_receive_count()} times. Sending error message to Output Queue`")
         try:
             record_attributes = cls._get_record_attributes(raw_queue_message=record)
@@ -178,20 +145,15 @@ class ServerlessAgentRunner(LambdaSQSConsumer):
             cls._send_to_output_queue(message_body=error_message_body, record_attributes=record_attributes)
             cls._log.info(f"Sent Permanent Failure message to Output Queue: '{SQSHandler.get_output_queue_url()}'")
         except Exception as e:
-            # Message comes to this function only if the message has reached its maximum no of retries
-            # Catching the error here so that this message will not be returned as batchItemFailures for another retry.
+            # Swallowed so this already-exhausted message isn't returned as a batchItemFailure for another retry.
             cls._log.info(f"Failed sending permanent failure message to Output Queue '{SQSHandler.get_output_queue_url()}' due to error: '{str(e)}'")
 
 
 class ServerlessStreamAgentRunner(LambdaSQSConsumer):
-    """
-    Lambda SQS consumer that processes chat requests in STREAM mode.
+    """Lambda SQS consumer that processes chat requests in STREAM mode.
 
-    Each streaming chunk from the agent is sent as a separate message to the output SQS queue.
-    The ResponseHandler then broadcasts each chunk via WebSocket to the connected client.
-
-    Scheduled fires are the exception: they run as ordinary non-stream executions, delegated
-    to ServerlessAgentRunner. See _is_scheduled_fire.
+    Each chunk is sent as a separate output-queue message; ResponseHandler broadcasts each via
+    WebSocket. Scheduled fires are the exception — see ``_is_scheduled_fire``.
     """
 
     _log = logging.getLogger("ak.aws.streamagentrunner")
@@ -205,15 +167,10 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
     def _is_scheduled_fire(cls, record: dict) -> bool:
         """Tell a timer-delivered fire from an interactive streaming request.
 
-        A fire has no client connection to stream to: the timer stamps only request_id and
-        user_id, never the endpoint_url this runner requires, and a StreamChunk has nowhere to
-        carry the scheduled_run block the response handler records outcomes from. So a fire is
-        run as an ordinary non-stream execution, whose response echoes that block.
+        A fire has no endpoint_url to stream to and a StreamChunk has nowhere to carry the
+        scheduled_run block the response handler needs, so fires run as ordinary non-stream
+        executions instead. Same block the response handler itself fans out on.
 
-        The presence of the block is the same signal the response handler already fans out on,
-        ahead of its own execution-mode branch.
-
-        :param record: SQS record (``dict``) passed from the Lambda event.
         :return: True when this record is one fire of a scheduled task.
         """
         return ScheduledRunMetadata.from_raw_body(record.get("body")) is not None
@@ -226,12 +183,9 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def _get_record_attributes(cls, raw_queue_message: dict) -> dict:
-        """
-        Extract attributes from the raw SQS message record.
+        """Extract message_group_id, request_id, user_id, and endpoint_url.
 
-        :param raw_queue_message: Original SQS message (``dict``) received by the Lambda function
-        :return: Dictionary (``dict``) containing extracted attributes
-        :raises ValueError: If request_id or endpoint_url is missing
+        :raises ValueError: request_id or endpoint_url is missing.
         """
         attributes = SQSHandler.get_message_system_attributes(raw_queue_message)
         message_attributes = SQSHandler.get_message_custom_attributes(raw_queue_message)
@@ -257,24 +211,11 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def _parse_body(cls, record: dict) -> BaseRunRequest:
-        """
-        Parse the JSON body from an SQS record.
-
-        :param record: SQS record (``dict``) passed from the Lambda event.
-        :return: Parsed JSON body as ``BaseRunRequest`` from the record.
-        """
         return BaseRunRequest.model_validate(json.loads(record["body"]))
 
     @classmethod
     def _send_chunk_to_output_queue(cls, chunk_body: dict, record_attributes: dict, chunk_dedup_suffix: str) -> None:
-        """
-        Send a single stream chunk to the output SQS queue.
-
-        :param chunk_body: StreamChunk payload (``dict``) to send
-        :param record_attributes: Extracted attributes (``dict``) from the original record
-        :param chunk_dedup_suffix: Suffix to make deduplication ID unique per chunk
-        :return: None
-        """
+        """Send a single stream chunk to the output SQS queue."""
         cls._log.debug(f"Sending stream chunk to output queue: {chunk_body}")
 
         dedup_id = record_attributes.get("message_deduplication_id")
@@ -297,17 +238,10 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def process_message(cls, record: dict) -> None:
-        """
-        Process a single SQS record in STREAM mode: invoke the chat service and send
-        each yielded chunk as a separate message to the output queue.
-
-        :param record: SQS record (``dict``) containing the chat request payload
-        :return: None
-        """
+        """Invoke the chat service and stream each yielded chunk to the output queue as a separate message."""
         if cls._is_scheduled_fire(record):
             cls._log.info("Scheduled fire — running as a non-stream execution")
-            # ServerlessAgentRunner is a sibling, not a base class — named explicitly so cls binds
-            # to its endpoint_url-optional attribute extraction and whole-response send.
+            # A sibling, not a base class — named explicitly for its endpoint_url-optional path.
             return ServerlessAgentRunner.process_message(record)
 
         cls._log.info(f"Processing stream message: {record}")
@@ -329,15 +263,9 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
 
     @classmethod
     def on_permanent_failure(cls, record: dict) -> None:
-        """
-        Handle messages that have reached their maximum retry count by sending an error chunk to the output queue.
-
-        :param record: SQS record (``dict``) that failed processing after all retries
-        :return: None
-        """
+        """Send an error chunk to the output queue for a record that exhausted its retries."""
         if cls._is_scheduled_fire(record):
-            # ServerlessAgentRunner's version echoes the scheduled_run block, which is what lets
-            # the response handler record the run as FAILED instead of leaving last_run_* stale.
+            # Delegate so the outcome echoes scheduled_run — otherwise last_run_* stays stale.
             return ServerlessAgentRunner.on_permanent_failure(record)
 
         cls._log.info(f"Permanent failure: {record}: Retried message {cls._get_max_receive_count()} times. Sending error chunk to Output Queue")
@@ -357,6 +285,5 @@ class ServerlessStreamAgentRunner(LambdaSQSConsumer):
             )
             cls._log.info(f"Sent Permanent Failure chunk to Output Queue: '{SQSHandler.get_output_queue_url()}'")
         except Exception as e:
-            # Message comes to this function only if the message has reached its maximum no of retries
-            # Catching the error here so that this message will not be returned as batchItemFailures for another retry.
+            # Swallowed so this already-exhausted message isn't returned as a batchItemFailure for another retry.
             cls._log.info(f"Failed sending permanent failure chunk to Output Queue '{SQSHandler.get_output_queue_url()}' due to error: '{str(e)}'")
