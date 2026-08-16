@@ -1,7 +1,6 @@
 import asyncio
 import re
 import sys
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,12 +10,7 @@ from ragas.metrics import answer_relevancy, answer_similarity
 from rapidfuzz import fuzz
 
 from .config import AKTestConfig
-
-
-class Mode(StrEnum):
-    FUZZY = "fuzzy"
-    JUDGE = "judge"
-    FALLBACK = "fallback"
+from .core.model import Mode
 
 
 class Test:

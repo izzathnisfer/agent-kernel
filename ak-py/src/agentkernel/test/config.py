@@ -6,6 +6,8 @@ from pydantic_settings import SettingsConfigDict
 
 from agentkernel.core.util.config_yaml_util import YamlBaseSettingsModified
 
+from .core.model import Mode
+
 
 class _JudgeConfig(BaseModel):
     model: str = Field(default="gpt-4o-mini", description="LLM Model name")
@@ -29,7 +31,7 @@ class AKTestConfig(YamlBaseSettingsModified):
     _instance: ClassVar[Optional["AKTestConfig"]] = None
     _instance_lock: ClassVar[RLock] = RLock()
 
-    mode: str = Field(default="fallback", pattern="^(fallback|judge|fuzzy)$")
+    mode: Mode = Field(default=Mode.FALLBACK, description="Test comparison mode")
     judge: _JudgeConfig = Field(description="Judge configuration", default_factory=_JudgeConfig)
 
     model_config = SettingsConfigDict(
