@@ -350,23 +350,23 @@ uv venv && uv sync
 ```python
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("<main-file>.py")
-    await test.start()
+    client = CLIClient("<main-file>.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 @pytest.mark.order(1)
 async def test_basic_response(test_client):
     await test_client.send("<sample question>")
-    await test_client.expect(["<expected answer pattern>"])
+    Test.compare(test_client.last_agent_response, ["<expected answer pattern>"])
 ```
 
 ### Step 4: Provide Setup Instructions

@@ -1,18 +1,18 @@
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")  # uses a single session for all tests
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py")
-    await test.start()
+    client = CLIClient("demo.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 
 @pytest.mark.order(2)
@@ -27,19 +27,20 @@ async def test_fallback_when_kb_empty(test_client):
 async def test_kb_descriptions_exposed(test_client):
     # The router should expose and understand its configured knowledge bases
     await test_client.send("Which knowledge bases or databases do you use to store information?")
-    await test_client.expect(["ChromaDB", "Neo4jDB", "StarburstDB-mongo", "StarburstDB_Sheets"])
+    Test.compare(test_client.last_agent_response, ["ChromaDB", "Neo4jDB", "StarburstDB-mongo", "StarburstDB_Sheets"])
 
 
 @pytest.mark.order(4)
 async def test_kb_schemas_available(test_client):
     # The router should be able to describe schemas from get_schemas()
     await test_client.send("Summarize the knowledge base schemas you know about.")
-    await test_client.expect(
+    Test.compare(
+        test_client.last_agent_response,
         [
             "ChromaDB",
             "Neo4jDB",
             "StarburstDB-mongo",
             "semantic",
             "graph",
-        ]
+        ],
     )

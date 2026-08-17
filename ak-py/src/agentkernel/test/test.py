@@ -1,22 +1,11 @@
-from typing import Any, Optional
-
-from datasets import Dataset
-from ragas import evaluate
-from ragas.metrics import answer_relevancy, answer_similarity
 from rapidfuzz import fuzz
 
 from .config import AKTestConfig
-from .core.clients.cli import CLIClient
 from .core.model import Mode
 
 
 class Test:
-    """Runs comparisons/assertions against a CLI agent's responses.
-
-    CLI I/O (starting the subprocess, writing input, reading output) is delegated to a
-    `CLIClient` instance rather than inherited — `Test` owns comparison/testing concerns only.
-    """
-
+    
     def __init__(self, path, match_threshold=50, mode: Mode = None):
         """
         Initializes an instance of the Test with a specified command-line interface (CLI) path.
@@ -115,22 +104,6 @@ class Test:
                     Test._judge_compare(user_input=user_input, actual=actual, expected=expected, threshold=threshold / 100)
                 except AssertionError:
                     raise AssertionError(f"Response didn't pass fuzzy matching or judge evaluation. Expected: {expected}, Received: {actual}")
-
-    async def expect(self, expected: list[str]):
-        """
-        Asserts that the last response received from the CLI matches the expected message.
-        Uses the mode specified during Test initialization.
-        :param expected: The expected message variants.
-        """
-        if self.last_agent_response is None:
-            raise AssertionError("No response available to compare. Ensure send() was called before expect().")
-        self.compare(
-            actual=self.last_agent_response,
-            expected=expected,
-            user_input=self.last_user_input,
-            threshold=self.match_threshold,
-            mode=self.mode,
-        )
 
 
 Test.__test__ = False  # pytest tries to run Test as a test without the flag

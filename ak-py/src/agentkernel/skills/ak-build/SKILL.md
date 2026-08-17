@@ -420,10 +420,12 @@ uv sync
 2. **Test the new agent** — Add a test for the new agent (see `ak-test` skill for test setup):
 
 ```python
+from agentkernel.test import Test
+
 @pytest.mark.order(10)
 async def test_support_routing(test_client):
     await test_client.send("What's the status of order 12345?")
-    await test_client.expect(["order", "12345", "shipped"])
+    Test.compare(test_client.last_agent_response, ["order", "12345", "shipped"])
 ```
 
 3. **Run tests**:

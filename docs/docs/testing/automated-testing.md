@@ -10,31 +10,33 @@ Create automated test suites for your CLI agents using pytest and the Agent Kern
 
 The Agent Kernel Test framework integrates seamlessly with pytest for automated testing:
 
+`CLIClient` and `Test` are independent — `CLIClient` drives the CLI subprocess, `Test` compares the captured response:
+
 ```python
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py")
-    await test.start()
+    client = CLIClient("demo.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 @pytest.mark.order(1)
 async def test_first_question(test_client):
     await test_client.send("Who won the 1996 cricket world cup?")
-    await test_client.expect(["Sri Lanka won the 1996 cricket world cup."])
+    Test.compare(test_client.last_agent_response, ["Sri Lanka won the 1996 cricket world cup."])
 
 @pytest.mark.order(2)
 async def test_follow_up_question(test_client):
     await test_client.send("Which country hosted the tournament?")
-    await test_client.expect(["Co-hosted by India, Pakistan and Sri Lanka."])
+    Test.compare(test_client.last_agent_response, ["Co-hosted by India, Pakistan and Sri Lanka."])
 ```
 
 ## Test Comparison Modes
@@ -69,30 +71,10 @@ async def test_fuzzy_matching(test_client):
 
 ### Judge Mode
 
-Uses LLM-based evaluation (Ragas) for semantic similarity:
-
-```python
-@pytest.mark.order(2)
-async def test_judge_evaluation(test_client):
-    await test_client.send("Who won the 1996 cricket world cup?")
-    # Use judge mode for semantic evaluation
-    # expected is a list - test passes if ANY has sufficient semantic similarity
-    Test.compare(
-        actual=test_client.last_agent_response,
-        expected=[
-            "Sri Lanka won the 1996 cricket world cup",
-            "Sri Lanka was the winner of the 1996 world cup",
-            "The 1996 cricket world cup was won by Sri Lanka"
-        ],
-        user_input="Who won the 1996 cricket world cup?",
-        threshold=50,  # Converted to 0.5 on 0.0-1.0 scale
-        mode=Mode.JUDGE
-    )
-```
-
-**Judge Mode Metrics:**
-- With expected answers: Uses `answer_similarity` metric against each expected answer. Passes if **any** exceeds threshold.
-- Without expected answers: Uses `answer_relevancy` metric (requires `user_input`)
+**Not currently implemented.** Judge mode previously used Ragas for LLM-based semantic
+evaluation; that integration has been removed and `Mode.JUDGE` (and the judge fallback
+path of `Mode.FALLBACK`) currently raises `NotImplementedError`. A replacement built on
+the `AKEvaluator` abstraction is planned. Use `Mode.FUZZY` in the meantime.
 
 **Note:** When multiple expected answers are provided, the judge evaluates similarity against each one and passes if **any** score meets the threshold.
 
@@ -142,16 +124,16 @@ export AK_TEST__JUDGE__PROVIDER=openai
 export AK_TEST__JUDGE__EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-### Using expect() with Mode
+### Using compare() with the Configured Mode
 
-The `expect()` method uses the configured mode:
+Omit `mode=` on `Test.compare()` to use whatever `AKTestConfig` resolves (from `test-config.yaml` / `AK_TEST__MODE`):
 
 ```python
 @pytest.mark.order(1)
-async def test_with_expect(test_client):
+async def test_with_configured_mode(test_client):
     await test_client.send("Who won the 1996 cricket world cup?")
     # Uses mode from AKTestConfig (test-config.yaml / AK_TEST__MODE)
-    await test_client.expect(["Sri Lanka won the 1996 cricket world cup."])
+    Test.compare(test_client.last_agent_response, ["Sri Lanka won the 1996 cricket world cup."])
 ```
 
 ## Required Dependencies
@@ -171,12 +153,12 @@ Use session-scoped fixtures to maintain CLI state across multiple tests:
 ```python
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py", match_threshold=70)
-    await test.start()
+    client = CLIClient("demo.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 ```
 
 ### Ordered Tests
@@ -187,7 +169,7 @@ Use `pytest-order` to ensure tests run in sequence for conversation flows:
 @pytest.mark.order(1)
 async def test_greeting(test_client):
     await test_client.send("Hello!")
-    await test_client.expect("Hello! How can I help you?")
+    Test.compare(test_client.last_agent_response, ["Hello! How can I help you?"])
 
 @pytest.mark.order(2)
 async def test_follow_up(test_client):
@@ -205,13 +187,13 @@ async def test_agent_switching(test_client):
     # Switch to general agent
     await test_client.send("!select general")
     await test_client.send("Who won the 1996 cricket world cup?")
-    await test_client.expect("Sri Lanka won the 1996 Cricket World Cup.")
+    Test.compare(test_client.last_agent_response, ["Sri Lanka won the 1996 Cricket World Cup."])
 
 @pytest.mark.order(2)
 async def test_different_agent(test_client):
     # Test continues with the same session
     await test_client.send("Which countries hosted the tournament?")
-    await test_client.expect("Co-hosted by India, Pakistan and Sri Lanka.")
+    Test.compare(test_client.last_agent_response, ["Co-hosted by India, Pakistan and Sri Lanka."])
 ```
 
 ## API Testing
@@ -250,7 +232,7 @@ async def test_api_endpoint(api_server):
         actual=response,
         expected=["Sri Lanka won the 1996 cricket world cup"],
         user_input="Who won the 1996 cricket world cup?",
-        mode=Mode.JUDGE  # Use judge mode for API testing
+        mode=Mode.FUZZY  # Mode.JUDGE is not currently implemented (Ragas support was removed)
     )
 ```
 
@@ -362,14 +344,14 @@ export AK_TEST__JUDGE__EMBEDDING_MODEL=text-embedding-3-small
 
 ### Custom Match Thresholds
 
-Configure fuzzy matching for different test scenarios:
+`Test` has no constructor — pass `threshold=` per comparison for different test scenarios:
 
 ```python
 # More strict matching for exact responses
-strict_test = Test("demo.py", match_threshold=90)
+Test.compare(test_client.last_agent_response, ["Expected exact response"], threshold=90)
 
 # More lenient for AI-generated content
-lenient_test = Test("demo.py", match_threshold=60)
+Test.compare(test_client.last_agent_response, ["Expected paraphrased response"], threshold=60)
 ```
 
 ### Environment Variables
@@ -397,21 +379,20 @@ def setup_test_env():
 
 ### Assertions
 - Use `Mode.FUZZY` for exact string matching requirements
-- Use `Mode.JUDGE` for semantic similarity validation
-- Use `Mode.FALLBACK` (default) for robust validation
+- `Mode.JUDGE` (semantic similarity validation) is not currently implemented — see [Judge Mode](#judge-mode)
+- Use `Mode.FALLBACK` (default) for robust validation; note it currently raises `NotImplementedError` if fuzzy matching fails
 - Test both positive and negative cases
 - Include edge cases and error conditions
 
 ### Test Mode Selection
 - **Fuzzy Mode**: Best for deterministic outputs, exact formatting requirements
-- **Judge Mode**: Best for AI-generated content, paraphrased responses
-- **Fallback Mode**: Best for general use, provides flexibility
+- **Judge Mode**: Not currently implemented (planned, for AI-generated content and paraphrased responses)
+- **Fallback Mode**: Falls back to fuzzy matching only today, since judge evaluation is not implemented
 
 ### Performance
 - Use session-scoped fixtures for expensive setup
 - Consider parallel test execution for independent tests
 - Mock external dependencies when possible
-- Note: Judge mode requires LLM calls, which may slow tests
 
 ### Maintenance
 - Keep tests updated with agent changes

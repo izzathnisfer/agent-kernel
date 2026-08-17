@@ -71,7 +71,8 @@ Tests live in `ak-py/tests/` and follow the naming convention `test_<module>.py`
 | `test_akagentrunner_stream.py` | Serverless `ServerlessStreamAgentRunner` (SQS streaming) |
 | `test_akresponsehandler.py` | Serverless response handler (`CHAT_RESPONSE` / `STREAM_CHUNK` broadcast) |
 | `test_ws_lambda_stream.py` | WebSocket Lambda router in `stream` mode |
-| `test_cli_tester.py` | CLI test framework |
+| `test_cli_tester.py` | `Test` class comparison/assertion logic (fuzzy/judge/fallback modes) |
+| `test_cli_client.py` | `CLIClient` CLI I/O (subprocess start/send/stop, prompt parsing) — independent of `Test` |
 | `test_auth_handler.py` | Auth handler |
 | `test_akauthorizer.py` | AWS Lambda authorizer |
 | `test_lambda_router.py` | Lambda routing |
@@ -227,41 +228,45 @@ async def test_pre_hook_halts_execution():
 
 ## Built-in Test Framework
 
-Agent Kernel provides a `Test` class (`ak-py/src/agentkernel/test/`) for integration testing. This framework is used in examples and can be used for testing deployed agents as well.
+Agent Kernel provides two independent classes (`ak-py/src/agentkernel/test/`) for integration testing, with no relationship to each other — don't couple them back together:
+
+- `CLIClient` (`core/clients/cli.py`) drives a CLI subprocess: start/send/stop, tracking `last_agent_response`/`last_user_input`. It knows nothing about comparisons.
+- `Test` (`test.py`) is a pure string-comparison utility (`Test.compare()`). It knows nothing about the CLI, subprocesses, or how a response was obtained — it works the same way for CLI, HTTP, or any other transport.
+
+Wire them together in test code; `Test` never subclasses or wraps `CLIClient`, and `CLIClient` never imports `Test`:
 
 ```python
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 # In test files
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py")       # Path to agent definition file
-    await test.start()
+    client = CLIClient("demo.py")       # Path to agent definition file
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 @pytest.mark.order(1)
 async def test_agent_response(test_client):
     await test_client.send("Who won the 1996 cricket world cup?")
-    await test_client.expect(["Sri Lanka won the 1996 cricket world cup."])
+    Test.compare(test_client.last_agent_response, ["Sri Lanka won the 1996 cricket world cup."])
 ```
 
 ### Test Modes
 
-Configured via `config.yaml`:
+Configured via `test-config.yaml` (a separate, un-nested file resolved from the CWD or `AK_TEST_CONFIG_PATH_OVERRIDE` — not `config.yaml`, see `ak-py/src/agentkernel/test/config.py`):
 
 ```yaml
-test:
-  mode: fuzzy    # fuzzy | judge | fallback
-  judge:
-    model: gpt-4o-mini
+mode: fuzzy    # fuzzy | judge | fallback
+judge:
+  model: gpt-4o-mini
 ```
 
 - **fuzzy**: Uses `rapidfuzz` string similarity matching (default threshold)
-- **judge**: Ragas-based LLM evaluation — uses the `answer_similarity` metric against expected answers (ground truth), or `answer_relevancy` against the question when no expected answers are given (see `ak-py/src/agentkernel/test/test.py`)
-- **fallback**: Tries fuzzy first, falls back to judge if fuzzy fails
+- **judge**: Not currently implemented — the previous Ragas-based `answer_similarity`/`answer_relevancy` evaluation was removed; `Mode.JUDGE` now raises `NotImplementedError` pending a replacement built on the `AKEvaluator` abstraction (`core/akevaluators/`) (see `ak-py/src/agentkernel/test/test.py`)
+- **fallback**: Tries fuzzy first; currently raises `NotImplementedError` if fuzzy fails, since judge mode isn't implemented yet
 
 ### Test.compare() for API Tests
 

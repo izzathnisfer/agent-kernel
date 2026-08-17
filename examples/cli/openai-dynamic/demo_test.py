@@ -1,32 +1,32 @@
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")  # uses a single session for all tests
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py")
-    await test.start()
+    client = CLIClient("demo.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 
 @pytest.mark.order(1)
 async def test_first_question(test_client):
     await test_client.send("!select physics")
     await test_client.send("Who discovered energy emission from black holes?")
-    await test_client.expect(["Stephen Hawking"])
+    Test.compare(test_client.last_agent_response, ["Stephen Hawking"])
 
     await test_client.send("!select geography")
     await test_client.send("What is the prehistoric single continent of which all current continents broke off from?")
-    await test_client.expect(["Pangea"])
+    Test.compare(test_client.last_agent_response, ["Pangea"])
 
     # Selecting a non-existent agent is a no-op — the failure is logged (stderr), not printed,
     # so the previously selected 'geography' agent stays active and still answers.
     await test_client.send("!select triage")
     await test_client.send("Which ocean is the largest on Earth?")
-    await test_client.expect(["Pacific"])
+    Test.compare(test_client.last_agent_response, ["Pacific"])

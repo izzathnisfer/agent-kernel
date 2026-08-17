@@ -1,18 +1,18 @@
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")  # uses a single session for all tests
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py")
-    await test.start()
+    client = CLIClient("demo.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 
 @pytest.mark.order(1)

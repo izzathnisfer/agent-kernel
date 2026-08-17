@@ -1,24 +1,24 @@
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")  # uses a single session for all tests
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py")
-    await test.start()
+    client = CLIClient("demo.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 
 @pytest.mark.order(1)
 async def test_sandbox_executes_code_in_micro_vm(test_client):
     await test_client.send("Run Python code in the sandbox to compute 6 * 7. Reply with only the number.")
-    await test_client.expect(["42"])
+    Test.compare(test_client.last_agent_response, ["42"])
 
 
 @pytest.mark.order(2)
@@ -30,7 +30,7 @@ async def test_kernel_variables_persist_across_turns(test_client):
     await test_client.send(
         "Now run Python that prints the value of the variable `secret`. Reply with only that number."
     )
-    await test_client.expect(["1729"])
+    Test.compare(test_client.last_agent_response, ["1729"])
 
 
 @pytest.mark.order(3)
@@ -41,7 +41,7 @@ async def test_package_install_in_micro_vm(test_client):
         "Install the 'roman' package in the sandbox, then use it to convert 42 to a Roman numeral. "
         "Reply with only the numeral."
     )
-    await test_client.expect(["XLII"])
+    Test.compare(test_client.last_agent_response, ["XLII"])
 
 
 @pytest.mark.order(4)
@@ -55,4 +55,4 @@ async def test_offline_profile_blocks_network(test_client):
         "run Python code that fetches https://example.com with a 5 second timeout and prints the "
         "HTTP status code. If the request fails for any reason, reply with only the single word: OFFLINE"
     )
-    await test_client.expect(["OFFLINE"])
+    Test.compare(test_client.last_agent_response, ["OFFLINE"])

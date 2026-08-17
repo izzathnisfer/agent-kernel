@@ -645,8 +645,8 @@ If `test-config.yaml` is missing, defaults apply silently (no warning is printed
 
 **Test Modes:**
 - `fuzzy` - Uses fuzzy string matching (RapidFuzz)
-- `judge` - Uses LLM-based evaluation (Ragas) for semantic similarity
-- `fallback` - Tries fuzzy first, falls back to judge if fuzzy fails
+- `judge` - Not currently implemented (Ragas support was removed); raises `NotImplementedError`
+- `fallback` - Tries fuzzy first; currently raises `NotImplementedError` if fuzzy fails, since judge mode isn't implemented yet
 
 ### Custom Test Configuration File Path
 

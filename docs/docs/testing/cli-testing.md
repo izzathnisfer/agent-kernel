@@ -6,21 +6,38 @@ sidebar_position: 2
 
 Interactive testing of CLI agents using the Agent Kernel Test framework.
 
-## Test Class Overview
+## Two Independent Classes
 
-The `Test` class provides programmatic interaction with CLI agents:
+The test framework separates two concerns into two independent classes with no relationship
+to each other:
+
+- **`CLIClient`** — drives a CLI subprocess: starts it, sends input, reads output. It knows
+  nothing about comparisons or assertions.
+- **`Test`** — compares an already-captured response string against expected value(s). It knows
+  nothing about the CLI, subprocesses, or how the response was obtained.
+
+You wire them together in your own test code: use `CLIClient` to talk to the CLI, then pass what
+it captured into `Test.compare()`.
 
 ```python
-from agentkernel.test import Test, Mode
+from agentkernel.test import CLIClient, Test
 
-# Initialize test with CLI script path
-test = Test("demo.py", match_threshold=50, mode=Mode.FALLBACK)
+# CLIClient drives the CLI subprocess
+client = CLIClient("demo.py")
+
+# Test compares strings — it doesn't care where they came from
+Test.compare(actual="Paris", expected=["Paris", "The capital is Paris"], threshold=50)
 ```
 
-### Parameters
+### CLIClient Parameters
 - `path`: Path to the Python CLI script (relative to current working directory)
-- `match_threshold`: Fuzzy matching threshold percentage (default: 50)
-- `mode`: Test comparison mode - `Mode.FUZZY`, `Mode.JUDGE`, or `Mode.FALLBACK`. If None, uses config value (default: None)
+
+### Test.compare() Parameters
+- `actual`: The response string to check
+- `expected`: A list of acceptable response strings
+- `user_input`: The question that produced `actual` (used for LLM-based evaluation)
+- `threshold`: Fuzzy matching threshold percentage (default: 50)
+- `mode`: Comparison mode - `Mode.FUZZY`, `Mode.JUDGE`, or `Mode.FALLBACK`. If None, uses config value (default: None)
 
 ## Basic Usage
 
@@ -28,28 +45,30 @@ test = Test("demo.py", match_threshold=50, mode=Mode.FALLBACK)
 
 ```python
 import asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient
 
 async def run_test():
-    test = Test("demo.py")
-    await test.start()
-    
+    client = CLIClient("demo.py")
+    await client.start()
+
     # Your test interactions here
-    
-    await test.stop()
+
+    await client.stop()
 
 # Run the test
 asyncio.run(run_test())
 ```
 
-### Sending Messages and Expecting Responses
+### Sending Messages and Comparing Responses
 
 ```python
+from agentkernel.test import Test
+
 # Send a message to the CLI
-response = await test.send("Who won the 1996 cricket world cup?")
+response = await client.send("Who won the 1996 cricket world cup?")
 
 # Verify the response using fuzzy matching
-await test.expect(["Sri Lanka won the 1996 cricket world cup."])
+Test.compare(client.last_agent_response, ["Sri Lanka won the 1996 cricket world cup."])
 ```
 
 ## Test Comparison Modes
@@ -61,15 +80,11 @@ Agent Kernel supports three comparison modes for validating responses:
 Uses fuzzy string matching with configurable thresholds:
 
 ```python
-from agentkernel.test import Test, Mode
+from agentkernel.test import Mode, Test
 
-# Initialize with fuzzy mode
-test = Test("demo.py", match_threshold=80, mode=Mode.FUZZY)
-
-# Or use static comparison with multiple expected answers
-await test.send("Who won the 1996 cricket world cup?")
+await client.send("Who won the 1996 cricket world cup?")
 Test.compare(
-    actual=test.last_agent_response,
+    actual=client.last_agent_response,
     expected=[
         "Sri Lanka won the 1996 cricket world cup",
         "Sri Lanka won the 1996 world cup",
@@ -84,44 +99,22 @@ Test.compare(
 
 ### Judge Mode
 
-Uses LLM-based evaluation (Ragas) for semantic similarity:
-
-```python
-# Initialize with judge mode
-test = Test("demo.py", mode=Mode.JUDGE)
-
-# Use judge evaluation with multiple expected answers
-await test.send("Who won the 1996 cricket world cup?")
-Test.compare(
-    actual=test.last_agent_response,
-    expected=[
-        "Sri Lanka won the 1996 cricket world cup",
-        "Sri Lanka was the winner of the 1996 world cup",
-        "The 1996 cricket world cup was won by Sri Lanka"
-    ],
-    user_input="Who won the 1996 cricket world cup?",
-    threshold=50,  # Converted to 0.5 on 0.0-1.0 scale
-    mode=Mode.JUDGE
-)
-```
-
-**Judge Mode Behavior:**
-- With expected answers: Uses `answer_similarity` metric to compare against each expected answer (ground truth). Test passes if **any** similarity score exceeds threshold.
-- Without expected answers: Uses `answer_relevancy` metric to check if answer is relevant to the question
-
-**Note:** When multiple expected answers are provided, the test evaluates semantic similarity against each one and passes if **any** meets the threshold.
+**Not currently implemented.** Judge mode previously used Ragas for LLM-based semantic
+evaluation (`answer_similarity` against expected answers, or `answer_relevancy` against the
+question when none were given); that integration has been removed. `Mode.JUDGE` currently
+raises `NotImplementedError`. A replacement built on the `AKEvaluator` abstraction
+(`agentkernel.test.core.akevaluators`) is planned — use `Mode.FUZZY` in the meantime.
 
 ### Fallback Mode (Default)
 
-Tries fuzzy matching first, falls back to judge evaluation if fuzzy fails:
+Tries fuzzy matching first, falls back to judge evaluation if fuzzy fails. Since judge mode
+isn't implemented yet, a fuzzy-match failure currently raises `NotImplementedError`:
 
 ```python
 # Default fallback mode with multiple expected answers
-test = Test("demo.py", mode=Mode.FALLBACK)
-
-await test.send("Who won the 1996 cricket world cup?")
+await client.send("Who won the 1996 cricket world cup?")
 Test.compare(
-    actual=test.last_agent_response,
+    actual=client.last_agent_response,
     expected=[
         "Sri Lanka",
         "Sri Lanka won the 1996 cricket world cup",
@@ -132,15 +125,15 @@ Test.compare(
 )
 ```
 
-**Note:** The `expected` parameter is a list of acceptable responses. Fuzzy matching is tried against each expected value first. If all fail, judge evaluation is attempted against each expected answer.
+**Note:** The `expected` parameter is a list of acceptable responses. Fuzzy matching is tried against each expected value first. If all fail, judge evaluation is attempted (currently a placeholder — see above).
 
 ### Configuration-Based Mode
 
-Set default mode via a `test-config.yaml` file (in the directory the tests run from, or the path in `AK_TEST_CONFIG_PATH_OVERRIDE`) instead of the constructor. Test configuration is separate from the application's `config.yaml` and is only loaded when the test harness runs:
+Set default mode via a `test-config.yaml` file (in the directory the tests run from, or the path in `AK_TEST_CONFIG_PATH_OVERRIDE`) instead of passing `mode=` to every `Test.compare()` call. Test configuration is separate from the application's `config.yaml` and is only loaded when the test harness runs:
 
 ```yaml
 # test-config.yaml
-mode: judge  # Options: fuzzy, judge, fallback
+mode: fuzzy  # Options: fuzzy, judge, fallback
 judge:
   model: gpt-4o-mini
   provider: openai
@@ -149,9 +142,8 @@ judge:
 
 ```python
 # Uses mode from config
-test = Test("demo.py")
-await test.send("Hello")
-await test.expect(["Hello! How can I help?"])  # Uses configured mode
+await client.send("Hello")
+Test.compare(client.last_agent_response, ["Hello! How can I help?"])  # Uses configured mode
 ```
 
 ## Advanced Features
@@ -159,29 +151,26 @@ await test.expect(["Hello! How can I help?"])  # Uses configured mode
 ### Custom Matching Configuration
 
 ```python
-# Set threshold and mode during initialization
-test = Test("demo.py", match_threshold=80, mode=Mode.FUZZY)
-
-# Or use static comparison with custom parameters
+# Pass threshold and mode explicitly per comparison
 Test.compare(
     actual=response,
     expected=["Expected response"],
     user_input="User question",
     threshold=70,
-    mode=Mode.JUDGE
+    mode=Mode.FUZZY
 )
 ```
 
-### Accessing Latest Response
+### Accessing the Latest Response
 
 ```python
-await test.send("Hello!")
-latest_response = test.latest  # Contains the cleaned response without ANSI codes
+await client.send("Hello!")
+latest_response = client.last_agent_response  # Contains the cleaned response without ANSI codes
 ```
 
 ### Prompt Detection
 
-The Test class automatically detects CLI prompts using regex patterns:
+`CLIClient` automatically detects CLI prompts using regex patterns:
 - Captures prompts in format: `(agent_name) >> `
 - Handles prompt changes during agent switching
 - Strips ANSI escape sequences from responses
@@ -192,14 +181,14 @@ For CLI applications with multiple agents:
 
 ```python
 # Switch to a specific agent
-await test.send("!select general")
-await test.send("Who won the 1996 cricket world cup?")
-await test.expect("Sri Lanka won the 1996 Cricket World Cup.")
+await client.send("!select general")
+await client.send("Who won the 1996 cricket world cup?")
+Test.compare(client.last_agent_response, ["Sri Lanka won the 1996 Cricket World Cup."])
 
 # Switch to another agent
-await test.send("!select math")
-await test.send("What is 2 + 2?")
-await test.expect("4")
+await client.send("!select math")
+await client.send("What is 2 + 2?")
+Test.compare(client.last_agent_response, ["4"])
 ```
 
 ## Error Handling
@@ -208,7 +197,7 @@ await test.expect("4")
 
 ```python
 try:
-    await test.expect("Expected response")
+    Test.compare(client.last_agent_response, ["Expected response"])
 except AssertionError as e:
     print(f"Test failed: {e}")
     # The error includes both expected and actual responses
@@ -218,12 +207,12 @@ except AssertionError as e:
 
 ```python
 # Ensure proper cleanup even if tests fail
-test = Test("demo.py")
+client = CLIClient("demo.py")
 try:
-    await test.start()
+    await client.start()
     # Your test code here
 finally:
-    await test.stop()  # Always stop the process
+    await client.stop()  # Always stop the process
 ```
 
 ## Best Practices
@@ -235,52 +224,55 @@ finally:
 
 ### Test Mode Selection
 - Use `Mode.FUZZY` for deterministic, exact outputs
-- Use `Mode.JUDGE` for AI-generated content with paraphrasing
-- Use `Mode.FALLBACK` (default) for robust validation
+- `Mode.JUDGE` (AI-generated content with paraphrasing) is not currently implemented
+- `Mode.FALLBACK` (default) currently behaves like fuzzy-only, since judge mode isn't implemented
 
 ### Response Validation
 - Use appropriate fuzzy matching thresholds (50-80% typical)
-- Provide `user_input` when using judge mode for better evaluation
+- Provide `user_input` alongside `threshold`/`mode` for forward-compatibility with judge mode once it lands
 - Test with variations in expected responses
 - Account for slight differences in AI model outputs
 
 ### Session Management
-- Always call `start()` before sending messages
-- Always call `stop()` to clean up processes
+- Always call `client.start()` before sending messages
+- Always call `client.stop()` to clean up processes
 - Use try-finally blocks for proper cleanup
 
 ### Judge Mode Configuration
-- Configure judge model/provider via `test-config.yaml` or environment variables
-- Ensure LLM API keys are set (e.g., OPENAI_API_KEY)
-- Note: Judge mode requires LLM calls which may slow down tests
+- Judge mode is not currently implemented (Ragas support was removed); `test-config.yaml`'s
+  `judge` settings are retained for a future `AKEvaluator`-based replacement
 
 ## Example Test Session
 
 ```python
 import asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 async def test_cricket_knowledge():
-    test = Test("demo.py", match_threshold=60)
-    
+    client = CLIClient("demo.py")
+
     try:
-        await test.start()
-        
+        await client.start()
+
         # Test basic question - expected is a list
-        await test.send("Who won the 1996 cricket world cup?")
-        await test.expect(["Sri Lanka won the 1996 cricket world cup."])
-        
+        await client.send("Who won the 1996 cricket world cup?")
+        Test.compare(client.last_agent_response, ["Sri Lanka won the 1996 cricket world cup."], threshold=60)
+
         # Test follow-up question with multiple acceptable answers
-        await test.send("Which country hosted the tournament?")
-        await test.expect([
-            "Co-hosted by India, Pakistan and Sri Lanka.",
-            "India, Pakistan and Sri Lanka co-hosted the tournament."
-        ])
-        
+        await client.send("Which country hosted the tournament?")
+        Test.compare(
+            client.last_agent_response,
+            [
+                "Co-hosted by India, Pakistan and Sri Lanka.",
+                "India, Pakistan and Sri Lanka co-hosted the tournament."
+            ],
+            threshold=60,
+        )
+
         print("All tests passed!")
-        
+
     finally:
-        await test.stop()
+        await client.stop()
 
 if __name__ == "__main__":
     asyncio.run(test_cricket_knowledge())

@@ -45,63 +45,57 @@ test:
 | Mode | How it Works | Best For |
 |------|-------------|----------|
 | **fuzzy** | String similarity matching (rapidfuzz) | Deterministic responses, exact answers |
-| **judge** | LLM evaluates if response is semantically correct | Open-ended responses, creative agents |
-| **fallback** | Tries fuzzy first, falls back to judge if fuzzy fails | General-purpose testing |
+| **judge** | Not currently implemented (Ragas support was removed); raises `NotImplementedError` | — |
+| **fallback** | Tries fuzzy first; currently raises `NotImplementedError` if fuzzy fails, since judge mode isn't implemented yet | General-purpose testing (fuzzy-only today) |
 
-For judge mode, configure the judge model:
-```yaml
-test:
-  mode: judge
-  judge:
-    model: gpt-4o-mini
-```
+Stick to `mode: fuzzy` until judge mode is reimplemented on top of the `AKEvaluator` abstraction.
 
 #### 3. Write CLI Agent Tests
 
-For agents running via CLI (`demo.py`):
+For agents running via CLI (`demo.py`), drive the subprocess with `CLIClient` and assert with `Test.compare()` — the two are independent: `CLIClient` only knows how to talk to the CLI, `Test` only knows how to compare strings:
 
 ```python
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_client():
-    test = Test("demo.py")       # Path to your agent definition file
-    await test.start()
+    client = CLIClient("demo.py")       # Path to your agent definition file
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 
 @pytest.mark.order(1)
 async def test_greeting(test_client):
     await test_client.send("Hello!")
-    await test_client.expect(["Hello", "Hi", "Greetings"])
+    Test.compare(test_client.last_agent_response, ["Hello", "Hi", "Greetings"])
 
 
 @pytest.mark.order(2)
 async def test_specific_question(test_client):
     await test_client.send("What is the capital of France?")
-    await test_client.expect(["Paris"])
+    Test.compare(test_client.last_agent_response, ["Paris"])
 
 
 @pytest.mark.order(3)
 async def test_follow_up(test_client):
     # Follow-up questions work because session state is maintained
     await test_client.send("What is its population?")
-    await test_client.expect(["2 million", "2.1 million", "approximately 2 million"])
+    Test.compare(test_client.last_agent_response, ["2 million", "2.1 million", "approximately 2 million"])
 ```
 
 **Key patterns:**
 - Use `@pytest.mark.order(n)` for sequential tests where context matters
 - Use `scope="session"` fixtures so the agent stays running across tests
-- `expect()` takes a list of acceptable answer patterns
-- The test framework uses the configured mode to compare responses
+- `CLIClient.send()` returns the response and also stores it on `.last_agent_response`
+- `Test.compare(actual, expected)` takes a list of acceptable answer patterns and uses the configured mode to compare responses — `Test` never touches the CLI itself
 
 #### 4. Write API Agent Tests
 

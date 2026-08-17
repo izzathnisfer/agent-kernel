@@ -21,20 +21,21 @@ graph LR
 
 ## CLI Testing
 
-Interactive testing of CLI agents using the `Test` class:
+Interactive testing of CLI agents. Two independent classes, wired together by your test code:
+`CLIClient` drives the CLI subprocess, `Test` compares the captured response:
 
 ```python
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
-# Create a test instance
-test = Test("demo.py")
-await test.start()
+# CLIClient drives the CLI subprocess
+client = CLIClient("demo.py")
+await client.start()
 
 # Send messages and verify responses
-await test.send("Who won the 1996 cricket world cup?")
-await test.expect("Sri Lanka won the 1996 cricket world cup.")
+await client.send("Who won the 1996 cricket world cup?")
+Test.compare(client.last_agent_response, ["Sri Lanka won the 1996 cricket world cup."])
 
-await test.stop()
+await client.stop()
 ```
 
 Best for:
@@ -51,21 +52,21 @@ pytest-based testing with async support:
 ```python
 import pytest
 import pytest_asyncio
-from agentkernel.test import Test
+from agentkernel.test import CLIClient, Test
 
 @pytest_asyncio.fixture(scope="session")
 async def test_client():
-    test = Test("demo.py")
-    await test.start()
+    client = CLIClient("demo.py")
+    await client.start()
     try:
-        yield test
+        yield client
     finally:
-        await test.stop()
+        await client.stop()
 
 @pytest.mark.asyncio
 async def test_basic_question(test_client):
     await test_client.send("Hello!")
-    await test_client.expect("Hello! How can I help you?")
+    Test.compare(test_client.last_agent_response, ["Hello! How can I help you?"])
 ```
 
 Best for:
@@ -85,15 +86,15 @@ Agent Kernel supports three comparison modes for validating agent responses:
 Uses fuzzy string matching (via RapidFuzz) with configurable thresholds:
 
 ```python
-from agentkernel.test import Test, Mode
+from agentkernel.test import CLIClient, Mode, Test
 
 # Use fuzzy mode only
-test = Test("demo.py", match_threshold=80)
-await test.send("Who won the 1996 cricket world cup?")
+client = CLIClient("demo.py")
+await client.send("Who won the 1996 cricket world cup?")
 
 # expected is a list - test passes if ANY match exceeds threshold
 Test.compare(
-    actual=test.last_agent_response,
+    actual=client.last_agent_response,
     expected=["Sri Lanka won", "Sri Lanka won the 1996 cricket world cup"],
     threshold=80,
     mode=Mode.FUZZY
@@ -103,34 +104,18 @@ Test.compare(
 **Note:** The `expected` parameter is a list. The test passes if the actual response matches **any** of the expected values above the threshold.
 
 #### Judge Mode
-Uses LLM-based evaluation (via Ragas) for semantic similarity:
-
-```python
-# Use judge mode only - expected is a list
-Test.compare(
-    actual=test.last_agent_response,
-    expected=[
-        "Sri Lanka won the 1996 cricket world cup",
-        "Sri Lanka was the winner of the 1996 world cup",
-        "The 1996 cricket world cup was won by Sri Lanka"
-    ],
-    user_input="Who won the 1996 cricket world cup?",
-    threshold=50,  # Threshold is percentage converted to 0.0-1.0 scale
-    mode=Mode.JUDGE
-)
-```
-
-**Note:** The `expected` parameter is a list. The test passes if the actual response has semantic similarity above the threshold with **any** of the expected answers.
-
-When expected answers are provided, uses `answer_similarity` metric. When no expected answers are provided, uses `answer_relevancy` metric to check if the answer is relevant to the question.
+**Not currently implemented.** Judge mode previously used Ragas for LLM-based semantic
+similarity evaluation; that integration has been removed and `Mode.JUDGE` currently raises
+`NotImplementedError`. A replacement built on the `AKEvaluator` abstraction is planned.
 
 #### Fallback Mode (Default)
-Tries fuzzy matching first, falls back to judge evaluation if fuzzy fails:
+Tries fuzzy matching first, falls back to judge evaluation if fuzzy fails — since judge mode
+isn't implemented yet, this currently means a fuzzy-match failure raises `NotImplementedError`:
 
 ```python
 # Default fallback mode - multiple expected answers
 Test.compare(
-    actual=test.last_agent_response,
+    actual=client.last_agent_response,
     expected=[
         "Sri Lanka",
         "Sri Lanka won the 1996 cricket world cup",
@@ -179,8 +164,8 @@ Tests maintain persistent CLI sessions with proper prompt handling and ANSI esca
 Test different agent types within the same CLI application:
 
 ```python
-await test.send("!select general")  # Switch to general agent
-await test.send("Who won the 1996 cricket world cup?")
+await client.send("!select general")  # Switch to general agent
+await client.send("Who won the 1996 cricket world cup?")
 ```
 
 ## Best Practices
