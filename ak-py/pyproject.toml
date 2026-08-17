@@ -144,11 +144,6 @@ test = [
     "rapidfuzz>=3.14.1",
     "deepeval>=4.1.8",
     "rouge-score>=0.1.2",
-    "ragas>=0.4.1",
-    # ragas imports langchain_community.chat_models.vertexai, removed in langchain-community 0.4.2
-    "langchain_community==0.4.1",
-    "datasets>=2.14.0",
-    "pandas>=2.0.0",
     "litellm>=1.89.2",
 ]
 a2a = [

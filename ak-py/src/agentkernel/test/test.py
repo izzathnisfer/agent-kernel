@@ -10,9 +10,12 @@ from .core.clients.cli import CLIClient
 from .core.model import Mode
 
 
-class Test(CLIClient):
-    _ragas_llm: Optional[Any] = None
-    _ragas_embeddings: Optional[Any] = None
+class Test:
+    """Runs comparisons/assertions against a CLI agent's responses.
+
+    CLI I/O (starting the subprocess, writing input, reading output) is delegated to a
+    `CLIClient` instance rather than inherited — `Test` owns comparison/testing concerns only.
+    """
 
     def __init__(self, path, match_threshold=50, mode: Mode = None):
         """
@@ -51,71 +54,22 @@ class Test(CLIClient):
     @staticmethod
     def _judge_compare(user_input: str, actual: str, expected: list[str] = None, threshold: float = 0.5):
         """
-        Judge the model response using Ragas metrics.
+        Judge the model response using an LLM-as-judge evaluator.
 
-        If one or more expected answers are provided, uses Ragas "answer_similarity"
-        to compare the actual answer against each expected (ground truth). Passes if the
-        similarity score with ANY expected is >= threshold.
+        Placeholder: the previous Ragas-based implementation has been removed. Judge mode
+        will be re-implemented on top of the AKEvaluator abstraction
+        (see agentkernel.test.core.akevaluators).
 
-        If no expected answers are provided, falls back to Ragas "answer_relevancy",
-        which checks if the answer is relevant to the provided user_input (question).
-
-        :param user_input: The user input string (question) used by Ragas.
+        :param user_input: The user input string (question) to be used by the judge.
         :param actual: The model answer to be evaluated.
         :param expected: A list of expected answers to be considered as ground truth.
         :param threshold: Minimum score in [0.0, 1.0] required to pass. Default is 0.5.
-        :raises AssertionError: If no similarity/relevancy score meets the threshold.
-        :return: None - Returns implicitly when the score is above the threshold.
+        :raises NotImplementedError: Always, until judge mode is reimplemented.
         """
-        # Initialize Ragas clients using LiteLLM lazily
-        if Test._ragas_llm is None or Test._ragas_embeddings is None:
-            from litellm import completion
-            from ragas.embeddings import LiteLLMEmbeddings
-            from ragas.llms import LiteLLMStructuredLLM
-
-            judge_config = AKTestConfig.get().judge
-            Test._ragas_llm = LiteLLMStructuredLLM(client=completion, model=judge_config.model, provider=judge_config.provider)
-            Test._ragas_embeddings = LiteLLMEmbeddings(model=judge_config.embedding_model)
-
-        llm = Test._ragas_llm
-        embeddings = Test._ragas_embeddings
-
-        if expected:
-            # Try semantic similarity against each expected (ground truth). Pass if ANY meets threshold.
-            for gt in expected:
-                data = Dataset.from_dict(
-                    {
-                        "question": [user_input],
-                        "answer": [actual],
-                        "ground_truth": [gt],
-                    }
-                )
-                result = evaluate(data, metrics=[answer_similarity], llm=llm, embeddings=embeddings)
-                score = result["answer_similarity"][0]
-                if score >= threshold:
-                    return
-            raise AssertionError(
-                f"Response didn't pass judge answer_similarity against any expected. "
-                f"Question: {user_input}\nAnswer: {actual}\nExpected: {expected}"
-            )
-        else:
-            # No expected answers provided: use answer_relevancy which requires a user question
-            if not user_input:
-                raise AssertionError("user_input (question) is required for judge answer_relevancy metric")
-            data = Dataset.from_dict(
-                {
-                    "question": [user_input],
-                    "answer": [actual],
-                }
-            )
-            result = evaluate(data, metrics=[answer_relevancy], llm=llm, embeddings=embeddings)
-            score = result["answer_relevancy"][0]
-            if score < threshold:
-                raise AssertionError(
-                    f"Response didn't pass judge answer_relevancy. Score: {score:.3f}, Threshold: {threshold:.3f}.\n"
-                    f"Question: {user_input}\nAnswer: {actual}"
-                )
-            return
+        raise NotImplementedError(
+            "Judge mode is not currently implemented (Ragas support was removed). "
+            "Use Mode.FUZZY, or wait for the AKEvaluator-based judge to land."
+        )
 
     @staticmethod
     def compare(actual: str, expected: list[str] = None, user_input: str = "", threshold: int = 50, mode: Mode = None):
@@ -124,8 +78,8 @@ class Test(CLIClient):
 
         Supports three comparison modes:
         - 'FUZZY': Only fuzzy string matching
-        - 'JUDGE': LLM-based evaluation using Ragas (answer_similarity when expected answers are provided, otherwise answer_relevancy)
-        - 'FALLBACK': Try fuzzy first, fallback to LLM evaluation if fuzzy fails
+        - 'JUDGE': LLM-as-judge evaluation (placeholder — not currently implemented, see _judge_compare)
+        - 'FALLBACK': Try fuzzy first, fallback to judge evaluation if fuzzy fails
 
         :param actual: The string to be compared.
         :param expected: A list of acceptable strings to compare against.
@@ -133,6 +87,7 @@ class Test(CLIClient):
         :param threshold: The minimum similarity score (0-100) is required for a fuzzy match. Default is 50.
         :param mode: Comparison mode - 'fuzzy', 'judge', or 'fallback'. Default is 'fallback'.
         :raises AssertionError: If the actual string doesn't match any expected string.
+        :raises NotImplementedError: If judge evaluation is reached (JUDGE mode, or FALLBACK after a failed fuzzy match).
         :return: None - Returns implicitly when a match is found.
         """
         # Validate mode
