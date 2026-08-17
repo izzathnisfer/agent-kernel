@@ -1,8 +1,29 @@
 from abc import ABC, abstractmethod
 
+from ..model import Mode
+
 
 class AKEvaluator(ABC):
     """Base interface for response-comparison strategies used by the test harness."""
+
+    MODE_FUNCNAME_MAP = {
+        Mode.EXACT: "exact",
+        Mode.FUZZY: "fuzzy",
+        Mode.OVERLAP: "overlap",
+        Mode.SEMANTIC: "semantic",
+        Mode.JUDGE: "judge",
+        Mode.SAFETY: "safety",
+        Mode.STRUCTURAL: "structural",
+        Mode.HUMAN: "human",
+    }
+
+    @classmethod
+    def get_funcname_from_mode(cls, mode: Mode) -> str:
+        """Return the `AKEvaluator` method name backing the given mode, via `MODE_FUNCNAME_MAP`."""
+        try:
+            return cls.MODE_FUNCNAME_MAP[mode]
+        except KeyError as exc:
+            raise ValueError(f"No AKEvaluator function mapped for mode: {mode!r}") from exc
 
     @abstractmethod
     def exact(self):
