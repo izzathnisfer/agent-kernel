@@ -4,8 +4,8 @@ from deepeval.models import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase
 from pydantic import BaseModel
 
-from ..akevaluator import AKEvaluator
 from ..frameworks.deepeval import DeepevalEvaluator
+from .evaluator import AKEvaluator
 
 _ModelType = Optional[Union[str, DeepEvalBaseLLM]]
 
