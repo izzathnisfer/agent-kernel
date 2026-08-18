@@ -21,7 +21,7 @@ class AKTestConfig(YamlBaseSettingsModified):
     Loaded from test-config.yaml in the current working directory (override the
     path with AK_TEST_CONFIG_PATH_OVERRIDE). A missing file is the normal case
     and applies the defaults silently. Environment variables use the same names
-    as before the split (AK_TEST__MODE, AK_TEST__JUDGE__MODEL, ...).
+    as before the split (AK_TEST__MODE, AK_TEST__FALLBACK_MODE, AK_TEST__JUDGE__MODEL, ...).
     """
 
     yaml_file_env_var: ClassVar[str] = "AK_TEST_CONFIG_PATH_OVERRIDE"
@@ -31,7 +31,8 @@ class AKTestConfig(YamlBaseSettingsModified):
     _instance: ClassVar[Optional["AKTestConfig"]] = None
     _instance_lock: ClassVar[RLock] = RLock()
 
-    mode: Mode = Field(default=Mode.FALLBACK, description="Test comparison mode")
+    mode: Mode = Field(default=Mode.FUZZY, description="Primary test comparison mode")
+    fallback_mode: Optional[Mode] = Field(default=None, description="Comparison mode run when the primary mode fails")
     judge: _JudgeConfig = Field(description="Judge configuration", default_factory=_JudgeConfig)
 
     model_config = SettingsConfigDict(

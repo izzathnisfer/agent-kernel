@@ -3,7 +3,7 @@ name: ak-test
 description: >
   Set up testing and debug common issues in Agent Kernel projects. This skill guides
   you through configuring the built-in test framework, writing agent tests, choosing
-  test modes (fuzzy, judge, fallback), and troubleshooting common errors.
+  test modes and fallback modes, and troubleshooting common errors.
 license: Apache-2.0
 metadata:
   author: yaalalabs
@@ -39,16 +39,22 @@ Update `config.yaml`:
 
 ```yaml
 test:
-  mode: fuzzy       # Options: fuzzy | judge | fallback
+  mode: fuzzy              # Primary mode: exact | fuzzy | overlap | semantic | judge | safety | structural | human
+  fallback_mode: judge     # Optional: mode run when the primary mode fails
 ```
 
 | Mode | How it Works | Best For |
 |------|-------------|----------|
 | **fuzzy** | String similarity matching (rapidfuzz) | Deterministic responses, exact answers |
 | **judge** | Not currently implemented (Ragas support was removed); raises `NotImplementedError` | — |
-| **fallback** | Tries fuzzy first; currently raises `NotImplementedError` if fuzzy fails, since judge mode isn't implemented yet | General-purpose testing (fuzzy-only today) |
+| every other mode | Declared in `Mode` but not implemented yet; raises `NotImplementedError` | — |
 
-Stick to `mode: fuzzy` until judge mode is reimplemented on top of the `AKEvaluator` abstraction.
+`fallback_mode` is a second chance, not a mode of its own: the primary `mode` runs first, and only if
+it *fails the comparison* does `fallback_mode` run and decide the result. Leave `fallback_mode` unset
+for no fallback. A mode that isn't implemented raises `NotImplementedError` immediately instead of
+falling through, so a misconfigured mode isn't silently masked.
+
+Stick to `mode: fuzzy` with no fallback until judge mode is reimplemented on top of the `AKEvaluator` abstraction.
 
 #### 3. Write CLI Agent Tests
 

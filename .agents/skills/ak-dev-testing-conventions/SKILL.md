@@ -71,7 +71,7 @@ Tests live in `ak-py/tests/` and follow the naming convention `test_<module>.py`
 | `test_akagentrunner_stream.py` | Serverless `ServerlessStreamAgentRunner` (SQS streaming) |
 | `test_akresponsehandler.py` | Serverless response handler (`CHAT_RESPONSE` / `STREAM_CHUNK` broadcast) |
 | `test_ws_lambda_stream.py` | WebSocket Lambda router in `stream` mode |
-| `test_cli_tester.py` | `Test` class comparison/assertion logic (fuzzy/judge/fallback modes) |
+| `test_cli_tester.py` | `Test` class comparison/assertion logic (mode dispatch, `fallback_mode` behaviour) |
 | `test_cli_client.py` | `CLIClient` CLI I/O (subprocess start/send/stop, prompt parsing) — independent of `Test` |
 | `test_auth_handler.py` | Auth handler |
 | `test_akauthorizer.py` | AWS Lambda authorizer |
@@ -259,14 +259,21 @@ async def test_agent_response(test_client):
 Configured via `test-config.yaml` (a separate, un-nested file resolved from the CWD or `AK_TEST_CONFIG_PATH_OVERRIDE` — not `config.yaml`, see `ak-py/src/agentkernel/test/config.py`):
 
 ```yaml
-mode: fuzzy    # fuzzy | judge | fallback
+mode: fuzzy            # exact | fuzzy | overlap | semantic | judge | safety | structural | human
+fallback_mode: judge   # optional; any of the same modes, run only when `mode` fails
 judge:
   model: gpt-4o-mini
 ```
 
 - **fuzzy**: Uses `rapidfuzz` string similarity matching (default threshold)
 - **judge**: Not currently implemented — the previous Ragas-based `answer_similarity`/`answer_relevancy` evaluation was removed; `Mode.JUDGE` now raises `NotImplementedError` pending a replacement built on the `AKEvaluator` abstraction (`core/akevaluators/`) (see `ak-py/src/agentkernel/test/test.py`)
-- **fallback**: Tries fuzzy first; currently raises `NotImplementedError` if fuzzy fails, since judge mode isn't implemented yet
+- every other `Mode` member (`exact`, `overlap`, `semantic`, `safety`, `structural`, `human`): a valid configuration value, but no implementation behind it yet — raises `NotImplementedError`
+
+`mode` and `fallback_mode` both accept any `Mode`. `Test.compare()` runs `mode` first and only runs
+`fallback_mode` when the primary mode *fails the comparison* (`AssertionError`); when both fail, the
+error names both. `NotImplementedError`/`ValueError` propagate straight out instead of triggering the
+fallback, so an unimplemented or misspelled mode isn't masked. `Test.MODE_FUNCNAME_MAP` maps each
+implemented mode to the method behind it — add an entry there when implementing a new mode.
 
 ### Test.compare() for API Tests
 

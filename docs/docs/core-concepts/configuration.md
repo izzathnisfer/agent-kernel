@@ -453,8 +453,9 @@ export AK_MCP__STATELESS_HTTP=false  # Run in stateless HTTP mode, no Mcp-Sessio
 These variables configure the test harness (`AKTestConfig`), which is separate from the application configuration; see the [Test Configuration](#test-configuration) section below for the `test-config.yaml` file and full details. The variable names are unchanged from previous releases:
 
 ```bash
-# Test comparison mode
-export AK_TEST__MODE=fallback  # Options: 'fuzzy', 'judge', 'fallback' (default: 'fallback')
+# Test comparison modes
+export AK_TEST__MODE=fuzzy  # Primary mode: 'exact', 'fuzzy', 'overlap', 'semantic', 'judge', 'safety', 'structural', 'human' (default: 'fuzzy')
+export AK_TEST__FALLBACK_MODE=judge  # Optional: mode run when the primary mode fails (default: unset, no fallback)
 
 # Judge configuration (for LLM-based evaluation)
 export AK_TEST__JUDGE__MODEL=gpt-4o-mini  # LLM model (default: gpt-4o-mini)
@@ -632,7 +633,8 @@ Test harness configuration (comparison mode and judge models) is separate from t
 Create `test-config.yaml` in the directory you run your tests from:
 
 ```yaml
-mode: fallback  # Test comparison mode: fuzzy, judge, or fallback (default: fallback)
+mode: fuzzy  # Primary comparison mode: exact, fuzzy, overlap, semantic, judge, safety, structural, human (default: fuzzy)
+fallback_mode: judge  # Optional: comparison mode run when the primary mode fails (default: unset, no fallback)
 judge:
   model: gpt-4o-mini  # LLM model for judge evaluation (default: gpt-4o-mini)
   provider: openai  # LLM provider for judge evaluation (default: openai)
@@ -641,12 +643,15 @@ judge:
 
 Note that the file is un-nested: since it contains only test configuration, there is no top-level `test:` key.
 
-If `test-config.yaml` is missing, defaults apply silently (no warning is printed). Fuzzy and fallback tests need no configuration file at all.
+If `test-config.yaml` is missing, defaults apply silently (no warning is printed). Fuzzy tests need no configuration file at all.
 
-**Test Modes:**
+**Test Modes:** `mode` and `fallback_mode` both accept any of the modes below. `mode` runs first; `fallback_mode` runs only if the primary mode fails the comparison, and then decides the result. Leave `fallback_mode` unset for no fallback.
+
 - `fuzzy` - Uses fuzzy string matching (RapidFuzz)
 - `judge` - Not currently implemented (Ragas support was removed); raises `NotImplementedError`
-- `fallback` - Tries fuzzy first; currently raises `NotImplementedError` if fuzzy fails, since judge mode isn't implemented yet
+- `exact`, `overlap`, `semantic`, `safety`, `structural`, `human` - Valid configuration values, but no implementation behind them yet; they raise `NotImplementedError`
+
+A mode that isn't implemented raises `NotImplementedError` immediately rather than handing over to `fallback_mode`, so a misconfigured mode isn't silently masked.
 
 ### Custom Test Configuration File Path
 
@@ -661,8 +666,9 @@ export AK_TEST_CONFIG_PATH_OVERRIDE=/path/to/test-config.yaml
 All test configuration parameters can be set using environment variables with the `AK_TEST__` prefix. These take precedence over `test-config.yaml` values:
 
 ```bash
-# Test comparison mode
-export AK_TEST__MODE=fallback  # Options: 'fuzzy', 'judge', 'fallback' (default: 'fallback')
+# Test comparison modes
+export AK_TEST__MODE=fuzzy  # Primary mode: 'exact', 'fuzzy', 'overlap', 'semantic', 'judge', 'safety', 'structural', 'human' (default: 'fuzzy')
+export AK_TEST__FALLBACK_MODE=judge  # Optional: mode run when the primary mode fails (default: unset, no fallback)
 
 # Judge configuration (for LLM-based evaluation)
 export AK_TEST__JUDGE__MODEL=gpt-4o-mini  # LLM model (default: gpt-4o-mini)

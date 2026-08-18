@@ -51,11 +51,12 @@
     },
     {
       "id": "test-mode-fallback",
-      "name": "Configure fallback test mode",
-      "input": "Set up fallback test mode",
+      "name": "Configure a fallback test mode",
+      "input": "Set up a fallback test mode for when the primary mode fails",
       "expected_outputs": [
         "test:",
-        "mode: fallback"
+        "mode:",
+        "fallback_mode:"
       ]
     },
     {

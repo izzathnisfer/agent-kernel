@@ -814,10 +814,17 @@ Configure test comparison modes for automated testing. Test configuration is sep
 
 - **Mode**
   - **Field**: `mode`
-  - **Options**: `fuzzy`, `judge`, `fallback`
-  - **Default**: `fallback`
-  - **Description**: Test comparison mode
+  - **Options**: `exact`, `fuzzy`, `overlap`, `semantic`, `judge`, `safety`, `structural`, `human`
+  - **Default**: `fuzzy`
+  - **Description**: Primary test comparison mode
   - **Environment Variable**: `AK_TEST__MODE`
+
+- **Fallback Mode**
+  - **Field**: `fallback_mode`
+  - **Options**: the same modes as `mode`
+  - **Default**: unset (no fallback)
+  - **Description**: Comparison mode run when the primary mode fails
+  - **Environment Variable**: `AK_TEST__FALLBACK_MODE`
 
 - **Judge Model**
   - **Field**: `judge.model`
@@ -837,14 +844,18 @@ Configure test comparison modes for automated testing. Test configuration is sep
   - **Description**: Embedding model for similarity evaluation
   - **Environment Variable**: `AK_TEST__JUDGE__EMBEDDING_MODEL`
 
-**Test Modes:**
+**Test Modes:** `mode` and `fallback_mode` both accept any of the modes below. `mode` runs first; `fallback_mode` runs only if the primary mode fails the comparison, and then decides the result.
+
 - `fuzzy`: Uses fuzzy string matching (RapidFuzz)
 - `judge`: Not currently implemented (Ragas support was removed); raises `NotImplementedError`
-- `fallback`: Tries fuzzy first; currently raises `NotImplementedError` if fuzzy fails, since judge mode isn't implemented yet
+- `exact`, `overlap`, `semantic`, `safety`, `structural`, `human`: Valid configuration values, but no implementation behind them yet; they raise `NotImplementedError`
+
+A mode that isn't implemented raises `NotImplementedError` immediately rather than handing over to `fallback_mode`, so a misconfigured mode isn't silently masked.
 
 ```yaml
 # test-config.yaml (separate file — not config.yaml)
-mode: fallback
+mode: fuzzy
+# fallback_mode: judge  # optional — runs only when the primary mode fails
 judge:
   model: gpt-4o-mini
   provider: openai
@@ -1175,7 +1186,8 @@ export AK_TRACE__TYPE=langfuse  # or openllmetry, logfire
 # For Logfire:
 # export LOGFIRE_TOKEN=your-write-token
 # Test harness (loaded from the separate test-config.yaml — see Test Configuration)
-export AK_TEST__MODE=fallback  # Options: fuzzy, judge, fallback
+export AK_TEST__MODE=fuzzy  # Primary mode: exact, fuzzy, overlap, semantic, judge, safety, structural, human
+export AK_TEST__FALLBACK_MODE=judge  # Optional: mode run when the primary mode fails
 export AK_TEST__JUDGE__MODEL=gpt-4o-mini
 export AK_TEST__JUDGE__PROVIDER=openai
 export AK_TEST__JUDGE__EMBEDDING_MODEL=text-embedding-3-small
@@ -1416,14 +1428,15 @@ Test harness configuration (comparison mode and judge models) is separate from t
 **test-config.yaml:**
 
 ```yaml
-mode: fallback
+mode: fuzzy
+# fallback_mode: judge  # optional — runs only when the primary mode fails
 judge:
   model: gpt-4o-mini
   provider: openai
   embedding_model: text-embedding-3-small
 ```
 
-Note that the file is un-nested — there is no top-level `test:` key. If the file is missing, defaults apply silently (fuzzy and fallback tests need no configuration file at all).
+Note that the file is un-nested — there is no top-level `test:` key. If the file is missing, defaults apply silently (fuzzy tests need no configuration file at all).
 
 **Override the test config file path:**
 
@@ -1434,7 +1447,8 @@ export AK_TEST_CONFIG_PATH_OVERRIDE=/path/to/test-config.yaml
 **Environment variables** use the `AK_TEST__` prefix and override `test-config.yaml` values:
 
 ```bash
-export AK_TEST__MODE=fallback  # Options: fuzzy, judge, fallback
+export AK_TEST__MODE=fuzzy  # Primary mode: exact, fuzzy, overlap, semantic, judge, safety, structural, human
+export AK_TEST__FALLBACK_MODE=judge  # Optional: mode run when the primary mode fails
 export AK_TEST__JUDGE__MODEL=gpt-4o-mini
 export AK_TEST__JUDGE__PROVIDER=openai
 export AK_TEST__JUDGE__EMBEDDING_MODEL=text-embedding-3-small

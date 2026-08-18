@@ -15,7 +15,8 @@ def test_defaults_no_file(capsys, monkeypatch):
     # Point at a nonexistent file so a test-config.yaml in the CWD can't interfere
     monkeypatch.setenv("AK_TEST_CONFIG_PATH_OVERRIDE", "/nonexistent/test-config.yaml")
     cfg = AKTestConfig.get()
-    assert cfg.mode == "fallback"
+    assert cfg.mode == "fuzzy"
+    assert cfg.fallback_mode is None
     assert cfg.judge.model == "gpt-4o-mini"
     assert cfg.judge.provider == "openai"
     assert cfg.judge.embedding_model == "text-embedding-3-small"
@@ -26,11 +27,12 @@ def test_defaults_no_file(capsys, monkeypatch):
 
 def test_yaml_loading(tmp_path, monkeypatch):
     cfg_path = tmp_path / "test-config.yaml"
-    cfg_path.write_text("mode: judge\njudge:\n  model: gpt-4o\n  provider: azure\n")
+    cfg_path.write_text("mode: judge\nfallback_mode: fuzzy\njudge:\n  model: gpt-4o\n  provider: azure\n")
     monkeypatch.setenv("AK_TEST_CONFIG_PATH_OVERRIDE", str(cfg_path))
 
     cfg = AKTestConfig.get()
     assert cfg.mode == "judge"
+    assert cfg.fallback_mode == "fuzzy"
     assert cfg.judge.model == "gpt-4o"
     assert cfg.judge.provider == "azure"
     # Values not present in the file keep their defaults
@@ -44,12 +46,14 @@ def test_env_overrides(tmp_path, monkeypatch):
 
     # Env vars keep their pre-split names and override file values
     monkeypatch.setenv("AK_TEST__MODE", "judge")
+    monkeypatch.setenv("AK_TEST__FALLBACK_MODE", "semantic")
     monkeypatch.setenv("AK_TEST__JUDGE__MODEL", "from-env")
     monkeypatch.setenv("AK_TEST__JUDGE__PROVIDER", "anthropic")
     monkeypatch.setenv("AK_TEST__JUDGE__EMBEDDING_MODEL", "embed-env")
 
     cfg = AKTestConfig.get()
     assert cfg.mode == "judge"
+    assert cfg.fallback_mode == "semantic"
     assert cfg.judge.model == "from-env"
     assert cfg.judge.provider == "anthropic"
     assert cfg.judge.embedding_model == "embed-env"
@@ -60,11 +64,11 @@ def test_lazy_singleton(monkeypatch):
     cfg_2 = AKTestConfig.get()
     assert cfg_1 is cfg_2
 
-    monkeypatch.setenv("AK_TEST__MODE", "fuzzy")
+    monkeypatch.setenv("AK_TEST__MODE", "judge")
     # Cached instance does not see the new env until reset
-    assert AKTestConfig.get().mode == "fallback"
-    AKTestConfig._reset()
     assert AKTestConfig.get().mode == "fuzzy"
+    AKTestConfig._reset()
+    assert AKTestConfig.get().mode == "judge"
 
 
 def test_invalid_mode_raises(monkeypatch):
@@ -76,7 +80,7 @@ def test_invalid_mode_raises(monkeypatch):
 def test_missing_override_path_falls_back_to_defaults(monkeypatch):
     monkeypatch.setenv("AK_TEST_CONFIG_PATH_OVERRIDE", "/nonexistent/test-config.yaml")
     cfg = AKTestConfig.get()
-    assert cfg.mode == "fallback"
+    assert cfg.mode == "fuzzy"
 
 
 def test_independent_from_akconfig(tmp_path, monkeypatch):

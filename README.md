@@ -182,7 +182,7 @@ ak skill install
 | `ak-add-capabilities` | Wire in guardrails, tracing, sessions, MCP, A2A, hooks, multimodal, conversation threads |
 | `ak-add-integration` | Slack, WhatsApp, Messenger, Instagram, Telegram, Gmail |
 | `ak-cloud-deploy` | AWS Lambda, ECS, Azure Functions, Container Apps, GCP Cloud Run with full Terraform |
-| `ak-test` | Fuzzy, judge, and fallback test modes + a debugging playbook |
+| `ak-test` | Test comparison modes with configurable fallback + a debugging playbook |
 
 See the [`use-cases/`](use-cases/) directory for complete end-to-end examples built using these skills — each starting from a `SPEC.md` and generating a fully deployed agent.
 
@@ -194,7 +194,7 @@ See the [`use-cases/`](use-cases/) directory for complete end-to-end examples bu
 pytest tests/
 ```
 
-Built-in fuzzy, semantic, and fallback comparison modes. CI/CD ready. Test agent behavior, not just code.
+Built-in comparison modes with a configurable fallback mode. CI/CD ready. Test agent behavior, not just code.
 
 ---
 

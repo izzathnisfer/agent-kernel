@@ -37,7 +37,8 @@ Test.compare(actual="Paris", expected=["Paris", "The capital is Paris"], thresho
 - `expected`: A list of acceptable response strings
 - `user_input`: The question that produced `actual` (used for LLM-based evaluation)
 - `threshold`: Fuzzy matching threshold percentage (default: 50)
-- `mode`: Comparison mode - `Mode.FUZZY`, `Mode.JUDGE`, or `Mode.FALLBACK`. If None, uses config value (default: None)
+- `mode`: Primary comparison mode - any `Mode` (`Mode.FUZZY`, `Mode.JUDGE`, ...). If None, uses config value (default: None)
+- `fallback_mode`: Mode run when the primary mode fails - any `Mode`. If None, uses config value; when that is unset too, no fallback runs (default: None)
 
 ## Basic Usage
 
@@ -105,13 +106,13 @@ question when none were given); that integration has been removed. `Mode.JUDGE` 
 raises `NotImplementedError`. A replacement built on the `AKEvaluator` abstraction
 (`agentkernel.test.core.akevaluators`) is planned — use `Mode.FUZZY` in the meantime.
 
-### Fallback Mode (Default)
+### Fallback Mode
 
-Tries fuzzy matching first, falls back to judge evaluation if fuzzy fails. Since judge mode
-isn't implemented yet, a fuzzy-match failure currently raises `NotImplementedError`:
+`fallback_mode` names another mode to fall back to when the primary `mode` fails the comparison.
+Both parameters accept any mode, so any mode can lead and any mode can back it up:
 
 ```python
-# Default fallback mode with multiple expected answers
+# Fuzzy first; if it fails, judge evaluation decides the result
 await client.send("Who won the 1996 cricket world cup?")
 Test.compare(
     actual=client.last_agent_response,
@@ -121,19 +122,22 @@ Test.compare(
         "The winner was Sri Lanka"
     ],
     user_input="Who won the 1996 cricket world cup?",
-    threshold=50
+    threshold=50,
+    mode=Mode.FUZZY,
+    fallback_mode=Mode.JUDGE
 )
 ```
 
-**Note:** The `expected` parameter is a list of acceptable responses. Fuzzy matching is tried against each expected value first. If all fail, judge evaluation is attempted (currently a placeholder — see above).
+**Note:** The `expected` parameter is a list of acceptable responses. The primary mode is tried against each expected value first; only if it fails does the fallback mode run. If both fail, the raised `AssertionError` names both modes. A mode with no implementation behind it raises `NotImplementedError` rather than falling through, so a misconfigured mode isn't silently masked.
 
 ### Configuration-Based Mode
 
-Set default mode via a `test-config.yaml` file (in the directory the tests run from, or the path in `AK_TEST_CONFIG_PATH_OVERRIDE`) instead of passing `mode=` to every `Test.compare()` call. Test configuration is separate from the application's `config.yaml` and is only loaded when the test harness runs:
+Set the default modes via a `test-config.yaml` file (in the directory the tests run from, or the path in `AK_TEST_CONFIG_PATH_OVERRIDE`) instead of passing `mode=`/`fallback_mode=` to every `Test.compare()` call. Test configuration is separate from the application's `config.yaml` and is only loaded when the test harness runs:
 
 ```yaml
 # test-config.yaml
-mode: fuzzy  # Options: fuzzy, judge, fallback
+mode: fuzzy           # Primary mode: exact, fuzzy, overlap, semantic, judge, safety, structural, human
+fallback_mode: judge  # Optional: mode run when the primary mode fails (omit for no fallback)
 judge:
   model: gpt-4o-mini
   provider: openai
@@ -223,9 +227,9 @@ finally:
 - Verify agent switching functionality
 
 ### Test Mode Selection
-- Use `Mode.FUZZY` for deterministic, exact outputs
+- Use `Mode.FUZZY` for deterministic, exact outputs — it is the default primary mode
 - `Mode.JUDGE` (AI-generated content with paraphrasing) is not currently implemented
-- `Mode.FALLBACK` (default) currently behaves like fuzzy-only, since judge mode isn't implemented
+- Leave `fallback_mode` unset while judge mode is unimplemented; there is no second implemented mode to fall back to yet
 
 ### Response Validation
 - Use appropriate fuzzy matching thresholds (50-80% typical)

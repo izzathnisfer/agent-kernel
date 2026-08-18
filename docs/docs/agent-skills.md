@@ -105,7 +105,7 @@ Add advanced capabilities: guardrails (OpenAI Moderation, AWS Bedrock), tracing 
 
 ### ak-test
 
-Set up testing and debug common issues. Covers test modes (fuzzy, judge, fallback), CLI and API test patterns, and 8 common debugging scenarios with solutions.
+Set up testing and debug common issues. Covers test modes and fallback modes, CLI and API test patterns, and 8 common debugging scenarios with solutions.
 
 **Example prompts:**
 - *"Set up automated testing for my agent"*

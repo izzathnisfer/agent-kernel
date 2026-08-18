@@ -10,4 +10,3 @@ class Mode(StrEnum):
     SAFETY = "safety"
     STRUCTURAL = "structural"
     HUMAN = "human"
-    FALLBACK = "fallback"

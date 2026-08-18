@@ -72,21 +72,22 @@ async def test_fuzzy_matching(test_client):
 ### Judge Mode
 
 **Not currently implemented.** Judge mode previously used Ragas for LLM-based semantic
-evaluation; that integration has been removed and `Mode.JUDGE` (and the judge fallback
-path of `Mode.FALLBACK`) currently raises `NotImplementedError`. A replacement built on
-the `AKEvaluator` abstraction is planned. Use `Mode.FUZZY` in the meantime.
+evaluation; that integration has been removed and `Mode.JUDGE` currently raises
+`NotImplementedError`, whether it is used as the primary mode or as a `fallback_mode`.
+A replacement built on the `AKEvaluator` abstraction is planned. Use `Mode.FUZZY` in the meantime.
 
 **Note:** When multiple expected answers are provided, the judge evaluates similarity against each one and passes if **any** score meets the threshold.
 
-### Fallback Mode (Default)
+### Fallback Mode
 
-Tries fuzzy matching first, falls back to judge evaluation:
+`fallback_mode` names a second mode that runs only when the primary `mode` fails the comparison.
+Both parameters accept any mode:
 
 ```python
 @pytest.mark.order(3)
 async def test_fallback_mode(test_client):
     await test_client.send("Who won the 1996 cricket world cup?")
-    # Fallback mode (default) - multiple expected answers
+    # Fuzzy first; if it fails, judge evaluation decides
     Test.compare(
         actual=test_client.last_agent_response,
         expected=[
@@ -96,19 +97,21 @@ async def test_fallback_mode(test_client):
         ],
         user_input="Who won the 1996 cricket world cup?",
         threshold=50,
-        mode=Mode.FALLBACK  # or None to use config default
+        mode=Mode.FUZZY,          # or None to use config default
+        fallback_mode=Mode.JUDGE  # or None to use config default
     )
 ```
 
-**Note:** With multiple expected answers, fuzzy mode tries each one and passes if **any** match exceeds the threshold. If all fuzzy matches fail, judge mode evaluates against each expected answer.
+**Note:** With multiple expected answers, the primary mode tries each one and passes if **any** match succeeds. Only when it fails does the fallback mode run and decide the result; if both fail, the raised `AssertionError` names both modes. A mode with no implementation behind it raises `NotImplementedError` instead of falling through.
 
 ### Configuring Test Mode
 
-Set the default mode via a `test-config.yaml` file in the directory the tests run from (a `test:` section in the application's `config.yaml` is ignored):
+Set the default modes via a `test-config.yaml` file in the directory the tests run from (a `test:` section in the application's `config.yaml` is ignored):
 
 ```yaml
 # test-config.yaml
-mode: fallback  # Options: fuzzy, judge, fallback
+mode: fuzzy           # Primary mode: exact, fuzzy, overlap, semantic, judge, safety, structural, human
+fallback_mode: judge  # Optional: mode run when the primary mode fails (omit for no fallback)
 judge:
   model: gpt-4o-mini
   provider: openai
@@ -326,7 +329,8 @@ Configure the default test comparison mode in `test-config.yaml`. The file is re
 
 ```yaml
 # test-config.yaml
-mode: fallback  # Options: fuzzy, judge, fallback (default: fallback)
+mode: fuzzy           # Primary mode: exact, fuzzy, overlap, semantic, judge, safety, structural, human (default: fuzzy)
+fallback_mode: judge  # Optional: mode run when the primary mode fails (default: unset, no fallback)
 judge:
   model: gpt-4o-mini  # LLM model for judge mode
   provider: openai  # LLM provider
@@ -380,14 +384,14 @@ def setup_test_env():
 ### Assertions
 - Use `Mode.FUZZY` for exact string matching requirements
 - `Mode.JUDGE` (semantic similarity validation) is not currently implemented — see [Judge Mode](#judge-mode)
-- Use `Mode.FALLBACK` (default) for robust validation; note it currently raises `NotImplementedError` if fuzzy matching fails
+- Pair a strict `mode` with a lenient `fallback_mode` for robust validation; note that the only implemented mode today is fuzzy, so a fallback has nothing to fall back to yet
 - Test both positive and negative cases
 - Include edge cases and error conditions
 
 ### Test Mode Selection
 - **Fuzzy Mode**: Best for deterministic outputs, exact formatting requirements
 - **Judge Mode**: Not currently implemented (planned, for AI-generated content and paraphrased responses)
-- **Fallback Mode**: Falls back to fuzzy matching only today, since judge evaluation is not implemented
+- **Fallback Mode**: `fallback_mode` runs only when the primary `mode` fails; leave it unset today, since fuzzy is the only implemented mode
 
 ### Performance
 - Use session-scoped fixtures for expensive setup

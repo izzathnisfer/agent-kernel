@@ -335,7 +335,8 @@ session:
 
 # Testing
 test:
-  mode: fuzzy          # fuzzy | judge | fallback
+  mode: fuzzy          # exact | fuzzy | overlap | semantic | judge | safety | structural | human
+  # fallback_mode: judge   # optional — mode run when the primary mode fails
 ```
 
 #### build.sh

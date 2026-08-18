@@ -108,12 +108,15 @@ Test.compare(
 similarity evaluation; that integration has been removed and `Mode.JUDGE` currently raises
 `NotImplementedError`. A replacement built on the `AKEvaluator` abstraction is planned.
 
-#### Fallback Mode (Default)
-Tries fuzzy matching first, falls back to judge evaluation if fuzzy fails — since judge mode
-isn't implemented yet, this currently means a fuzzy-match failure raises `NotImplementedError`:
+#### Fallback Mode
+
+`fallback_mode` isn't a mode of its own — it names another mode to fall back to. The primary
+`mode` runs first, and only if it *fails the comparison* does `fallback_mode` run and decide the
+result. Both parameters accept any mode, so you can pair any strict primary with any lenient
+backstop. Leave `fallback_mode` unset for no fallback:
 
 ```python
-# Default fallback mode - multiple expected answers
+# Fuzzy first; if it fails, judge evaluation decides
 Test.compare(
     actual=client.last_agent_response,
     expected=[
@@ -123,19 +126,21 @@ Test.compare(
     ],
     user_input="Who won the 1996 cricket world cup?",
     threshold=50,
-    mode=Mode.FALLBACK  # or None to use config default
+    mode=Mode.FUZZY,           # or None to use the config default
+    fallback_mode=Mode.JUDGE   # or None to use the config default
 )
 ```
 
-**Note:** The `expected` parameter is a list of acceptable responses. The test passes if **any** expected value matches (fuzzy or judge evaluation).
+**Note:** The `expected` parameter is a list of acceptable responses. The test passes if **any** expected value matches, under either the primary mode or the fallback mode. If both fail, the raised `AssertionError` names both modes. A mode with no implementation behind it raises `NotImplementedError` instead of falling through, so a misconfigured mode isn't silently masked.
 
 ### Configuring Test Mode
 
-Set the default test mode via a `test-config.yaml` file in the directory you run the tests from. Test configuration is separate from the application's `config.yaml` and is only loaded when the test harness runs (a `test:` section in `config.yaml` is ignored):
+Set the default test modes via a `test-config.yaml` file in the directory you run the tests from. Test configuration is separate from the application's `config.yaml` and is only loaded when the test harness runs (a `test:` section in `config.yaml` is ignored):
 
 ```yaml
 # test-config.yaml
-mode: fallback  # Options: fuzzy, judge, fallback
+mode: fuzzy           # Primary mode: exact, fuzzy, overlap, semantic, judge, safety, structural, human
+fallback_mode: judge  # Optional: mode run when the primary mode fails (omit for no fallback)
 judge:
   model: gpt-4o-mini
   provider: openai
