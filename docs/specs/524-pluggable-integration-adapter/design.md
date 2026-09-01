@@ -95,9 +95,15 @@ graph LR
     Slack and Teams inherit the default because their SDKs verify inside their own dispatch
     (Bolt's `handle`, `BotFrameworkAdapter.process_activity`), and Gmail has nothing to verify.
     Where it is overridden it must run **before** parsing and before enqueue. (Decision Q4.)
-  - `parse(raw) -> Optional[InboundRequest]`: normalize one platform event. Returns `None` for
-    events that are legitimately ignored (bot's own message, non-message activity, echo), so
-    "ignore" is not an exception.
+  - `parse(raw) -> InboundParseResult`: normalize one platform delivery. The result carries a
+    **list** of `InboundRequest` (one platform delivery can carry several messages — WhatsApp,
+    Messenger and Instagram all iterate `entry` x `messaging`/`messages`) plus the optional
+    platform-expected HTTP response the platform SDK produced during parsing (Slack's Bolt
+    `handle()` and Teams' `process_activity` both own their response, including Slack's
+    `url_verification` challenge). An empty list means the delivery is legitimately ignored
+    (bot's own message, non-message activity, echo), so "ignore" is not an exception.
+    *(Revised while writing `spec.md`: the original single-`Optional` return dropped batched
+    Meta deliveries and had nowhere to carry an SDK-owned response — re-review.)*
   - `source` (class attribute): `WEBHOOK` or `POLLER` — decides how the adapter is hosted.
 - `OutboundAdapter` ABC — the AK → platform direction. Abstract surface:
   - `deliver(reply: AgentReply, reply_context: Dict[str, str]) -> None`: send the agent reply.
@@ -135,7 +141,7 @@ graph LR
 - After a successful enqueue the webhook route returns its platform-expected success response
   **immediately** — it must not await the agent run. Target: webhook handler p99 under 1 s
   excluding attachment download.
-- `parse` returning `None` results in a success response and no enqueue.
+- `parse` returning an empty request list results in a success response and no enqueue.
 - The adapter never calls `ChatService`, `AgentService`, or `Runtime`.
 - `session_id` **keeps each platform's current bare key** (`thread_ts`, `from_number`,
   `sender_id`, `chat_id`, `conversation.id`, `thread_id`) — as derived today at
@@ -315,8 +321,10 @@ graph LR
   `require_extra` (`core/util/factory.py:49-64`).
 - A reply arriving with no matching outbound adapter → error log naming the `integration`
   attribute value; the message must not silently disappear.
-- Mounting an adapter host outside a pipeline topology → `AKConfigError` at `get_router()`
-  (Decision Q2).
+- Mounting an adapter host outside a pipeline topology → `AKConfigError` raised by
+  `RESTAPI.run` on the `requires_pipeline` marker, before the app is built (Decisions Q2, Q9).
+  *(Revised while writing `spec.md`: this bullet said "at `get_router()`", which contradicts
+  Q9's chosen mechanism — re-review.)*
 - `reply_context` exceeding 8 KB serialized → `ValueError` at enqueue naming the adapter
   (Decision Q3).
 - Logs on both hops carry `integration`, `session_id`, and `request_id`.
