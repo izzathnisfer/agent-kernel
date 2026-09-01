@@ -92,13 +92,17 @@ buffer (see Non-goals).
 - **Only one thing is validated: a single returned event must keep the incoming `type`.**
   - Violation raises `TypeError` naming the hook, mirroring the post-hook return check `run()`
     already performs at `core/runtime.py:224-225`.
-  - Why this check is needed: `StreamChunk.event` is a discriminated union (`core/event.py:131-148`)
-    and `StreamChunk` crosses the queue transport in broker topologies, so an event of the wrong type
-    deserialises as the wrong class on the far side — and pydantic cannot catch it, because a
+  - Why this check is needed: **accident detection on the rewrite path.** A single return means
+    "the same event, rewritten in place", so a changed `type` is almost certainly a mistake in the
+    hook; a deliberate type change is what the list form is for. Pydantic cannot catch it, because a
     `MessageEnd` returned for a `TextDelta` is still a valid `StreamEvent`.
+  - It is **not** a transport-safety check. `StreamChunk.event` is a discriminated union
+    (`core/event.py:131-148`), so it serialises and deserialises by its `type` tag: an event of the
+    wrong type round-trips faithfully as that type. Nor could this check protect a broker topology
+    anyway, since a returned list is deliberately unvalidated and may emit any type sequence.
   - Why nothing else is validated: a return that is not a `StreamEvent` at all is rejected by pydantic
     when `StreamChunk` is constructed. That is the established mechanism here —
-    `docs/specs/523-ag-ui-support/spec.md:255-262` relies on it for a bare `str`, and
+    `docs/specs/523-ag-ui-support/spec.md:244-248` relies on it for a bare `str`, and
     `ak-py/tests/test_runtime_stream_events.py:177` is its test. Re-checking membership by hand would
     only relabel the error.
 - **`on_stream_chunk` is deleted** from `PostHook` (`core/hooks.py:73-85`). `on_stream_event`
@@ -124,14 +128,10 @@ buffer (see Non-goals).
   - It replaces the loop already inline there (`core/runtime.py:271-281`), so this is existing work
     widened rather than new machinery, and `Runtime.run` validates its post-hook returns inline in the
     same way (`core/runtime.py:221-226`).
-  - Single pass, eleven lines of body, one `raise`. No per-run state is needed: the hooks list,
-    session, agent and requests are all fixed for the run. The only piece with mutable state is
-    `StreamBoundaryTracker`, which stays a class.
-  - Accepted costs, stated so a reviewer is not surprised: nesting reaches seven levels
-    (`async with` → `try` → `with agent._activate()` → `try` → `async for` → `for hook` → `if`), and
-    the loop uses `for ... else` to set the emitted list once when no hook broke out. A helper method
-    would flatten both by turning the three breaks into returns; keeping it inline keeps the whole
-    streaming flow readable in one place, with one caller.
+  - No per-run state is needed: the hooks list, session, agent and requests are all fixed for the
+    run. The only piece with mutable state is `StreamBoundaryTracker`, which stays a class.
+  - The cost of inlining is added nesting inside an already-nested generator, accepted so the whole
+    streaming flow reads in one place with one caller. `spec.md` states the resulting shape.
 - **One pass per event**: `on_stream_event` over the chain, for every event. There is no second
   callback and no ordering question between two of them — the reason `on_stream_chunk` is deleted
   rather than kept alongside.
@@ -187,9 +187,11 @@ buffer (see Non-goals).
     holds, drops or injects boundary events cannot desynchronise it.
   - Opens on `MessageStart`, `ReasoningStart`, `ToolCallStart`, `StepStart`; clears on the matching
     `MessageEnd`, `ReasoningEnd`, `ToolCallEnd`, `StepEnd`.
-  - Steps are included even though **no shipped adapter emits them** — zero `StepStart(`/`StepEnd(`
-    construction sites exist outside `core/event.py` — because `AGUIMapper` maps them to
-    `StepStartedEvent`/`StepFinishedEvent` (`integration/agui/mapping.py:52-55`), so an unclosed step
+  - Steps are included even though **no shipped adapter emits them** — in `ak-py/src` there are zero
+    `StepStart(`/`StepEnd(` construction sites outside `core/event.py`, though tests construct both
+    (`tests/test_agui_mapping.py:57-58` and `:121-122`, `tests/test_stream_events.py:39-40`,
+    `tests/test_runtime_stream_events.py:148`) — because `AGUIMapper` maps them to
+    `StepStartedEvent`/`StepFinishedEvent` (`integration/agui/mapping.py:54-57`), so an unclosed step
     leaves an AG-UI client showing work in progress, and a bring-your-own runner may emit them.
   - Keyed on `(kind, id)`, where the id is `message_id`, `tool_call_id`, or a step's `name` — a single
     run can open several message ids, e.g.
@@ -197,6 +199,16 @@ buffer (see Non-goals).
     start/delta/end triples, and `adk.py:345-348` closes with a post-loop safety net.
   - Holds ids only, never payload, so it needs no size bound.
 - The reason string reaches the client verbatim; AK does not substitute its own refusal wording.
+- **Only `StreamHalt` is caught. Every other exception propagates unchanged**, including the
+  `TypeError` this design mandates and any ordinary bug in a hook.
+  - No boundary drain, no terminal error chunk from `Runtime`; the existing `finally` still clears the
+    volatile cache, and the session is not stored.
+  - Each surface then handles it as it does today: `integration/agui/handler.py:272-275` catches
+    `Exception` and emits `RunErrorEvent`, the thread SSE path emits an error frame
+    (`integration/thread/thread_chat.py:170-172`), and queue mode retries to the configured
+    `max_receive_count` before its permanent-failure path.
+  - The asymmetry is deliberate: a halt is an orderly teardown a hook asked for, whereas an unexpected
+    exception is a defect, and dressing it up as a clean end-of-stream would hide it.
 
 ### Runtime loop — `Runtime.stream` (`core/runtime.py`)
 
@@ -206,9 +218,8 @@ buffer (see Non-goals).
   block, so the existing `finally` still clears the volatile cache.
 - The `text = ev.content if isinstance(...)` gate at `core/runtime.py:271`, the `on_stream_chunk` loop
   at `:273-279` and the `model_copy` write-back at `:280-281` are all deleted outright, not relocated.
-- Imports change: `ReasoningDelta` is no longer needed from `core/event.py`; `StreamHalt` is imported
-  from `core/hooks.py` and `StreamBoundaryTracker` from `core/stream.py`. Neither is a cycle —
-  `hooks.py` imports `.base` only under `TYPE_CHECKING`, and `core/stream.py` imports `.event` alone.
+- No new coupling: `core/stream.py` imports `core/event.py` only, and no module in `core/` gains a
+  dependency outside `core/`.
 - No change to the pre-hook path, `_prepare_requests`, or the non-streaming `run()`.
 
 ```mermaid
@@ -290,7 +301,13 @@ graph LR
   - `docs/docs/architecture/overview.md:240-266` and
     `docs/docs/architecture/execution-flow.md:174-182` — both contain sequence diagrams naming
     `PostHook.on_stream_chunk()`.
-- Update the dev skill `.agents/skills/ak-dev-architecture/SKILL.md` at `:98`, `:240` and `:1000`.
+- Update the dev skills that would otherwise present the deleted API as current:
+  - `.agents/skills/ak-dev-architecture/SKILL.md` at `:98`, `:240` and `:1000`.
+  - `.agents/skills/ak-dev-new-framework-integration/SKILL.md:197` — states that `Runtime.stream()`
+    runs each event through `PostHook.on_stream_chunk()`.
+  - `.agents/skills/ak-dev-testing-conventions/SKILL.md:41` and `:188` — describe
+    `test_runtime_stream_events.py`'s current contract, including that only `TextDelta`/`ReasoningDelta`
+    reach the hooks, which this change reverses.
 - Add a migration note for the removal: old signature, new signature, and that a stale override is
   silently inert.
 - State the list-ends-the-chain rule and that `return event` and `return [event]` therefore differ,
