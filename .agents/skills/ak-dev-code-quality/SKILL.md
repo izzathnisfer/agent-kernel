@@ -105,6 +105,12 @@ Use **Conventional Commits** format:
 | `chore:` | Maintenance, dependencies, config |
 | `refactor:` | Code restructuring without behavior change |
 | `test:` | Adding or modifying tests |
+| `style:` | Formatting-only changes |
+| `ci:` | CI configuration and workflow changes |
+| `build:` | Build system, packaging, dependency changes |
+| `perf:` | Performance improvements |
+
+An optional scope narrows the type: `type(scope): description`, for example `fix(ws): reconnect gateway after broker restart` or `chore(auto): sync skills/docs`.
 
 ### Examples
 
@@ -124,6 +130,7 @@ test: add unit tests for CosmosDB session store
 - Use imperative mood ("add feature" not "added feature")
 - No period at the end
 - Reference issue numbers when applicable: `feat: add telegram integration (#123)`
+- PR titles follow the same format. `.github/workflows/pr-title-check.yaml` fails the PR otherwise, and because `develop` is squash-merge only the title becomes the commit subject
 
 ## Pull Request Process
 
@@ -144,8 +151,14 @@ Branch from and target `develop`, not `main` — CI (`.github/workflows/code-qua
 - **Include tests** — new features must have tests
 - **Update docs** — if the change affects user-facing behavior
 - **Add examples** — for new features, add or update examples
+- **Conventional title**: `type: description` or `type(scope): description` using one of the commit types above; the PR Title Check workflow blocks anything else
 - **Fill in the PR template** — description, type of change, testing done
 - **Check [CODEOWNERS](../../../CODEOWNERS)** — confirm the required reviewer for the paths touched before assuming no one needs to review a change
+
+### Review Workflow
+
+- **Copilot review is automatic**: `.github/workflows/copilot-review-request.yaml` requests a Copilot code review when a PR is opened, reopened, or marked ready for review (bot-authored PRs excluded). Nobody needs to request it by hand.
+- **`Reviewed` label**: maintainers add `Reviewed` once they have gone through a PR. `.github/workflows/reviewed-label-reset.yaml` removes it on every new push so the PR reappears in `is:pr is:open -label:Reviewed`. Contributors should not touch the label.
 
 ### PR Types
 
