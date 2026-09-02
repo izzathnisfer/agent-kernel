@@ -57,6 +57,7 @@ flowchart LR
 8. **Cross-session community coordination.** Operational incidents/resources are shared across users in the running service, while Agent Kernel session memory remembers each user's current incident/resource/area for conversational continuity.
 9. **Works even for a judge without an LLM key.** `command_center.py` provides a visual 60-second judge scenario and `demo_scenario.py` provides a terminal scenario. Both exercise the real deterministic coordination tools without an OpenAI key.
 10. **Operational state can survive a restart without extra infrastructure.** The core remains zero-config/in-memory by default, while `RESCUEMESH_LEDGER_PATH` enables atomic JSON persistence for local command-center or bot deployments. Agent Kernel session memory remains separate per user.
+11. **The field edge is offline-first.** The optional native Android **Field Relay** stores incident/resource submissions in an on-device outbox before network delivery. When connectivity returns, it retries against Agent Kernel REST using caller-generated idempotency keys, so intermittent networks do not create duplicate incidents or resource offers.
 
 ### Meaningful Agent Kernel usage
 
@@ -66,7 +67,7 @@ flowchart LR
 | Tool binding | Native tools implement reporting, verification, inventory, single-incident matching, network-wide allocation, status, privacy briefs, and metrics. |
 | Session state | Agent Kernel non-volatile session cache remembers each user's active incident/resource/area, while a shared community ledger lets different chat sessions coordinate against the same incidents and resources. The ledger can optionally persist atomically to JSON. |
 | Telegram integration | `telegram_server.py` mounts `AgentTelegramRequestHandler`; users interact through a real messaging platform. |
-| REST/queue pipeline | `api_server.py` runs Agent Kernel `IOHandler`; `command_center.py` mounts a judge-facing FastAPI router into Agent Kernel `RESTAPI`. |
+| REST/queue pipeline | `api_server.py` runs Agent Kernel `IOHandler`; `command_center.py` mounts the judge Command Center and Android field-ingest endpoints into Agent Kernel `RESTAPI`. |
 | Scheduled tasks | `config.schedule.yaml` enables Agent Kernel's local scheduler and the coordinator's injected scheduling tools. |
 | Framework adapter | Agents use OpenAI Agents SDK through `OpenAIModule` and `OpenAIToolBuilder`. |
 
@@ -76,8 +77,12 @@ flowchart LR
 | --- | --- |
 | **Idea / Use Case Value — 40%** | Real coordination bottleneck; trust-aware deduplication; verification; privacy-safe sharing; human-gated matching; scarce-resource network allocation; four SDGs. |
 | **Agent Kernel Usage — 30%** | Five-agent handoff topology, Agent Kernel tool binding, session state, Telegram, queue pipeline, and injected scheduled-task tools. |
-| **End Product / Working Solution — 20%** | No-key visual command center + terminal demo, automated tests, CLI entry point, Telegram server, and REST/scheduling server. |
-| **Documentation / Submission Quality — 10%** | The four required README sections plus `SPEC.md`, `AGENTS.md`, `ARCHITECTURE.md`, setup commands, run commands, and safety boundaries. |
+| **End Product / Working Solution — 20%** | No-key visual Command Center + terminal demo, installable offline-first Android field app, tested Docker deployment, automated tests, CLI, Telegram, and REST/scheduling server. |
+| **Documentation / Submission Quality — 10%** | The four required README sections plus `EVALUATION.md`, `SPEC.md`, `AGENTS.md`, `ARCHITECTURE.md`, mobile guide, setup commands, and safety boundaries. |
+
+### Judge shortcut
+
+For a rubric-to-evidence map and the shortest verification path, see [`EVALUATION.md`](EVALUATION.md).
 
 ### Safety and responsibility boundary
 
@@ -99,6 +104,14 @@ uv sync --python 3.12
 ```
 
 This installs Agent Kernel with the `api`, `cli`, `cron`, `openai`, and `telegram` extras plus test tooling.
+
+If Docker is available, the judge Command Center can instead be launched without installing Python dependencies on the host:
+
+```bash
+docker compose up --build
+```
+
+The container runs as a non-root user and persists the operational ledger in a named `/data` volume.
 
 ### Optional environment variables
 
@@ -129,7 +142,15 @@ Open **http://localhost:8000/rescuemesh** and click **Load 60-second scenario**.
 
 The command center uses Agent Kernel `RESTAPI` and the same deterministic tools as the agents. Its operational ledger defaults to `.rescuemesh/ledger.json`, so a local judge session survives a restart without requiring a database. The file is gitignored.
 
-### B. Terminal judge path — deterministic end-to-end scenario, no LLM key
+The header also exposes **Android field relay**. The bundled APK can be downloaded directly from the running judge server at `http://localhost:8000/rescuemesh/mobile.apk`.
+
+**Container alternative:** `docker compose up --build` exposes the exact same Command Center on port `8000`; this path was built and smoke-tested against `/health`, the seeded scenario, field-idempotency endpoints, and APK download.
+
+### B. Android Field Relay — offline-first resident/volunteer surface
+
+An installable APK is included at `mobile/releases/rescuemesh-field-relay-1.0.0.apk`. Start the Command Center first, install the app, and point it to the laptop's port `8000`. The app writes reports to an on-device outbox first, so you can disable connectivity, submit an incident/resource, reconnect, and synchronize later without duplicate retries. See [`mobile/README.md`](mobile/README.md) for the 90-second phone demo and build instructions.
+
+### C. Terminal judge path — deterministic end-to-end scenario, no LLM key
 
 ```bash
 uv run python demo_scenario.py
@@ -137,7 +158,7 @@ uv run python demo_scenario.py
 
 The scenario demonstrates incident intake, duplicate merging, verification, resource registration, ranked matching, explicit human confirmation, a privacy-safe public brief, and operational metrics.
 
-### C. Run the real multi-agent CLI
+### D. Run the real multi-agent CLI
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -162,7 +183,7 @@ Show the best resource matches for incident INC-XXXXXXXX, but do not confirm any
 Create a privacy-safe public brief for INC-XXXXXXXX.
 ```
 
-### D. Run through Telegram
+### E. Run through Telegram
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -173,7 +194,7 @@ uv run python telegram_server.py
 
 The Agent Kernel Telegram handler exposes the webhook endpoint at `/telegram/webhook`. Point the bot webhook to the public URL of that endpoint and use the same webhook secret.
 
-### E. Run Agent Kernel scheduling + REST pipeline
+### F. Run Agent Kernel scheduling + REST pipeline
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -222,11 +243,13 @@ rescuemesh/
 ├── demo_scenario.py          # no-key deterministic terminal judge demo
 ├── command_center.py         # Agent Kernel REST judge dashboard + demo API
 ├── command_center.html       # responsive no-key operations UI
+├── mobile/                   # Android Field Relay source, docs, and installable APK
 ├── telegram_server.py        # Agent Kernel Telegram integration
 ├── api_server.py             # queue pipeline + scheduled-task management
 ├── config.yaml               # CLI/Telegram session + integration config
 ├── config.schedule.yaml      # local scheduling + queue config
 ├── config.command-center.yaml # Agent Kernel REST config for the judge UI
+├── Dockerfile / docker-compose.yml # no-key containerized judge deployment
 ├── Makefile                   # one-command setup/lint/test/demo helpers
 ├── pyproject.toml
 └── tests/                     # deterministic domain + agent-wiring tests
@@ -234,4 +257,4 @@ rescuemesh/
 
 ## Why this is not a basic sample implementation
 
-The included waste-sorting example is a useful single-agent demonstration. RescueMesh intentionally exercises a broader production-style slice of Agent Kernel: multiple specialist agents, explicit handoffs, stateful tools, a real messaging integration, privacy-safe publication, deterministic trust/dedup logic, network-wide scarce-resource planning, human-gated actions, a visual Agent Kernel REST command center, operational metrics, queue execution, and scheduled follow-up. The domain logic remains testable without external services so judges can verify the core behavior quickly.
+The included waste-sorting example is a useful single-agent demonstration. RescueMesh intentionally exercises a broader production-style slice of Agent Kernel: multiple specialist agents, explicit handoffs, stateful tools, a real messaging integration, privacy-safe publication, deterministic trust/dedup logic, network-wide scarce-resource planning, human-gated actions, a visual Agent Kernel REST command center, an offline-first Android field edge, operational metrics, queue execution, and scheduled follow-up. The domain logic remains testable without external services so judges can verify the core behavior quickly.

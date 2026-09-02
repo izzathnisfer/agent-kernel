@@ -58,7 +58,7 @@ from agentkernel.api import RESTAPI
 from agentkernel.core.config import AKConfig
 assert AKConfig.get().api.custom_router_prefix == ''
 paths = set(RESTAPI.build_app().openapi()['paths'])
-required = {'/rescuemesh', '/rescuemesh/api/state', '/rescuemesh/api/allocation', '/rescuemesh/api/demo/seed'}
+required = {'/rescuemesh', '/rescuemesh/api/state', '/rescuemesh/api/allocation', '/rescuemesh/api/demo/seed', '/rescuemesh/api/field/incidents', '/rescuemesh/api/field/resources', '/rescuemesh/mobile.apk'}
 assert required <= paths, (required - paths, paths)
 print('command-center-routes-ok')
 """,

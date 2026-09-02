@@ -76,6 +76,14 @@ Private state may contain voluntarily supplied contacts. Public briefs:
 
 Obvious phone numbers and email addresses are redacted from verification/status notes that may be surfaced later.
 
+## Offline field edge
+
+`mobile/android/` is a native Android field client for residents and volunteers. It does **not** reimplement triage or dispatch logic on the phone. The device only captures structured incident/resource payloads and persists them in a local `SharedPreferences` outbox. When connectivity returns, it posts those payloads to custom endpoints mounted on Agent Kernel `RESTAPI`.
+
+Each queued payload has a caller-generated `client_request_id`. Server-side `submit_field_incident` / `submit_field_resource` record that id in the persisted operational timeline and return an idempotent replay on retry. This closes a realistic disaster-network failure mode: a client can lose the HTTP response after the server accepted a report without creating a duplicate resource or incident on the next sync.
+
+The field app is deliberately a thin edge surface. Priority, duplicate detection, verification, public redaction, network allocation, and human confirmation continue to live in the same deterministic RescueMesh tools used by Telegram/CLI and the Command Center.
+
 ## Shared operational state vs. session memory
 
 A community coordination system cannot silo each Telegram user's report inside that user's private chat session. RescueMesh therefore separates two kinds of state:
@@ -107,6 +115,12 @@ The default remains an in-process community ledger for zero-infrastructure execu
 - scheduling tools only for `rescuemesh_coordinator`.
 
 `ScheduleRESTRequestHandler` adds schedule-management routes while `IOHandler` boots the single-process queue pipeline required for scheduled occurrences.
+
+## Containerized judge deployment
+
+`Dockerfile` and `docker-compose.yml` package the no-key Command Center as a non-root container. The image installs the locked Agent Kernel 0.9.0 dependency set, serves port 8000, includes the Android APK download route, and stores the optional durable ledger under `/data/ledger.json`. The Compose file maps `/data` to a named volume so the operational picture survives container replacement.
+
+This is intentionally a deployment surface for the deterministic Command Center; no model/provider credentials are required to boot it. Telegram and OpenAI-backed conversational modes remain separate optional entry points.
 
 ## Judge-friendly verification
 

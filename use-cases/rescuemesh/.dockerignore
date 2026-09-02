@@ -1,0 +1,9 @@
+.venv
+.rescuemesh
+.pytest_cache
+__pycache__
+*.pyc
+.coverage
+mobile/android/.gradle
+mobile/android/app/build
+.git

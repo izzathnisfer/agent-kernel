@@ -395,6 +395,144 @@ def register_resource(
     return json.dumps({"result": "registered", "resource": resource}, indent=2)
 
 
+def _client_request_id(value: str) -> str:
+    """Normalize a caller-generated idempotency key without retaining user content."""
+    cleaned = re.sub(r"[^A-Za-z0-9_.:-]", "", (value or "").strip())[:96]
+    return cleaned or f"field-{uuid4().hex}"
+
+
+def _field_incident_view(incident: dict[str, Any] | None) -> dict[str, Any] | None:
+    if incident is None:
+        return None
+    return {
+        "incident_id": incident.get("incident_id", ""),
+        "priority_score": incident.get("priority_score", 0),
+        "priority_band": incident.get("priority_band", ""),
+        "status": incident.get("status", ""),
+        "verified": bool(incident.get("verified")),
+        "report_count": incident.get("report_count", 1),
+    }
+
+
+def _field_resource_view(resource: dict[str, Any] | None) -> dict[str, Any] | None:
+    if resource is None:
+        return None
+    return {
+        "resource_id": resource.get("resource_id", ""),
+        "resource_type": resource.get("resource_type", ""),
+        "quantity": resource.get("quantity", 0),
+        "status": resource.get("status", ""),
+    }
+
+
+def submit_field_incident(
+    client_request_id: str,
+    location: str,
+    needs: str,
+    people_count: int = 1,
+    severity: str = "moderate",
+    vulnerable_groups: str = "",
+    reporter_contact: str = "",
+    notes: str = "",
+) -> str:
+    """Idempotently ingest an incident from an offline-capable field client."""
+    request_id = _client_request_id(client_request_id)
+    with _LEDGER_LOCK:
+        state = _get_state()
+        for event in state["timeline"]:
+            if event.get("event") == "field_incident_received" and event.get("client_request_id") == request_id:
+                incident = state["incidents"].get(event.get("incident_id", ""))
+                return json.dumps(
+                    {
+                        "result": "idempotent_replay",
+                        "client_request_id": request_id,
+                        "incident": _field_incident_view(incident),
+                        "original_result": event.get("original_result", "created"),
+                    },
+                    indent=2,
+                )
+
+        payload = json.loads(
+            report_incident(
+                location,
+                needs,
+                people_count=people_count,
+                severity=severity,
+                vulnerable_groups=vulnerable_groups,
+                reporter_contact=reporter_contact,
+                notes=notes,
+            )
+        )
+        incident_id = payload.get("incident", {}).get("incident_id") or payload.get("duplicate_of", "")
+        state = _get_state()
+        state["timeline"].append(
+            {
+                "at": _now(),
+                "event": "field_incident_received",
+                "client_request_id": request_id,
+                "incident_id": incident_id,
+                "original_result": payload.get("result", "created"),
+            }
+        )
+        _save_state(state)
+        payload["client_request_id"] = request_id
+        payload["incident"] = _field_incident_view(payload.get("incident"))
+        return json.dumps(payload, indent=2)
+
+
+def submit_field_resource(
+    client_request_id: str,
+    provider_name: str,
+    resource_type: str,
+    quantity: int,
+    location: str,
+    availability_minutes: int = 0,
+    contact: str = "",
+    notes: str = "",
+) -> str:
+    """Idempotently ingest a resource offer from an offline-capable field client."""
+    request_id = _client_request_id(client_request_id)
+    with _LEDGER_LOCK:
+        state = _get_state()
+        for event in state["timeline"]:
+            if event.get("event") == "field_resource_received" and event.get("client_request_id") == request_id:
+                resource = state["resources"].get(event.get("resource_id", ""))
+                return json.dumps(
+                    {
+                        "result": "idempotent_replay",
+                        "client_request_id": request_id,
+                        "resource": _field_resource_view(resource),
+                    },
+                    indent=2,
+                )
+
+        payload = json.loads(
+            register_resource(
+                provider_name,
+                resource_type,
+                quantity,
+                location,
+                availability_minutes=availability_minutes,
+                contact=contact,
+                notes=notes,
+            )
+        )
+        resource_id = payload.get("resource", {}).get("resource_id", "")
+        state = _get_state()
+        state["timeline"].append(
+            {
+                "at": _now(),
+                "event": "field_resource_received",
+                "client_request_id": request_id,
+                "resource_id": resource_id,
+            }
+        )
+        _save_state(state)
+        payload["client_request_id"] = request_id
+        payload["resource"] = _field_resource_view(payload.get("resource"))
+        return json.dumps(payload, indent=2)
+
+
 def list_available_resources(resource_type: str = "") -> str:
     """List available resources, optionally filtered by a resource type or need keyword."""
     state = _get_state()

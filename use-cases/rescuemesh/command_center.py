@@ -10,7 +10,7 @@ os.environ.setdefault("RESCUEMESH_LEDGER_PATH", str(Path(__file__).with_name(".r
 from agentkernel.api import RESTAPI
 from agentkernel.openai import OpenAIModule
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from agent import AGENTS
@@ -21,6 +21,8 @@ from tools import (
     register_resource,
     report_incident,
     reset_demo_state,
+    submit_field_incident,
+    submit_field_resource,
     verify_incident,
 )
 
@@ -29,6 +31,28 @@ class ConfirmRequest(BaseModel):
     incident_id: str
     resource_id: str
     reviewer: str = "Judge demo coordinator"
+
+
+class IncidentRequest(BaseModel):
+    client_request_id: str
+    location: str
+    needs: str
+    people_count: int = 1
+    severity: str = "moderate"
+    vulnerable_groups: str = ""
+    reporter_contact: str = ""
+    notes: str = ""
+
+
+class ResourceRequest(BaseModel):
+    client_request_id: str
+    provider_name: str
+    resource_type: str
+    quantity: int = 1
+    location: str
+    availability_minutes: int = 0
+    contact: str = ""
+    notes: str = ""
 
 
 def _data(value: str) -> dict:
@@ -120,6 +144,16 @@ def dashboard() -> HTMLResponse:
     return HTMLResponse(html)
 
 
+@router.get("/rescuemesh/mobile.apk")
+def mobile_apk() -> FileResponse:
+    path = Path(__file__).with_name("mobile") / "releases" / "rescuemesh-field-relay-1.0.0.apk"
+    return FileResponse(
+        path,
+        media_type="application/vnd.android.package-archive",
+        filename="rescuemesh-field-relay-1.0.0.apk",
+    )
+
+
 @router.get("/rescuemesh/api/state")
 def state() -> dict:
     return _data(command_center_snapshot())
@@ -144,6 +178,38 @@ def reset() -> dict:
 @router.post("/rescuemesh/api/confirm")
 def confirm(request: ConfirmRequest) -> dict:
     return _data(confirm_match(request.incident_id, request.resource_id, request.reviewer))
+
+
+@router.post("/rescuemesh/api/field/incidents")
+def field_incident(request: IncidentRequest) -> dict:
+    return _data(
+        submit_field_incident(
+            request.client_request_id,
+            request.location,
+            request.needs,
+            people_count=request.people_count,
+            severity=request.severity,
+            vulnerable_groups=request.vulnerable_groups,
+            reporter_contact=request.reporter_contact,
+            notes=request.notes,
+        )
+    )
+
+
+@router.post("/rescuemesh/api/field/resources")
+def field_resource(request: ResourceRequest) -> dict:
+    return _data(
+        submit_field_resource(
+            request.client_request_id,
+            request.provider_name,
+            request.resource_type,
+            request.quantity,
+            request.location,
+            availability_minutes=request.availability_minutes,
+            contact=request.contact,
+            notes=request.notes,
+        )
+    )
 
 
 OpenAIModule(AGENTS)

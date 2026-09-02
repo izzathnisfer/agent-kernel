@@ -10,7 +10,7 @@
 header{padding:28px clamp(18px,4vw,54px) 16px;display:flex;gap:20px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap}
 h1{margin:0;font-size:clamp(30px,5vw,56px);letter-spacing:-.04em}.sub{max-width:760px;color:var(--muted);font-size:16px}.brand{color:var(--cyan)}
 .badges{display:flex;gap:8px;flex-wrap:wrap}.badge{border:1px solid var(--line);background:#0b1725;border-radius:999px;padding:6px 10px;color:#c7d8ea;font-size:12px}
-.actions{display:flex;gap:10px;flex-wrap:wrap}button{background:var(--cyan);color:#041014;border:0;border-radius:10px;padding:10px 14px;font-weight:750;cursor:pointer}button.alt{background:transparent;color:var(--text);border:1px solid var(--line)}button.danger{background:#3a1b25;color:#ffd7dc;border:1px solid #713344}
+.actions{display:flex;gap:10px;flex-wrap:wrap}button{background:var(--cyan);color:#041014;border:0;border-radius:10px;padding:10px 14px;font-weight:750;cursor:pointer}button.alt,a.alt{background:transparent;color:var(--text);border:1px solid var(--line)}a.alt{text-decoration:none;border-radius:10px;padding:9px 14px;font-weight:750}button.danger{background:#3a1b25;color:#ffd7dc;border:1px solid #713344}
 main{padding:8px clamp(18px,4vw,54px) 52px}.grid{display:grid;gap:14px}.kpis{grid-template-columns:repeat(auto-fit,minmax(145px,1fr));margin:14px 0 24px}.card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 12px 32px #0004}.kpi strong{display:block;font-size:30px}.kpi span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 h2{margin:28px 0 10px;font-size:20px}.two{grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}.incidents,.resources{grid-template-columns:repeat(auto-fit,minmax(270px,1fr))}
 .meta{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}.pill{font-size:11px;padding:4px 7px;border:1px solid var(--line);border-radius:999px;color:#c9d8e8}.p1{border-color:#8d3945;color:#ffb3bb}.verified{border-color:#2e7557;color:var(--green)}.pending{border-color:#806426;color:var(--amber)}
@@ -23,11 +23,11 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1p
 <body>
 <header>
 <div>
-<div class="badges"><span class="badge">Agent Kernel REST</span><span class="badge">No LLM key required</span><span class="badge">Human-gated dispatch</span><span class="badge">Privacy-safe board</span></div>
+<div class="badges"><span class="badge">Agent Kernel REST</span><span class="badge">No LLM key required</span><span class="badge">Human-gated dispatch</span><span class="badge">Privacy-safe board</span><span class="badge">Offline Android relay</span></div>
 <h1><span class="brand">RescueMesh</span> Command Center</h1>
 <div class="sub">A judge-facing operations view of the same deterministic incident, verification, resource, and allocation tools used by the multi-agent system. The network planner never reserves a resource; a human must confirm every dispatch pairing.</div>
 </div>
-<div class="actions"><button onclick="seedDemo()">Load 60-second scenario</button><button class="alt" onclick="refresh()">Refresh</button><button class="danger" onclick="resetDemo()">Reset</button></div>
+<div class="actions"><button onclick="seedDemo()">Load 60-second scenario</button><a class="alt" href="/rescuemesh/mobile.apk">Android field relay</a><button class="alt" onclick="refresh()">Refresh</button><button class="danger" onclick="resetDemo()">Reset</button></div>
 </header>
 <main>
 <div id="status"></div>
@@ -41,6 +41,13 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1p
 <div class="muted small" style="margin-bottom:10px">Scarce resources are considered across all active incidents at once, with urgency + verification + first-coverage fairness. No resource can appear twice in the plan.</div>
 <div style="overflow:auto"><table><thead><tr><th>Incident</th><th>Proposed resource</th><th>Needs</th><th>Score</th><th>Gate</th></tr></thead><tbody id="allocation"></tbody></table></div>
 <div id="unserved" class="small muted" style="margin-top:12px"></div>
+</div>
+<h2>Offline field edge</h2>
+<div class="card">
+<strong>RescueMesh Field Relay · Android</strong>
+<p class="muted">Disaster connectivity is intermittent. The field app writes incident and resource submissions to an on-device outbox first, then synchronizes to this same ledger when a network returns. Retry IDs are idempotent, so losing an HTTP acknowledgement cannot create a duplicate resource or incident.</p>
+<div class="meta"><span class="pill verified">offline queue</span><span class="pill verified">idempotent retry</span><span class="pill">no location/contact permissions</span><span class="pill">same Agent Kernel REST service</span></div>
+<a class="alt" href="/rescuemesh/mobile.apk">Download installable APK</a> <span class="small muted">Android 8+ · competition demo-signed release</span>
 </div>
 <h2>Audit timeline</h2><div id="timeline" class="card small"></div>
 <div class="footer">Decision support only — RescueMesh is not an emergency number or autonomous dispatcher. Immediate danger should be escalated to the relevant local emergency authority.</div>

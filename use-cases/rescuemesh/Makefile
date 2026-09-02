@@ -1,4 +1,4 @@
-.PHONY: setup lint test judge demo cli api telegram verify
+.PHONY: setup lint test judge demo cli api telegram verify android
 
 setup:
 	uv sync --python 3.12
@@ -26,3 +26,6 @@ telegram:
 	uv run python telegram_server.py
 
 verify: lint test demo
+
+android:
+	cd mobile/android && ./build-apk.sh

@@ -1,0 +1,13 @@
+services:
+  rescuemesh:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      RESCUEMESH_LEDGER_PATH: /data/ledger.json
+    volumes:
+      - rescuemesh-data:/data
+    restart: unless-stopped
+
+volumes:
+  rescuemesh-data:

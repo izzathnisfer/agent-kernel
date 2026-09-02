@@ -22,6 +22,7 @@ This folder is a competition use case built **with** Agent Kernel. Do not modify
 - `api_server.py` overrides the config path to `config.schedule.yaml` before importing Agent Kernel so scheduled tasks use the required queue pipeline.
 - `command_center.py` uses `config.command-center.yaml` and mounts a judge-facing router into Agent Kernel `RESTAPI`; keep that path runnable without an LLM key.
 - Operational state is in-memory unless `RESCUEMESH_LEDGER_PATH` is set. Keep persisted ledger files out of git and keep per-user Agent Kernel session memory separate from community state.
+- The Android Field Relay is a thin offline-first client. Do not move priority, duplicate, verification, allocation, or dispatch decisions onto the device. Preserve request-id idempotency for field retries.
 
 ## Before considering a change complete
 

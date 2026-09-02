@@ -29,6 +29,10 @@ A trusted volunteer, eyewitness, media reviewer, or official coordinator records
 
 A person or organisation offers a boat, vehicle, drinking water, food, shelter, medical assistance, power equipment, or another useful resource. The resource is added to the available inventory with location and availability delay.
 
+### Offline field reporter
+
+A resident or volunteer may lose connectivity while capturing an incident or resource offer. The Android Field Relay must save the submission locally first, retry it when a network returns, and use an idempotency key so a retry cannot create a second resource/incident merely because the previous HTTP acknowledgement was lost.
+
 ### Human coordinator
 
 A coordinator asks for ranked resource matches or a network-wide scarce-resource plan, reviews proposals, explicitly confirms selected pairings, updates incident lifecycle status, requests privacy-safe public briefs, views metrics, and may schedule later follow-ups.
@@ -103,6 +107,10 @@ Must exclude reporter contact, coarsen fine-grained location, and return only in
 
 Must expose privacy-safe counts for active incidents, verified incidents, people reported, available resources, confirmed matches, merged duplicates, and priority distribution.
 
+### `submit_field_incident` / `submit_field_resource`
+
+Must accept a caller-generated request ID, call the same deterministic incident/resource tools used by the agents, persist only a safe idempotency event in the operational timeline, and return the existing entity rather than creating another one when the same request ID is retried.
+
 ## State model
 
 Use one process-shared community state document with:
@@ -134,7 +142,8 @@ The community ledger must be shared across chat sessions so one resident's incid
 2. No-key deterministic terminal scenario: `uv run python demo_scenario.py`.
 3. Agent Kernel CLI: `uv run python demo.py` with `OPENAI_API_KEY`.
 4. Telegram: `uv run python telegram_server.py` with OpenAI + Telegram credentials.
-5. REST/scheduling: `uv run python api_server.py` with OpenAI credentials.
+5. Container judge deployment: `docker compose up --build` with no model credentials.
+6. REST/scheduling: `uv run python api_server.py` with OpenAI credentials.
 
 ## Quality requirements
 
@@ -143,4 +152,6 @@ The community ledger must be shared across chat sessions so one resident's incid
 - Black/isort-compatible code.
 - Pytest coverage for core deterministic behavior.
 - No secrets in the repository.
+- Android APK must be installable, checksum-recorded, and backed by committed source.
+- Docker judge image must run non-root and persist the ledger outside the container filesystem.
 - All competition work stays inside `use-cases/rescuemesh`.
