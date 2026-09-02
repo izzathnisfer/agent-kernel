@@ -1,5 +1,9 @@
 # Building Agents With Agent Kernel Skills
 
+## IDEALIZE 2026 Mini-Competition Entry
+
+- **[RescueMesh](rescuemesh/)** — trust-aware, human-in-the-loop disaster coordination using Agent Kernel multi-agent handoffs, session state, Telegram, deterministic tools, queue execution, and scheduled follow-ups.
+
 This guide shows how to use the Agent Kernel skills pack with a coding agent to create a new agent project. The sample agent directory is `waste-sorting-assistant`, but the same workflow can be reused with any folder name.
 
 Python version must be `3.12` - `3.13.x`.

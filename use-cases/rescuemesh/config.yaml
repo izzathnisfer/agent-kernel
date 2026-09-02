@@ -1,0 +1,12 @@
+session:
+  type: in_memory
+  cache:
+    size: 2048
+
+telegram:
+  agent: "rescuemesh"
+  api_version: "bot"
+
+logging:
+  ak:
+    level: INFO

@@ -1,0 +1,20 @@
+session:
+  type: in_memory
+  cache:
+    size: 2048
+
+schedule:
+  provider:
+    type: local
+  store:
+    type: in_memory
+  agents: [rescuemesh_coordinator]
+
+execution:
+  mode: rest_sync
+  queues:
+    type: in_memory
+
+logging:
+  ak:
+    level: INFO
