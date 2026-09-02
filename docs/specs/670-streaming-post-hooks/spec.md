@@ -5,7 +5,8 @@ so the other ten `StreamEvent` types — every tool call, every message boundary
 uninspected. This spec details the change `design.md` requires: `PostHook.on_stream_chunk` is replaced
 by `PostHook.on_stream_event`, which every event passes through and which may return zero, one, or
 several events; a new `StreamHalt` exception ends a run; and a new `StreamBoundaryTracker` in
-`core/stream.py` lets the halt path close whatever the stream left open. `design.md` is the
+`StreamBoundaryTracker` in `core/runtime.py` lets the halt path close whatever the stream left
+open. `design.md` is the
 requirements source — every requirement there is traced to a section here.
 
 ## Design
@@ -85,9 +86,11 @@ Rules this encodes:
    (`core/util/factory.py:18`'s `AKConfigError` is the only exception class under `core/`, and it is
    config-specific).
 
-### `core/stream.py` — new module
+### `core/runtime.py` — `StreamBoundaryTracker`
 
-One class, not exported from `core/__init__.py`. Imports `core/event.py` only.
+One class, declared above `Runtime` in the module that is its only consumer, and not exported from
+`core/__init__.py`. No new module: `core/chat_service.py` already groups four collaborating classes
+this way.
 
 ```python
 class StreamBoundaryTracker:
@@ -137,7 +140,7 @@ from .stream import StreamBoundaryTracker
 `ReasoningDelta` drops out with the deleted text gate. `StreamEvent` is used in annotations only, and
 `from __future__ import annotations` is already in force (`core/runtime.py:1`). Neither new import is
 a cycle: `core/hooks.py` imports `.model` at runtime and `.base` only under `TYPE_CHECKING`, and
-`core/stream.py` imports `.event` alone.
+`StreamBoundaryTracker` adds only `event.py` names to a module that already imports from it.
 
 **Body.** `core/runtime.py:268-286` is replaced. Everything outside — `async with session`, the
 acting-user publish, `agent._activate()`, the pre-hook halt at `:259-264`, and the `finally` at
@@ -369,11 +372,15 @@ New tests in the same file:
 Unchanged. It covers the `StreamEvent` union's JSON round-trip and pickle-safety only, and touches no
 hook. Its `StepStart`/`StepEnd` constructions (`:39-40`) are unaffected.
 
-### New file: none
+### New file: `tests/test_stream_boundaries.py`
 
-`StreamBoundaryTracker` is exercised through `Runtime.stream` by tests 5–7 above. A separate
-`tests/test_stream_boundaries.py` is optional; the halt tests cover open/close/drain ordering, and the
-class has no branch those tests miss.
+`StreamBoundaryTracker` is exercised through `Runtime.stream` by tests 5–7 above, so a direct test was
+initially called optional. It is included because without it the iteration that adds the class has
+nothing to verify but "the suite is still green", which is no check at all on code not yet wired in.
+It covers open/close pairing per kind, innermost-first drain order, `drain` clearing, events that open
+nothing, and the two malformed cases the class tolerates by design — a close for an id never opened,
+and a second open for the same id. Ids of the same value across kinds are also covered, since
+LangGraph uses one `run_id` for both a message and its tool call.
 
 ### Patch targets
 

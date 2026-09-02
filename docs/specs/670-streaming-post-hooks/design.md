@@ -158,7 +158,7 @@ buffer (see Non-goals).
     `Runtime` does not synthesise the missing close on the normal path. It does so only on the halt
     path, where the run is being cut short rather than shaped by a hook.
 
-### Halt — `Runtime.stream` and `StreamBoundaryTracker` (`core/stream.py`, not exported)
+### Halt — `Runtime.stream` and `StreamBoundaryTracker` (`core/runtime.py`, not exported)
 
 - `StreamHalt` propagates out of the hook loop to the enclosing `except`, which then, in order:
   1. emits a closing event for every boundary still open, innermost first;
@@ -218,8 +218,8 @@ buffer (see Non-goals).
   block, so the existing `finally` still clears the volatile cache.
 - The `text = ev.content if isinstance(...)` gate at `core/runtime.py:271`, the `on_stream_chunk` loop
   at `:273-279` and the `model_copy` write-back at `:280-281` are all deleted outright, not relocated.
-- No new coupling: `core/stream.py` imports `core/event.py` only, and no module in `core/` gains a
-  dependency outside `core/`.
+- No new coupling and no new module: `StreamBoundaryTracker` sits in `core/runtime.py` beside its
+  only consumer, and no module in `core/` gains a dependency outside `core/`.
 - No change to the pre-hook path, `_prepare_requests`, or the non-streaming `run()`.
 
 ```mermaid
@@ -340,8 +340,8 @@ step ordering inside each; this section only fixes the boundary.
 - **PR 1 — `feat: event-level streaming post-hooks (#670)`**, on
   `bugfix/670-streaming-post-hooks-tool-events` off `develop`.
   - `core/hooks.py` (add `on_stream_event` and `StreamHalt`, delete `on_stream_chunk`),
-    `core/stream.py` (`StreamBoundaryTracker`), `core/runtime.py` (the inline hook loop, the halt
-    path, deletion of the old gate and write-back), the `core/__init__.py:47` export.
+    `core/runtime.py` (`StreamBoundaryTracker`, the inline hook loop, the halt path, deletion of the
+    old gate and write-back), the `core/__init__.py:47` export.
   - Tests: `RecordingHook` and its four users rewritten, plus the new cases above.
   - The whole documentation and skills sweep, including the four `hooks.md` examples and the
     migration note.
@@ -388,8 +388,14 @@ Settled during review:
   override goes silently inert rather than raising.
 - **The return type stays a union** — a bare event, a list, or `None`. Forcing `return [event]` on the
   pass-through case, which is the overwhelming majority, buys uniformity that is not worth the noise.
-- **`StreamBoundaryTracker` lives in `core/stream.py`**, unexported. `core/runtime.py` is already the
-  busiest module in `core/`, and `core/hooks.py` is the hook contract, which the tracker is not about.
+- **`StreamBoundaryTracker` lives in `core/runtime.py`**, unexported, beside its only consumer.
+  *Revised after the design was approved: an earlier decision put it in a new `core/stream.py`.* The
+  deciding precedent is `core/chat_service.py`, which holds `ChatService`, `RequestBuilder`,
+  `AgentHandler` and `ResponseBuilder` — this package groups collaborating classes by the flow they
+  serve rather than splitting each into its own module, and `Runtime` plus its boundary bookkeeping is
+  that same pattern. It also removes an import rather than adding one. `core/hooks.py` was rejected as
+  the hook contract file, which the tracker is not part of; `core/event.py` was the runner-up on
+  cohesion grounds but is currently pure models.
 - **A hook may drop a boundary event, and AK neither warns nor compensates.** Dropping a balanced pair
   is an ordinary use — hiding a reasoning block drops its start and end too — so refusing it would
   force clients to render empty blocks, and warning on it would fire every run. An unbalanced drop

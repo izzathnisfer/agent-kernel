@@ -25,10 +25,11 @@ three together, and iteration 4 adds the genuinely new coverage. Every other ite
 ## Iteration 2: The boundary tracker
 
 - **Goal:** `StreamBoundaryTracker` exists and is correct in isolation, still unused.
-- **Files:** `ak-py/src/agentkernel/core/stream.py` (new),
+- **Files:** `ak-py/src/agentkernel/core/runtime.py`,
   `ak-py/tests/test_stream_boundaries.py` (new)
 - **Steps:**
-  1. Write `StreamBoundaryTracker` with `observe` / `drain` (spec § *`core/stream.py`*, rules 1–7).
+  1. Write `StreamBoundaryTracker` with `observe` / `drain`, declared above `Runtime`
+     (spec § *`core/runtime.py` — `StreamBoundaryTracker`*, rules 1–7).
   2. Add the direct unit test. `spec.md` calls this optional because iterations 4's halt tests cover
      the class end-to-end — but without it this iteration has nothing to verify beyond "the suite is
      still green", which is not a check on code that is not yet wired in. Cover: open/close pairing per
