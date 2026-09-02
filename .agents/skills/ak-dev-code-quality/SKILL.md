@@ -1,7 +1,8 @@
 ---
 name: ak-dev-code-quality
 description: >
-  Code quality standards, formatting, commit conventions, and PR workflow for
+  Code quality standards, formatting, Python style rules (classes over script-style
+  functions, configuration-field rules), commit conventions, and PR workflow for
   Agent Kernel development. Use this skill when making contributions, formatting
   code, writing commit messages, or preparing pull requests.
 license: Apache-2.0
@@ -231,6 +232,21 @@ uv run pytest -s
 - Prefer `BaseModel` (Pydantic) for data models
 - Use `ABC` and `@abstractmethod` for interfaces
 - Keep line length under 150 characters (120 for examples)
+
+### Classes, not script-style functions
+
+Feature logic is written as classes, not as procedural module-level functions. This is a house rule for maintainability (see the House Patterns section of `ak-dev-architecture`), not a stylistic preference:
+
+- A new component is an ABC plus concrete subclasses, a `*Factory` for selection, an orchestrating class (`*Manager`, `*Handler`, `*Runner`, `*Consumer`) for control flow, and Pydantic models for data. State lives on instances, never on module globals.
+- Do not write a chain of top-level functions that thread state through arguments, or a `main()`-style function that wires a feature together. Wrap it in a class with a `run()`/`create()`/`execute()` method so callers can subclass, compose, and mock it.
+- Module-level functions are reserved for small, stateless, genuinely shared utilities that belong to no single class (`resolve_dotted`, `require_extra`), and for the plain Python tool functions that framework tool builders bind. A helper that only makes sense next to one class is a method of that class (`@staticmethod`/`@classmethod` when it needs no instance).
+- When two classes start sharing logic, lift it into a base class or a shared component rather than copying it or extracting a loose function.
+
+### Configuration fields
+
+- New knobs go through `AKConfig` (`ak-py/src/agentkernel/core/config.py`); never read `os.environ` or module constants for behavior a user should control.
+- Reuse an existing config model before defining a new one (`_QueuesConfig`, `_ResponseStoreConfig`, the `_RedisConfig`/`_DynamoDBConfig`/... connection models); subclass to change defaults only. Do not add an `enabled` flag or duplicate `type` selector when the presence of already-configured components can enable the feature.
+- Every field has a real `description` (they become user docs) and a default that keeps existing YAML and `AK_*` env vars valid. A field nothing reads is a defect, not future-proofing.
 
 ## Logging
 
