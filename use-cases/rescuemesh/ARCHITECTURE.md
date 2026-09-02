@@ -60,6 +60,12 @@ Only available resources with at least one compatible need tag are considered. T
 
 The result is a ranked proposal. The proposal cannot reserve a resource.
 
+### Network-wide scarce-resource planning
+
+`network_allocation_plan` solves a different coordination problem: several incidents can be active while the community has only one boat, ambulance, generator, or water shipment. Running the single-incident matcher independently could propose the same resource several times. The network planner therefore evaluates all active incidents and available resources in one dry run.
+
+Its allocation score combines incident priority, resource compatibility, verification, corroboration, and a first-coverage bonus. Once a resource appears in the plan it cannot be proposed to another incident in the same plan. The planner reports unmet needs explicitly. It never mutates resource state; `confirm_match` remains the only human-gated reservation path.
+
 ## Privacy model
 
 Private state may contain voluntarily supplied contacts. Public briefs:
@@ -74,12 +80,17 @@ Obvious phone numbers and email addresses are redacted from verification/status 
 
 A community coordination system cannot silo each Telegram user's report inside that user's private chat session. RescueMesh therefore separates two kinds of state:
 
-- **Process-shared operational ledger:** incidents, resources, and the event timeline are visible to all sessions in the running service, enabling cross-user matching.
+- **Shared operational ledger:** incidents, resources, and the event timeline are visible to all sessions in the running service, enabling cross-user matching. It is in-memory by default; `RESCUEMESH_LEDGER_PATH` optionally enables atomic JSON persistence for a local deployment.
 - **Agent Kernel session memory:** each user session remembers the last incident ID, last resource ID, and last area it interacted with. Specialist tools can reuse that context when the user omits an incident ID.
 
-This competition implementation uses an in-process community ledger for zero-infrastructure local execution. Production would replace that ledger with Redis/DynamoDB or another shared durable store while keeping Agent Kernel session memory for per-user conversational context.
+The default remains an in-process community ledger for zero-infrastructure execution. The judge command center sets a gitignored JSON ledger path so its state survives a restart. A larger production deployment would replace that file with Redis/DynamoDB/PostgreSQL or another shared durable store while keeping Agent Kernel session memory for per-user conversational context.
 
 ## Agent Kernel runtime modes
+
+### Judge command center
+
+`command_center.py` registers the same five agents through `OpenAIModule`, mounts a FastAPI router into Agent Kernel `RESTAPI`, and serves a visual operations board at `/rescuemesh`. The seeded scenario needs no LLM key: it calls the exact deterministic domain tools, including the network allocator and human confirmation gate. `config.command-center.yaml` removes the default custom-router prefix so the judge URL stays short.
+
 
 ### CLI / Telegram
 
@@ -99,4 +110,4 @@ This competition implementation uses an in-process community ledger for zero-inf
 
 ## Judge-friendly verification
 
-`demo_scenario.py` calls the exact deterministic tools used by the agents, so the highest-value behavior can be inspected without creating third-party accounts or providing an LLM key. The real Agent Kernel CLI and Telegram modes then demonstrate the conversational/messaging layer on top of the same logic.
+`command_center.py` and `demo_scenario.py` call the exact deterministic tools used by the agents, so the highest-value behavior can be inspected visually or in a terminal without creating third-party accounts or providing an LLM key. The real Agent Kernel CLI and Telegram modes then demonstrate the conversational/messaging layer on top of the same logic.

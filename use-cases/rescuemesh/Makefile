@@ -1,4 +1,4 @@
-.PHONY: setup lint test demo cli api telegram verify
+.PHONY: setup lint test judge demo cli api telegram verify
 
 setup:
 	uv sync --python 3.12
@@ -9,6 +9,9 @@ lint:
 
 test:
 	uv run pytest
+
+judge:
+	uv run python command_center.py
 
 demo:
 	uv run python demo_scenario.py

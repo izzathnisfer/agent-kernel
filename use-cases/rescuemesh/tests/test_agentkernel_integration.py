@@ -48,3 +48,20 @@ print('telegram-config-ok')
         "config.yaml",
     )
     assert "telegram-config-ok" in result.stdout
+
+
+def test_command_center_is_mounted_on_agentkernel_rest_api():
+    result = _run(
+        """
+from command_center import router
+from agentkernel.api import RESTAPI
+from agentkernel.core.config import AKConfig
+assert AKConfig.get().api.custom_router_prefix == ''
+paths = set(RESTAPI.build_app().openapi()['paths'])
+required = {'/rescuemesh', '/rescuemesh/api/state', '/rescuemesh/api/allocation', '/rescuemesh/api/demo/seed'}
+assert required <= paths, (required - paths, paths)
+print('command-center-routes-ok')
+""",
+        "config.command-center.yaml",
+    )
+    assert "command-center-routes-ok" in result.stdout

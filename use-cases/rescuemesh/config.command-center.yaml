@@ -1,0 +1,15 @@
+session:
+  type: in_memory
+  cache:
+    size: 2048
+
+api:
+  custom_router_prefix: ""
+
+telegram:
+  agent: "rescuemesh"
+  api_version: "bot"
+
+logging:
+  ak:
+    level: INFO

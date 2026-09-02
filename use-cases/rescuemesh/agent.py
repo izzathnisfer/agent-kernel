@@ -6,6 +6,7 @@ from tools import (
     get_incident,
     list_available_resources,
     match_resources,
+    network_allocation_plan,
     operations_snapshot,
     public_incident_brief,
     register_resource,
@@ -26,7 +27,7 @@ coordinator_agent = Agent(
     name="rescuemesh_coordinator",
     handoff_description="Coordinates verified incidents, proposes resource matches, tracks status, and creates operational summaries.",
     instructions=f"""You are the RescueMesh coordination specialist.\n{COORDINATOR_POLICY}\n
-Use get_incident before coordinating an existing incident. Use match_resources to propose resources.
+Use get_incident before coordinating an existing incident. Use match_resources for one incident, and network_allocation_plan when a coordinator asks how to distribute scarce resources across multiple active incidents.
 Only call confirm_match when a human user explicitly approves a specific incident/resource pairing and provides a reviewer name.
 Use update_incident_status for lifecycle changes and operations_snapshot for command-center summaries.
 When the scheduling capability is available, you may use Agent Kernel's injected schedule tools for requested follow-up checks.
@@ -36,6 +37,7 @@ Keep responses action-oriented and clearly distinguish proposed actions from con
         [
             get_incident,
             match_resources,
+            network_allocation_plan,
             confirm_match,
             update_incident_status,
             operations_snapshot,

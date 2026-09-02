@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
+import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -52,6 +55,7 @@ _SHARED_STATE: dict[str, Any] = {
     "resources": {},
     "timeline": [],
 }
+_LEDGER_LOCK = threading.RLock()
 
 
 def _now() -> str:
@@ -69,15 +73,38 @@ def _session_cache():
         return None
 
 
+def _ledger_path() -> Path | None:
+    value = os.environ.get("RESCUEMESH_LEDGER_PATH", "").strip()
+    return Path(value).expanduser() if value else None
+
+
 def _get_state() -> dict[str, Any]:
-    # Community incidents/resources must be visible across Telegram/chat sessions in the same
-    # RescueMesh process. Agent Kernel session memory is used separately for each user's context.
-    return copy.deepcopy(_SHARED_STATE)
+    # Community incidents/resources must be visible across Telegram/chat sessions. By default the
+    # ledger is process-shared; setting RESCUEMESH_LEDGER_PATH adds atomic JSON persistence so a
+    # local command center or bot can survive a restart without changing the Agent Kernel sessions.
+    path = _ledger_path()
+    with _LEDGER_LOCK:
+        if path is not None and path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and all(key in loaded for key in ("incidents", "resources", "timeline")):
+                    return copy.deepcopy(loaded)
+            except (OSError, json.JSONDecodeError):
+                pass
+        return copy.deepcopy(_SHARED_STATE)
 
 
 def _save_state(state: dict[str, Any]) -> None:
     global _SHARED_STATE
-    _SHARED_STATE = copy.deepcopy(state)
+    snapshot = copy.deepcopy(state)
+    path = _ledger_path()
+    with _LEDGER_LOCK:
+        _SHARED_STATE = snapshot
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+            tmp.replace(path)
 
 
 def _remember_session(key: str, value: str) -> None:
@@ -442,6 +469,159 @@ def match_resources(incident_id: str = "", limit: int = 3) -> str:
             "dispatch_policy": "Proposal only. A human coordinator must explicitly confirm any match.",
         },
         indent=2,
+    )
+
+
+def network_allocation_plan(max_assignments: int = 12) -> str:
+    """Create a dry-run, network-wide allocation plan without reserving any resource.
+
+    Unlike ``match_resources`` (one incident at a time), this planner considers every active
+    incident together so a scarce boat/ambulance cannot be proposed to several incidents at once.
+    It rewards high-priority and verified incidents, while also giving a first-coverage bonus so
+    lower-priority incidents are not silently starved. Human confirmation is still mandatory.
+    """
+    state = _get_state()
+    incidents = [incident for incident in state["incidents"].values() if incident.get("status") in ACTIVE_STATUSES]
+    resources = [
+        resource
+        for resource in state["resources"].values()
+        if resource.get("status") == "available" and int(resource.get("quantity", 0)) > 0
+    ]
+    max_assignments = max(1, min(int(max_assignments), 30))
+    used_resources: set[str] = set()
+    covered: dict[str, set[str]] = {incident["incident_id"]: set() for incident in incidents}
+    assignments: list[dict[str, Any]] = []
+
+    while len(assignments) < max_assignments:
+        best: tuple[float, dict[str, Any]] | None = None
+        for incident in incidents:
+            incident_id = incident["incident_id"]
+            incident_tags = set(incident.get("need_tags", []))
+            remaining = incident_tags - covered[incident_id]
+            if not remaining:
+                continue
+            for resource in resources:
+                resource_id = resource["resource_id"]
+                if resource_id in used_resources:
+                    continue
+                overlap = remaining & _resource_tags(resource["resource_type"])
+                if not overlap:
+                    continue
+                location_score = _jaccard(_tokens(incident["location"]), _tokens(resource["location"]))
+                match_score = 60 + int(location_score * 25)
+                if resource["availability_minutes"] <= 30:
+                    match_score += 10
+                elif resource["availability_minutes"] <= 120:
+                    match_score += 5
+                match_score += min(int(resource["quantity"]), 5)
+                match_score = min(match_score, 100)
+
+                priority = int(incident.get("priority_score", 0))
+                verified_bonus = 5 if incident.get("verified") else 0
+                first_coverage_bonus = 6 if not covered[incident_id] else 0
+                corroboration_bonus = min(max(int(incident.get("report_count", 1)) - 1, 0) * 2, 5)
+                allocation_score = round(
+                    (priority * 0.55)
+                    + (match_score * 0.34)
+                    + verified_bonus
+                    + first_coverage_bonus
+                    + corroboration_bonus,
+                    1,
+                )
+                candidate = {
+                    "incident_id": incident_id,
+                    "priority_band": incident["priority_band"],
+                    "verified": bool(incident.get("verified")),
+                    "resource_id": resource_id,
+                    "resource_type": resource["resource_type"],
+                    "provider_name": resource["provider_name"],
+                    "matched_needs": sorted(overlap),
+                    "availability_minutes": resource["availability_minutes"],
+                    "match_score": match_score,
+                    "allocation_score": allocation_score,
+                    "rationale": [
+                        f"incident_priority={priority}",
+                        f"resource_match={match_score}",
+                        "verified_report" if incident.get("verified") else "verification_pending",
+                        "first_resource_for_incident" if not covered[incident_id] else "additional_need_coverage",
+                    ],
+                }
+                # Store a sortable scalar with tiny deterministic tie breakers.
+                packed = allocation_score + (match_score / 10000) - (int(resource["availability_minutes"]) / 1_000_000)
+                if best is None or packed > best[0]:
+                    best = (packed, candidate)
+        if best is None:
+            break
+        candidate = best[1]
+        used_resources.add(candidate["resource_id"])
+        covered[candidate["incident_id"]].update(candidate["matched_needs"])
+        assignments.append(candidate)
+
+    unserved = []
+    for incident in sorted(incidents, key=lambda item: (-int(item.get("priority_score", 0)), item["incident_id"])):
+        unmet = sorted(set(incident.get("need_tags", [])) - covered[incident["incident_id"]])
+        if unmet:
+            unserved.append(
+                {
+                    "incident_id": incident["incident_id"],
+                    "priority_band": incident["priority_band"],
+                    "verified": bool(incident.get("verified")),
+                    "unmet_needs": unmet,
+                }
+            )
+
+    return json.dumps(
+        {
+            "mode": "dry_run_network_allocation",
+            "assignments": assignments,
+            "unserved_or_partially_served": unserved,
+            "resources_considered": len(resources),
+            "active_incidents_considered": len(incidents),
+            "policy": (
+                "No resource is reserved by this plan. It avoids double-proposing a scarce resource, "
+                "balances urgency with first-coverage fairness, and still requires explicit human confirmation."
+            ),
+        },
+        indent=2,
+    )
+
+
+def command_center_snapshot() -> str:
+    """Return a privacy-safe live board for the local judge command center."""
+    state = _get_state()
+    metrics = json.loads(operations_snapshot())
+    incidents = []
+    for incident in sorted(
+        state["incidents"].values(), key=lambda item: (-int(item.get("priority_score", 0)), item["incident_id"])
+    ):
+        incidents.append(
+            {
+                "incident_id": incident["incident_id"],
+                "location": _coarsen_location(incident.get("location", "")),
+                "needs": incident.get("needs", []),
+                "need_tags": incident.get("need_tags", []),
+                "people_count": incident.get("people_count", 0),
+                "priority_score": incident.get("priority_score", 0),
+                "priority_band": incident.get("priority_band", ""),
+                "priority_reasons": incident.get("priority_reasons", []),
+                "status": incident.get("status", ""),
+                "verified": bool(incident.get("verified")),
+                "report_count": incident.get("report_count", 1),
+                "matched_resources": incident.get("matched_resources", []),
+                "updated_at": incident.get("updated_at", ""),
+            }
+        )
+    resources = []
+    for resource in state["resources"].values():
+        resources.append(
+            {key: value for key, value in resource.items() if key not in {"contact", "notes", "reviewed_by"}}
+        )
+    timeline = []
+    for event in state["timeline"][-40:]:
+        safe = {key: (_redact(value) if isinstance(value, str) else value) for key, value in event.items()}
+        timeline.append(safe)
+    return json.dumps(
+        {"metrics": metrics, "incidents": incidents, "resources": resources, "timeline": timeline}, indent=2
     )
 
 

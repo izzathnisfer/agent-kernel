@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RescueMesh Command Center</title>
+<style>
+:root{--bg:#08111d;--panel:#101d2d;--panel2:#15263a;--line:#27415c;--text:#edf5ff;--muted:#9fb2c8;--cyan:#5de4e7;--amber:#ffca66;--red:#ff6b6b;--green:#65e6a8}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 12% 0,#16324a 0,transparent 35%),var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,sans-serif}
+header{padding:28px clamp(18px,4vw,54px) 16px;display:flex;gap:20px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap}
+h1{margin:0;font-size:clamp(30px,5vw,56px);letter-spacing:-.04em}.sub{max-width:760px;color:var(--muted);font-size:16px}.brand{color:var(--cyan)}
+.badges{display:flex;gap:8px;flex-wrap:wrap}.badge{border:1px solid var(--line);background:#0b1725;border-radius:999px;padding:6px 10px;color:#c7d8ea;font-size:12px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}button{background:var(--cyan);color:#041014;border:0;border-radius:10px;padding:10px 14px;font-weight:750;cursor:pointer}button.alt{background:transparent;color:var(--text);border:1px solid var(--line)}button.danger{background:#3a1b25;color:#ffd7dc;border:1px solid #713344}
+main{padding:8px clamp(18px,4vw,54px) 52px}.grid{display:grid;gap:14px}.kpis{grid-template-columns:repeat(auto-fit,minmax(145px,1fr));margin:14px 0 24px}.card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 12px 32px #0004}.kpi strong{display:block;font-size:30px}.kpi span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+h2{margin:28px 0 10px;font-size:20px}.two{grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}.incidents,.resources{grid-template-columns:repeat(auto-fit,minmax(270px,1fr))}
+.meta{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}.pill{font-size:11px;padding:4px 7px;border:1px solid var(--line);border-radius:999px;color:#c9d8e8}.p1{border-color:#8d3945;color:#ffb3bb}.verified{border-color:#2e7557;color:var(--green)}.pending{border-color:#806426;color:var(--amber)}
+.id{font:700 13px ui-monospace,SFMono-Regular,monospace;color:var(--cyan)}.muted{color:var(--muted)}.score{font-size:26px;font-weight:800;float:right}.needs{margin:8px 0 0;padding-left:18px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid var(--line);padding:10px 8px;vertical-align:top}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.small{font-size:12px}.ok{color:var(--green)}.warn{color:var(--amber)}
+#status{min-height:22px;color:var(--muted);margin-left:4px}.empty{padding:26px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:14px}.footer{margin-top:30px;color:var(--muted);font-size:12px}
+@media(max-width:700px){header{align-items:flex-start}table{font-size:12px}.hide-mobile{display:none}}
+</style>
+</head>
+<body>
+<header>
+<div>
+<div class="badges"><span class="badge">Agent Kernel REST</span><span class="badge">No LLM key required</span><span class="badge">Human-gated dispatch</span><span class="badge">Privacy-safe board</span></div>
+<h1><span class="brand">RescueMesh</span> Command Center</h1>
+<div class="sub">A judge-facing operations view of the same deterministic incident, verification, resource, and allocation tools used by the multi-agent system. The network planner never reserves a resource; a human must confirm every dispatch pairing.</div>
+</div>
+<div class="actions"><button onclick="seedDemo()">Load 60-second scenario</button><button class="alt" onclick="refresh()">Refresh</button><button class="danger" onclick="resetDemo()">Reset</button></div>
+</header>
+<main>
+<div id="status"></div>
+<section id="kpis" class="grid kpis"></section>
+<div class="grid two">
+<section><h2>Active incidents</h2><div id="incidents" class="grid incidents"></div></section>
+<section><h2>Community resources</h2><div id="resources" class="grid resources"></div></section>
+</div>
+<h2>Network-wide dry-run allocation</h2>
+<div class="card">
+<div class="muted small" style="margin-bottom:10px">Scarce resources are considered across all active incidents at once, with urgency + verification + first-coverage fairness. No resource can appear twice in the plan.</div>
+<div style="overflow:auto"><table><thead><tr><th>Incident</th><th>Proposed resource</th><th>Needs</th><th>Score</th><th>Gate</th></tr></thead><tbody id="allocation"></tbody></table></div>
+<div id="unserved" class="small muted" style="margin-top:12px"></div>
+</div>
+<h2>Audit timeline</h2><div id="timeline" class="card small"></div>
+<div class="footer">Decision support only — RescueMesh is not an emergency number or autonomous dispatcher. Immediate danger should be escalated to the relevant local emergency authority.</div>
+</main>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+async function api(path,opts={}){const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});if(!r.ok)throw new Error(await r.text());return r.json()}
+function setStatus(t){document.getElementById('status').textContent=t}
+function renderBoard(b){
+ const m=b.metrics||{};
+ const ks=[['Active incidents',m.incidents_active],['Verified',m.incidents_verified],['People reported',m.people_reported],['Resources available',m.available_resources],['Confirmed matches',m.confirmed_matches],['Duplicates merged',m.duplicate_reports_merged]];
+ document.getElementById('kpis').innerHTML=ks.map(([k,v])=>`<div class="card kpi"><strong>${esc(v??0)}</strong><span>${esc(k)}</span></div>`).join('');
+ const inc=b.incidents||[];
+ document.getElementById('incidents').innerHTML=inc.length?inc.map(i=>`<article class="card"><span class="score">${esc(i.priority_score)}</span><div class="id">${esc(i.incident_id)}</div><div class="meta"><span class="pill ${String(i.priority_band).startsWith('P1')?'p1':''}">${esc(i.priority_band)}</span><span class="pill ${i.verified?'verified':'pending'}">${i.verified?'verified':'verification pending'}</span><span class="pill">${esc(i.report_count)} report(s)</span></div><strong>${esc(i.location)}</strong><ul class="needs">${(i.need_tags||[]).map(n=>`<li>${esc(n)}</li>`).join('')}</ul></article>`).join(''):'<div class="empty">Load the judge scenario to create incidents.</div>';
+ const res=b.resources||[];
+ document.getElementById('resources').innerHTML=res.length?res.map(r=>`<article class="card"><div class="id">${esc(r.resource_id)}</div><strong>${esc(r.resource_type)}</strong> · ${esc(r.quantity)}<div class="muted">${esc(r.provider_name)}</div><div class="meta"><span class="pill">${esc(r.location)}</span><span class="pill">${esc(r.availability_minutes)} min</span><span class="pill ${r.status==='available'?'verified':'pending'}">${esc(r.status)}</span></div></article>`).join(''):'<div class="empty">No resources registered.</div>';
+ const tl=(b.timeline||[]).slice().reverse();
+ document.getElementById('timeline').innerHTML=tl.length?tl.slice(0,16).map(e=>`<div><span class="id">${esc(e.at||'')}</span> · <strong>${esc(e.event)}</strong> ${esc(e.incident_id||e.resource_id||'')}</div>`).join(''):'No events yet.';
+}
+function renderAllocation(a){
+ const rows=a.assignments||[];
+ document.getElementById('allocation').innerHTML=rows.length?rows.map(x=>`<tr><td><span class="id">${esc(x.incident_id)}</span><br><span class="small ${x.verified?'ok':'warn'}">${x.verified?'verified':'verify before dispatch'}</span></td><td><strong>${esc(x.resource_type)}</strong><br><span class="muted small">${esc(x.provider_name)} · ${esc(x.availability_minutes)} min</span></td><td>${(x.matched_needs||[]).map(n=>`<span class="pill">${esc(n)}</span>`).join(' ')}</td><td><strong>${esc(x.allocation_score)}</strong><br><span class="muted small">match ${esc(x.match_score)}</span></td><td><button class="alt small" onclick="confirmPair('${esc(x.incident_id)}','${esc(x.resource_id)}')">Human confirm</button></td></tr>`).join(''):'<tr><td colspan="5" class="muted">No compatible allocation proposals yet.</td></tr>';
+ const u=a.unserved_or_partially_served||[];
+ document.getElementById('unserved').innerHTML=u.length?'Unmet needs: '+u.map(x=>`${esc(x.incident_id)} → ${(x.unmet_needs||[]).map(esc).join(', ')}`).join(' · '):'<span class="ok">All currently represented needs have a proposed resource.</span>';
+}
+async function refresh(){try{setStatus('Refreshing privacy-safe operations board…');const [b,a]=await Promise.all([api('/rescuemesh/api/state'),api('/rescuemesh/api/allocation')]);renderBoard(b);renderAllocation(a);setStatus('Live board refreshed.')}catch(e){setStatus('Error: '+e.message)}}
+async function seedDemo(){try{setStatus('Building deterministic multi-incident judge scenario…');const d=await api('/rescuemesh/api/demo/seed',{method:'POST'});renderBoard(d.board);renderAllocation(d.allocation);setStatus('Scenario loaded: duplicate merge + verification + scarce-resource allocation are visible.')}catch(e){setStatus('Error: '+e.message)}}
+async function resetDemo(){await api('/rescuemesh/api/demo/reset',{method:'POST'});await refresh()}
+async function confirmPair(incident_id,resource_id){const reviewer=prompt('Human reviewer name','Judge demo coordinator');if(!reviewer)return;try{const r=await api('/rescuemesh/api/confirm',{method:'POST',body:JSON.stringify({incident_id,resource_id,reviewer})});if(r.error)alert(r.error);else alert('Confirmed by human reviewer. Resource is now reserved.');await refresh()}catch(e){alert(e.message)}}
+refresh();
+</script>
+</body>
+</html>
