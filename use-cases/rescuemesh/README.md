@@ -4,6 +4,10 @@
 
 RescueMesh turns noisy community messages into a privacy-aware incident ledger, merges likely duplicate reports, records verification, proposes resource matches, and keeps the final dispatch decision with a human coordinator. It is built as a multi-agent Agent Kernel use case with Telegram, session memory, tools, handoffs, REST/queue execution, scheduled follow-ups, and a no-key command center that can allocate scarce community resources across multiple incidents at once.
 
+![RescueMesh Command Center — seeded multi-incident judge scenario](assets/command-center.png)
+
+*Actual no-key Command Center running the deterministic judge scenario: three incidents, verification state, six resources, duplicate suppression, and network-wide human-gated allocation on one screen.*
+
 ## 1. Problem statement
 
 During floods, landslides, storms, fires, and other local emergencies, useful information often arrives through chat groups in an unstructured form: "five people are trapped", "we have a boat", "this road is blocked", "the same family was already reported", or "can someone bring drinking water?" Coordinators then have to manually deduplicate messages, judge which reports have been verified, find compatible resources, protect private contact information, and repeatedly follow up.
